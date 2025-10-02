@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/protocol"
+	"github.com/aeolun/superchat/pkg/updater"
 )
 
 // ViewState represents the current view
@@ -75,6 +76,11 @@ type Model struct {
 	showHelp        bool
 	firstRun        bool
 
+	// Version tracking
+	currentVersion  string
+	latestVersion   string
+	updateAvailable bool
+
 	// Real-time updates
 	pendingUpdates  []protocol.Message
 
@@ -92,7 +98,7 @@ const (
 )
 
 // NewModel creates a new application model
-func NewModel(conn *client.Connection, state *client.State) Model {
+func NewModel(conn *client.Connection, state *client.State, currentVersion string) Model {
 	firstRun := state.GetFirstRun()
 	initialView := ViewChannelList
 	if firstRun {
@@ -109,6 +115,7 @@ func NewModel(conn *client.Connection, state *client.State) Model {
 		currentView:      initialView,
 		firstRun:         firstRun,
 		nickname:         nickname,
+		currentVersion:   currentVersion,
 		channels:         []protocol.Channel{},
 		threads:          []protocol.Message{},
 		threadReplies:    []protocol.Message{},
@@ -146,6 +153,12 @@ type ReconnectingMsg struct {
 // TickMsg is sent periodically
 type TickMsg time.Time
 
+// VersionCheckMsg is sent with version check results
+type VersionCheckMsg struct {
+	LatestVersion   string
+	UpdateAvailable bool
+}
+
 // WindowSizeMsg is sent when the terminal is resized
 type WindowSizeMsg struct {
 	Width  int
@@ -157,6 +170,7 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		listenForServerFrames(m.conn),
 		tickCmd(),
+		checkForUpdates(m.currentVersion), // Check for updates in background
 	}
 
 	// If we're starting directly at channel list (not first run), request channels
@@ -198,4 +212,23 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
+}
+
+// checkForUpdates checks for available updates in the background
+func checkForUpdates(currentVersion string) tea.Cmd {
+	return func() tea.Msg {
+		// Check for updates in background (non-blocking)
+		latestVersion, err := updater.CheckLatestVersion()
+		if err != nil {
+			// Silently fail - don't bother user with update check failures
+			return nil
+		}
+
+		updateAvailable := updater.CompareVersions(currentVersion, latestVersion)
+
+		return VersionCheckMsg{
+			LatestVersion:   latestVersion,
+			UpdateAvailable: updateAvailable,
+		}
+	}
 }

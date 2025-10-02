@@ -131,17 +131,35 @@ func (m Model) renderChannelList() string {
 	channelList := m.renderChannelPane()
 
 	// Main content area (instructions when no channel selected)
+	welcomeLines := []string{
+		"Welcome to SuperChat!",
+		"",
+	}
+
+	// Add update notification if available
+	if m.updateAvailable {
+		updateNotice := lipgloss.NewStyle().
+			Foreground(warningColor).
+			Bold(true).
+			Render(fmt.Sprintf("⚠ Update available: %s → %s", m.currentVersion, m.latestVersion))
+
+		updateInstr := lipgloss.NewStyle().
+			Foreground(mutedColor).
+			Render("Run 'sc update' in your terminal to update")
+
+		welcomeLines = append(welcomeLines, updateNotice, updateInstr, "", "")
+	}
+
+	welcomeLines = append(welcomeLines,
+		"Select a channel from the left to start browsing.",
+		"",
+		"Press [n] to create a new thread once in a channel.",
+		"Press [h] or [?] for help.",
+	)
+
 	instructions := lipgloss.NewStyle().
 		PaddingLeft(2).
-		Render(lipgloss.JoinVertical(
-			lipgloss.Left,
-			"Welcome to SuperChat!",
-			"",
-			"Select a channel from the left to start browsing.",
-			"",
-			"Press [n] to create a new thread once in a channel.",
-			"Press [h] or [?] for help.",
-		))
+		Render(lipgloss.JoinVertical(lipgloss.Left, welcomeLines...))
 
 	// Use 75% of width for main pane (channel is 25%)
 	// Subtract 2 for border (lipgloss adds border on top of width)

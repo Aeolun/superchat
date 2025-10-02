@@ -4,12 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SuperChat - Terminal-Based Threaded Chat</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
     <header>
         <div class="container">
-            <h1>SuperChat</h1>
+            <div class="header-title">
+                <img src="/mascot.png" alt="SuperChat mascot" class="mascot">
+                <h1>SuperChat</h1>
+            </div>
             <p class="tagline">Terminal-based threaded chat for the command line</p>
         </div>
     </header>
@@ -49,16 +53,23 @@
 
         <section class="usage">
             <h3>Quick Start</h3>
-            <pre><code># Download for your platform above, then:
+            <p>One-line installer (Linux/macOS/FreeBSD):</p>
+            <pre><code># Install to ~/.local/bin (user install, no sudo required)
+curl -fsSL https://raw.githubusercontent.com/aeolun/superchat/main/install.sh | sh
 
-# Connect to the default server (superchat.win:6465)
-./superchat
+# Or install to /usr/bin (system-wide, requires sudo)
+curl -fsSL https://raw.githubusercontent.com/aeolun/superchat/main/install.sh | sudo sh -s -- --global</code></pre>
+            <p>This installs <code>sc</code> (client) and <code>scd</code> (server)</p>
+
+            <h4>Usage:</h4>
+            <pre><code># Connect to the default server (superchat.win)
+sc
 
 # Or specify a different server
-./superchat --server yourserver.com:6465
+sc --server yourserver.com:6465
 
 # Or run your own server
-./superchat-server --port 6465</code></pre>
+scd --port 6465</code></pre>
         </section>
 
         <section class="github">

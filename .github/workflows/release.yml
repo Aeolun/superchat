@@ -56,7 +56,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -ldflags="-s -w" -o ${{ matrix.name }} ./cmd/client
+          VERSION=${GITHUB_REF#refs/tags/}
+          go build -ldflags="-s -w -X main.Version=$VERSION" -o ${{ matrix.name }} ./cmd/client
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -111,7 +112,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -ldflags="-s -w" -o ${{ matrix.name }} ./cmd/server
+          VERSION=${GITHUB_REF#refs/tags/}
+          go build -ldflags="-s -w -X main.Version=$VERSION" -o ${{ matrix.name }} ./cmd/server
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

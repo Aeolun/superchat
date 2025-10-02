@@ -78,6 +78,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tickCmd()
+
+	case VersionCheckMsg:
+		m.latestVersion = msg.LatestVersion
+		m.updateAvailable = msg.UpdateAvailable
+		return m, nil
 	}
 
 	return m, nil

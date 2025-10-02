@@ -10,6 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/client/ui"
+	"github.com/aeolun/superchat/pkg/updater"
+)
+
+var (
+	// Version is set at build time via ldflags
+	Version = "dev"
 )
 
 func setupLogger(stateDir string) (*log.Logger, *os.File, error) {
@@ -37,6 +43,22 @@ func getDefaultConfigPath() string {
 	return filepath.Join(xdgConfig, "superchat", "config.toml")
 }
 
+func handleUpdate() {
+	fmt.Printf("Current version: %s\n", Version)
+	fmt.Println("Checking for updates...")
+
+	// Get executable path to preserve install location
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Fatalf("Failed to get executable path: %v", err)
+	}
+
+	// Run the updater
+	if err := updater.Update(Version, exePath, os.Args); err != nil {
+		log.Fatalf("Update failed: %v", err)
+	}
+}
+
 func main() {
 	// Command line flags
 	defaultConfig := getDefaultConfigPath()
@@ -44,7 +66,25 @@ func main() {
 	server := flag.String("server", "", "Server address (host:port, overrides config)")
 	profile := flag.String("profile", "", "Profile name for separate configuration (default: none)")
 	statePath := flag.String("state", "", "Path to state database (overrides config)")
+	version := flag.Bool("version", false, "Show version information")
 	flag.Parse()
+
+	// Handle --version flag
+	if *version {
+		fmt.Printf("SuperChat %s\n", Version)
+		os.Exit(0)
+	}
+
+	// Handle subcommands
+	if flag.NArg() > 0 {
+		switch flag.Arg(0) {
+		case "update":
+			handleUpdate()
+			return
+		default:
+			log.Fatalf("Unknown command: %s", flag.Arg(0))
+		}
+	}
 
 	// Load configuration (creates default if not found)
 	config, err := client.LoadClientConfig(*configPath)
@@ -116,7 +156,7 @@ func main() {
 	defer conn.Close()
 
 	// Create bubbletea program
-	model := ui.NewModel(conn, state)
+	model := ui.NewModel(conn, state, Version)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	// Run the program

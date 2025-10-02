@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -9,6 +10,11 @@ import (
 	"syscall"
 
 	"github.com/aeolun/superchat/pkg/server"
+)
+
+var (
+	// Version is set at build time via ldflags
+	Version = "dev"
 )
 
 func main() {
@@ -19,7 +25,14 @@ func main() {
 	configPath := flag.String("config", "~/.superchat/config.toml", "Path to config file")
 	port := flag.Int("port", 0, "TCP port to listen on (overrides config)")
 	dbPath := flag.String("db", "", "Path to SQLite database (overrides config)")
+	version := flag.Bool("version", false, "Show version information")
 	flag.Parse()
+
+	// Handle --version flag
+	if *version {
+		fmt.Printf("SuperChat Server %s\n", Version)
+		os.Exit(0)
+	}
 
 	// Load configuration (creates default if not found)
 	config, err := server.LoadConfig(*configPath)

@@ -62,8 +62,10 @@ fuzz:
 
 # Build server and client
 build:
-	go build -o superchat-server ./cmd/server
-	go build -o superchat ./cmd/client
+	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
+	echo "Building with version: $$VERSION"; \
+	go build -ldflags="-X main.Version=$$VERSION" -o superchat-server ./cmd/server; \
+	go build -ldflags="-X main.Version=$$VERSION" -o superchat ./cmd/client
 
 # Run server
 run-server:

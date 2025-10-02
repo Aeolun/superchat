@@ -3,12 +3,12 @@ const GITHUB_REPO = 'aeolun/superchat';
 
 // Platform configurations
 const PLATFORMS = [
-    { name: 'Linux', arch: 'x86_64', pattern: /linux.*amd64/ },
-    { name: 'Linux', arch: 'ARM64', pattern: /linux.*arm64/ },
-    { name: 'macOS', arch: 'Intel', pattern: /darwin.*amd64/ },
-    { name: 'macOS', arch: 'Apple Silicon', pattern: /darwin.*arm64/ },
-    { name: 'Windows', arch: 'x86_64', pattern: /windows.*amd64/ },
-    { name: 'FreeBSD', arch: 'x86_64', pattern: /freebsd.*amd64/ }
+    { name: 'Linux', arch: 'x86_64', clientPattern: /^superchat-linux-amd64/, serverPattern: /^superchat-server-linux-amd64/ },
+    { name: 'Linux', arch: 'ARM64', clientPattern: /^superchat-linux-arm64/, serverPattern: /^superchat-server-linux-arm64/ },
+    { name: 'macOS', arch: 'Intel', clientPattern: /^superchat-darwin-amd64/, serverPattern: /^superchat-server-darwin-amd64/ },
+    { name: 'macOS', arch: 'Apple Silicon', clientPattern: /^superchat-darwin-arm64/, serverPattern: /^superchat-server-darwin-arm64/ },
+    { name: 'Windows', arch: 'x86_64', clientPattern: /^superchat-windows-amd64/, serverPattern: /^superchat-server-windows-amd64/ },
+    { name: 'FreeBSD', arch: 'x86_64', clientPattern: /^superchat-freebsd-amd64/, serverPattern: /^superchat-server-freebsd-amd64/ }
 ];
 
 async function fetchLatestRelease() {
@@ -24,15 +24,42 @@ async function fetchLatestRelease() {
     }
 }
 
-function createDownloadLink(asset, platform) {
-    const link = document.createElement('a');
-    link.className = 'download-link';
-    link.href = asset.browser_download_url;
-    link.innerHTML = `
-        <div class="platform">${platform.name}</div>
-        <div class="arch">${platform.arch}</div>
-    `;
-    return link;
+function createDownloadCard(platform, clientAsset, serverAsset) {
+    const card = document.createElement('div');
+    card.className = 'download-card';
+
+    const platformName = document.createElement('div');
+    platformName.className = 'platform';
+    platformName.textContent = platform.name;
+
+    const archName = document.createElement('div');
+    archName.className = 'arch';
+    archName.textContent = platform.arch;
+
+    const buttons = document.createElement('div');
+    buttons.className = 'download-buttons';
+
+    if (clientAsset) {
+        const clientBtn = document.createElement('a');
+        clientBtn.className = 'download-btn client';
+        clientBtn.href = clientAsset.browser_download_url;
+        clientBtn.textContent = 'Client';
+        buttons.appendChild(clientBtn);
+    }
+
+    if (serverAsset) {
+        const serverBtn = document.createElement('a');
+        serverBtn.className = 'download-btn server';
+        serverBtn.href = serverAsset.browser_download_url;
+        serverBtn.textContent = 'Server';
+        buttons.appendChild(serverBtn);
+    }
+
+    card.appendChild(platformName);
+    card.appendChild(archName);
+    card.appendChild(buttons);
+
+    return card;
 }
 
 async function populateDownloads() {
@@ -47,22 +74,24 @@ async function populateDownloads() {
         return;
     }
 
-    const links = [];
+    const cards = [];
 
     for (const platform of PLATFORMS) {
-        const asset = release.assets.find(a => platform.pattern.test(a.name.toLowerCase()));
-        if (asset) {
-            links.push(createDownloadLink(asset, platform));
+        const clientAsset = release.assets.find(a => platform.clientPattern.test(a.name));
+        const serverAsset = release.assets.find(a => platform.serverPattern.test(a.name));
+
+        if (clientAsset || serverAsset) {
+            cards.push(createDownloadCard(platform, clientAsset, serverAsset));
         }
     }
 
-    if (links.length === 0) {
+    if (cards.length === 0) {
         container.innerHTML = `
             <p>No binary downloads found. Visit <a href="https://github.com/${GITHUB_REPO}/releases/latest">GitHub Releases</a> to download.</p>
         `;
     } else {
         container.innerHTML = '';
-        links.forEach(link => container.appendChild(link));
+        cards.forEach(card => container.appendChild(card));
     }
 }
 
