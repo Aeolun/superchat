@@ -129,16 +129,15 @@ func (m Model) renderChannelList() string {
 		"Press [h] or [?] for help.",
 	)
 
-	// Channel pane is 36 content + 4 for border/padding = 40 total
-	// Space between panes = 1
-	// Thread pane = remaining width - need to account for its own border/padding (4)
-	threadContentWidth := m.width - 40 - 1 - 4
-	if threadContentWidth < 20 {
-		threadContentWidth = 20
+	// Use 75% of width for main pane (channel is 25%)
+	channelWidth := m.width / 4
+	threadWidth := m.width - channelWidth - 3  // Subtract channel, space, and some margin
+	if threadWidth < 30 {
+		threadWidth = 30
 	}
 
 	mainPane := threadPaneStyle.
-		Width(threadContentWidth).
+		Width(threadWidth).
 		Height(m.height - 6).
 		Render(instructions)
 
@@ -363,8 +362,14 @@ func (m Model) renderChannelPane() string {
 		strings.Join(items, "\n"),
 	)
 
+	// Use 25% of width for channel pane
+	channelWidth := m.width / 4
+	if channelWidth < 20 {
+		channelWidth = 20
+	}
+
 	return channelPaneStyle.
-		Width(36).
+		Width(channelWidth).
 		Height(m.height - 6).
 		Render(content)
 }
@@ -399,14 +404,15 @@ func (m Model) renderThreadPane() string {
 		strings.Join(items, "\n"),
 	)
 
-	// Account for channel pane (40) + space (1) + own border/padding (4)
-	threadContentWidth := m.width - 40 - 1 - 4
-	if threadContentWidth < 20 {
-		threadContentWidth = 20
+	// Use remaining width (75% - channel is 25%)
+	channelWidth := m.width / 4
+	threadWidth := m.width - channelWidth - 3
+	if threadWidth < 30 {
+		threadWidth = 30
 	}
 
 	return threadPaneStyle.
-		Width(threadContentWidth).
+		Width(threadWidth).
 		Height(m.height - 6).
 		Render(content)
 }
@@ -434,14 +440,8 @@ func (m Model) renderThreadContent() string {
 		content.WriteString("\n")
 	}
 
-	// Account for border/padding (4)
-	contentWidth := m.width - 4
-	if contentWidth < 20 {
-		contentWidth = 20
-	}
-
 	return threadPaneStyle.
-		Width(contentWidth).
+		Width(m.width).  // Use full width, lipgloss handles border/padding
 		Height(m.height - 6).
 		Render(content.String())
 }

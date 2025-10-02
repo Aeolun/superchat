@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/aeolun/superchat/pkg/protocol"
@@ -26,6 +27,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TickMsg:
+		// Check if we need to send a ping
+		now := time.Time(msg)
+		if now.Sub(m.lastPingSent) >= m.pingInterval {
+			m.lastPingSent = now
+			return m, tea.Batch(tickCmd(), m.sendPing())
+		}
 		return m, tickCmd()
 	}
 
@@ -599,6 +606,18 @@ func (m Model) sendPostMessage(channelID uint64, parentID *uint64, content strin
 			Content:      content,
 		}
 		if err := m.conn.SendMessage(protocol.TypePostMessage, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendPing() tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.PingMessage{
+			Timestamp: time.Now().UnixMilli(),
+		}
+		if err := m.conn.SendMessage(protocol.TypePing, msg); err != nil {
 			return ErrorMsg{Err: err}
 		}
 		return nil

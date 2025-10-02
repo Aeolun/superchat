@@ -62,6 +62,10 @@ type Model struct {
 
 	// Real-time updates
 	pendingUpdates  []protocol.Message
+
+	// Keepalive
+	lastPingSent    time.Time
+	pingInterval    time.Duration
 }
 
 // ComposeMode indicates what we're composing
@@ -83,14 +87,16 @@ func NewModel(conn *client.Connection, state *client.State) Model {
 	nickname := state.GetLastNickname()
 
 	return Model{
-		conn:        conn,
-		state:       state,
-		currentView: initialView,
-		firstRun:    firstRun,
-		nickname:    nickname,
-		channels:    []protocol.Channel{},
-		threads:     []protocol.Message{},
+		conn:          conn,
+		state:         state,
+		currentView:   initialView,
+		firstRun:      firstRun,
+		nickname:      nickname,
+		channels:      []protocol.Channel{},
+		threads:       []protocol.Message{},
 		threadReplies: []protocol.Message{},
+		pingInterval:  30 * time.Second,  // Send ping every 30 seconds
+		lastPingSent:  time.Now(),
 	}
 }
 
@@ -117,10 +123,21 @@ type WindowSizeMsg struct {
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		listenForServerFrames(m.conn),
 		tickCmd(),
-	)
+	}
+
+	// If we're starting directly at channel list (not first run), request channels
+	if m.currentView == ViewChannelList {
+		cmds = append(cmds, m.requestChannelList())
+		// Also send nickname if we have one
+		if m.nickname != "" {
+			cmds = append(cmds, m.sendSetNickname())
+		}
+	}
+
+	return tea.Batch(cmds...)
 }
 
 // listenForServerFrames listens for incoming server frames
