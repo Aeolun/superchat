@@ -153,7 +153,7 @@ func (m Model) renderChannelList() string {
 	s.WriteString("\n")
 
 	// Footer
-	footer := m.renderFooter("[↑↓] Navigate  [Enter] Select  [r] Refresh  [h] Help  [q] Quit")
+	footer := m.renderFooter("[↑↓] Navigate  [Enter] Select  [r] Refresh  [h] Help  [q/Esc] Quit")
 	s.WriteString(footer)
 
 	return s.String()
@@ -186,7 +186,7 @@ func (m Model) renderThreadList() string {
 	s.WriteString("\n")
 
 	// Footer
-	footer := m.renderFooter("[↑↓] Navigate  [Enter] Open  [n] New Thread  [r] Refresh  [Esc] Back  [h] Help")
+	footer := m.renderFooter("[↑↓] Navigate  [Enter] Open  [n] New Thread  [r] Refresh  [Esc] Back  [q] Quit  [h] Help")
 	s.WriteString(footer)
 
 	return s.String()
@@ -208,7 +208,7 @@ func (m Model) renderThreadView() string {
 	s.WriteString("\n")
 
 	// Footer
-	footer := m.renderFooter("[↑↓] Navigate  [r] Reply  [Esc] Back  [h] Help")
+	footer := m.renderFooter("[↑↓] Navigate  [r] Reply  [Esc] Back  [q] Quit  [h] Help")
 	s.WriteString(footer)
 
 	return s.String()

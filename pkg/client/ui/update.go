@@ -36,8 +36,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global shortcuts
 	switch msg.String() {
-	case "ctrl+c", "q":
-		if m.currentView == ViewChannelList || m.currentView == ViewSplash {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "q":
+		// Allow quit from anywhere except compose mode
+		if m.currentView != ViewCompose && m.currentView != ViewNicknameSetup {
 			return m, tea.Quit
 		}
 	case "?", "h":
@@ -155,7 +158,7 @@ func (m Model) handleChannelListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Refresh channel list
 		return m, m.requestChannelList()
 
-	case "q", "esc":
+	case "esc":
 		return m, tea.Quit
 	}
 
