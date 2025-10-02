@@ -11,6 +11,11 @@ import (
 
 // View renders the current view
 func (m Model) View() string {
+	// Don't render until we have dimensions
+	if m.width == 0 || m.height == 0 {
+		return "Loading..."
+	}
+
 	if m.showHelp {
 		return m.renderHelp()
 	}
@@ -124,8 +129,16 @@ func (m Model) renderChannelList() string {
 		"Press [h] or [?] for help.",
 	)
 
+	// Channel pane is 36 content + 4 for border/padding = 40 total
+	// Space between panes = 1
+	// Thread pane = remaining width - need to account for its own border/padding (4)
+	threadContentWidth := m.width - 40 - 1 - 4
+	if threadContentWidth < 20 {
+		threadContentWidth = 20
+	}
+
 	mainPane := threadPaneStyle.
-		Width(m.width - 40).
+		Width(threadContentWidth).
 		Height(m.height - 6).
 		Render(instructions)
 
@@ -159,6 +172,7 @@ func (m Model) renderThreadList() string {
 	channelList := m.renderChannelPane()
 
 	// Thread list (right pane)
+	// Account for channel pane (40) + space (1) + border/padding (4)
 	threadList := m.renderThreadPane()
 
 	content := lipgloss.JoinHorizontal(
@@ -385,8 +399,14 @@ func (m Model) renderThreadPane() string {
 		strings.Join(items, "\n"),
 	)
 
+	// Account for channel pane (40) + space (1) + own border/padding (4)
+	threadContentWidth := m.width - 40 - 1 - 4
+	if threadContentWidth < 20 {
+		threadContentWidth = 20
+	}
+
 	return threadPaneStyle.
-		Width(m.width - 40).
+		Width(threadContentWidth).
 		Height(m.height - 6).
 		Render(content)
 }
@@ -414,8 +434,14 @@ func (m Model) renderThreadContent() string {
 		content.WriteString("\n")
 	}
 
+	// Account for border/padding (4)
+	contentWidth := m.width - 4
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
+
 	return threadPaneStyle.
-		Width(m.width - 4).
+		Width(contentWidth).
 		Height(m.height - 6).
 		Render(content.String())
 }
