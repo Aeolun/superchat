@@ -1,0 +1,38 @@
+# Coverage files
+coverage.out
+coverage.html
+protocol.out
+protocol.lcov
+server.out
+server.lcov
+client.out
+client.lcov
+*.coverprofile
+
+# Build artifacts
+superchat-server
+superchat
+superchat-client
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Config and state files
+*.db
+*.db-shm
+*.db-wal
