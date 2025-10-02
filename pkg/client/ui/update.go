@@ -68,14 +68,19 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleSplashKeys handles splash screen keys
 func (m Model) handleSplashKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Any key continues
-	m.currentView = ViewNicknameSetup
+	// Any key continues - go straight to browsing
+	m.currentView = ViewChannelList
+
+	// Send SET_NICKNAME if we have one from last time
 	if m.nickname != "" {
-		// Already have a nickname, skip setup
-		m.currentView = ViewChannelList
-		return m, m.requestChannelList()
+		return m, tea.Batch(
+			m.sendSetNickname(),
+			m.requestChannelList(),
+		)
 	}
-	return m, nil
+
+	// No nickname - browse anonymously
+	return m, m.requestChannelList()
 }
 
 // handleNicknameSetupKeys handles nickname setup keys
@@ -88,11 +93,15 @@ func (m Model) handleNicknameSetupKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.firstRun {
 				m.state.SetFirstRunComplete()
 			}
-			m.currentView = ViewChannelList
-			return m, tea.Batch(
-				m.sendSetNickname(),
-				m.requestChannelList(),
-			)
+
+			// Return to the view we came from, or channel list by default
+			nextView := ViewChannelList
+			if m.returnToView != ViewSplash && m.returnToView != ViewNicknameSetup {
+				nextView = m.returnToView
+			}
+			m.currentView = nextView
+
+			return m, m.sendSetNickname()
 		}
 		m.errorMessage = "Nickname must be at least 3 characters"
 		return m, nil
@@ -178,7 +187,15 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n":
-		// New thread
+		// New thread - check for nickname first
+		if m.nickname == "" {
+			m.composeMode = ComposeModeNewThread
+			m.composeInput = ""
+			m.composeParentID = nil
+			m.returnToView = ViewCompose
+			m.currentView = ViewNicknameSetup
+			return m, nil
+		}
 		m.currentView = ViewCompose
 		m.composeMode = ComposeModeNewThread
 		m.composeInput = ""
@@ -223,10 +240,7 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		// Reply to selected message
-		m.currentView = ViewCompose
-		m.composeMode = ComposeModeReply
-
+		// Reply to selected message - check for nickname first
 		var parentID uint64
 		if m.replyCursor == 0 {
 			// Replying to root
@@ -236,6 +250,18 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.replyCursor-1 < len(m.threadReplies) {
 			parentID = m.threadReplies[m.replyCursor-1].ID
 		}
+
+		if m.nickname == "" {
+			m.composeMode = ComposeModeReply
+			m.composeParentID = &parentID
+			m.composeInput = ""
+			m.returnToView = ViewCompose
+			m.currentView = ViewNicknameSetup
+			return m, nil
+		}
+
+		m.currentView = ViewCompose
+		m.composeMode = ComposeModeReply
 		m.composeParentID = &parentID
 		m.composeInput = ""
 		return m, nil

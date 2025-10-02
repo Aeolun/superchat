@@ -46,8 +46,8 @@ func (m Model) renderSplash() string {
 • Press [h] or [?] anytime for help
 • Press [n] to start a new thread
 
-You're connected anonymously (read-only until you set
-a nickname). You'll be prompted when you post.`)
+You can browse anonymously without setting a nickname.
+When you want to post, you'll be prompted to set one.`)
 
 	prompt := splashPromptStyle.Render("[Press any key to continue]")
 

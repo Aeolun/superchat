@@ -52,6 +52,7 @@ type Model struct {
 	composeCursor   int
 	composeMode     ComposeMode
 	composeParentID *uint64
+	returnToView    ViewState  // Where to return after nickname setup
 
 	// Error and status
 	errorMessage    string
