@@ -244,7 +244,7 @@ Default location: `~/.config/superchat/config.toml`
 Suggested settings:
 ```toml
 [server]
-tcp_port = 7070
+tcp_port = 6465
 ssh_port = 2222
 database_path = "~/.config/superchat/superchat.db"
 
@@ -265,7 +265,7 @@ Suggested settings:
 ```toml
 [connection]
 default_server = "chat.example.com"
-default_port = 7070
+default_port = 6465
 auto_reconnect = true
 
 [local]

@@ -1,0 +1,19 @@
+# SuperChat Client Configuration
+# Copy this file to ~/.config/superchat/config.toml (respects XDG_CONFIG_HOME)
+
+[connection]
+default_server = "superchat.win"
+default_port = 6465
+auto_reconnect = true
+reconnect_max_delay_seconds = 30
+
+[local]
+# State database path (respects XDG_DATA_HOME, defaults to ~/.local/share/superchat/state.db)
+state_db = "~/.local/share/superchat/state.db"
+last_nickname = ""  # Auto-filled on first run
+auto_set_nickname = true  # Use last_nickname on connect
+
+[ui]
+show_timestamps = true
+timestamp_format = "relative"  # 'relative' or 'absolute'
+theme = "default"  # For future themes

@@ -1,0 +1,32 @@
+# Binaries
+superchat-server
+superchat
+superchat-client
+
+# Test and coverage files
+*.test
+*.out
+*.lcov
+*.coverprofile
+coverage.html
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Config examples
+*.example.toml
+
+# OS files
+.DS_Store
+Thumbs.db

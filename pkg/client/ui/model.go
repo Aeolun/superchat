@@ -3,6 +3,7 @@ package ui
 import (
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/protocol"
@@ -21,11 +22,22 @@ const (
 	ViewHelp
 )
 
+// ConnectionState represents the connection status
+type ConnectionState int
+
+const (
+	StateConnected ConnectionState = iota
+	StateDisconnected
+	StateReconnecting
+)
+
 // Model represents the application state
 type Model struct {
 	// Connection and state
-	conn  *client.Connection
-	state *client.State
+	conn            *client.Connection
+	state           *client.State
+	connectionState ConnectionState
+	reconnectAttempt int
 
 	// Current view
 	currentView ViewState
@@ -45,6 +57,9 @@ type Model struct {
 	channelCursor   int
 	threadCursor    int
 	replyCursor     int
+	threadViewport  viewport.Model  // Viewport for thread view
+	threadListViewport viewport.Model  // Viewport for thread list
+	newMessageIDs   map[uint64]bool // Track new messages in current thread
 
 	// Input state
 	nickname        string
@@ -87,16 +102,19 @@ func NewModel(conn *client.Connection, state *client.State) Model {
 	nickname := state.GetLastNickname()
 
 	return Model{
-		conn:          conn,
-		state:         state,
-		currentView:   initialView,
-		firstRun:      firstRun,
-		nickname:      nickname,
-		channels:      []protocol.Channel{},
-		threads:       []protocol.Message{},
-		threadReplies: []protocol.Message{},
-		pingInterval:  30 * time.Second,  // Send ping every 30 seconds
-		lastPingSent:  time.Now(),
+		conn:             conn,
+		state:            state,
+		connectionState:  StateConnected,
+		reconnectAttempt: 0,
+		currentView:      initialView,
+		firstRun:         firstRun,
+		nickname:         nickname,
+		channels:         []protocol.Channel{},
+		threads:          []protocol.Message{},
+		threadReplies:    []protocol.Message{},
+		newMessageIDs:    make(map[uint64]bool),
+		pingInterval:     30 * time.Second, // Send ping every 30 seconds
+		lastPingSent:     time.Now(),
 	}
 }
 
@@ -110,6 +128,19 @@ type ServerFrameMsg struct {
 // ErrorMsg represents an error
 type ErrorMsg struct {
 	Err error
+}
+
+// ConnectedMsg is sent when successfully connected or reconnected
+type ConnectedMsg struct{}
+
+// DisconnectedMsg is sent when connection is lost
+type DisconnectedMsg struct {
+	Err error
+}
+
+// ReconnectingMsg is sent when attempting to reconnect
+type ReconnectingMsg struct {
+	Attempt int
 }
 
 // TickMsg is sent periodically
@@ -140,7 +171,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// listenForServerFrames listens for incoming server frames
+// listenForServerFrames listens for incoming server frames and connection state changes
 func listenForServerFrames(conn *client.Connection) tea.Cmd {
 	return func() tea.Msg {
 		select {
@@ -148,7 +179,17 @@ func listenForServerFrames(conn *client.Connection) tea.Cmd {
 			return ServerFrameMsg{Frame: frame}
 		case err := <-conn.Errors():
 			return ErrorMsg{Err: err}
+		case stateUpdate := <-conn.StateChanges():
+			switch stateUpdate.State {
+			case client.StateTypeConnected:
+				return ConnectedMsg{}
+			case client.StateTypeDisconnected:
+				return DisconnectedMsg{Err: stateUpdate.Err}
+			case client.StateTypeReconnecting:
+				return ReconnectingMsg{Attempt: stateUpdate.Attempt}
+			}
 		}
+		return nil
 	}
 }
 

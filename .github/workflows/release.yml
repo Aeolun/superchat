@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # Linux
+          - goos: linux
+            goarch: amd64
+            name: superchat-linux-amd64
+          - goos: linux
+            goarch: arm64
+            name: superchat-linux-arm64
+
+          # macOS
+          - goos: darwin
+            goarch: amd64
+            name: superchat-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            name: superchat-darwin-arm64
+
+          # Windows
+          - goos: windows
+            goarch: amd64
+            name: superchat-windows-amd64.exe
+
+          # FreeBSD
+          - goos: freebsd
+            goarch: amd64
+            name: superchat-freebsd-amd64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build client binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o ${{ matrix.name }} ./cmd/client
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+  build-server:
+    name: Build Server Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # Linux
+          - goos: linux
+            goarch: amd64
+            name: superchat-server-linux-amd64
+          - goos: linux
+            goarch: arm64
+            name: superchat-server-linux-arm64
+
+          # macOS
+          - goos: darwin
+            goarch: amd64
+            name: superchat-server-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            name: superchat-server-darwin-arm64
+
+          # Windows
+          - goos: windows
+            goarch: amd64
+            name: superchat-server-windows-amd64.exe
+
+          # FreeBSD
+          - goos: freebsd
+            goarch: amd64
+            name: superchat-server-freebsd-amd64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build server binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o ${{ matrix.name }} ./cmd/server
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+  release:
+    name: Create Release
+    needs: [build, build-server]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          find ./artifacts -type f -exec mv {} ./release/ \;
+          ls -lh ./release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

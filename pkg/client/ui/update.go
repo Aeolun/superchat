@@ -2,8 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/aeolun/superchat/pkg/protocol"
 )
@@ -17,21 +19,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// Initialize or resize thread view viewport
+		if m.threadViewport.Width == 0 || m.threadViewport.Height == 0 {
+			m.threadViewport = viewport.New(msg.Width-2, msg.Height-6)
+			m.threadViewport.SetContent(m.buildThreadContent())
+		} else {
+			m.threadViewport.Width = msg.Width - 2
+			m.threadViewport.Height = msg.Height - 6
+		}
+
+		// Initialize or resize thread list viewport
+		threadListWidth := msg.Width - msg.Width/4 - 1 - 4 // Account for channel pane, space, and border+padding
+		if threadListWidth < 30 {
+			threadListWidth = 30
+		}
+		if m.threadListViewport.Width == 0 || m.threadListViewport.Height == 0 {
+			m.threadListViewport = viewport.New(threadListWidth, msg.Height-6)
+			m.threadListViewport.SetContent(m.buildThreadListContent())
+		} else {
+			m.threadListViewport.Width = threadListWidth
+			m.threadListViewport.Height = msg.Height - 6
+		}
+
 		return m, nil
 
 	case ServerFrameMsg:
 		return m.handleServerFrame(msg.Frame)
 
 	case ErrorMsg:
-		m.errorMessage = msg.Err.Error()
-		return m, nil
+		// Only show non-disconnect errors (disconnect is handled by DisconnectedMsg)
+		if msg.Err.Error() != "disconnected from server" {
+			m.errorMessage = msg.Err.Error()
+		}
+		return m, listenForServerFrames(m.conn)
+
+	case ConnectedMsg:
+		return m.handleReconnected()
+
+	case DisconnectedMsg:
+		m.connectionState = StateDisconnected
+		m.errorMessage = ""
+		return m, listenForServerFrames(m.conn)
+
+	case ReconnectingMsg:
+		m.connectionState = StateReconnecting
+		m.reconnectAttempt = msg.Attempt
+		m.errorMessage = ""
+		return m, listenForServerFrames(m.conn)
 
 	case TickMsg:
-		// Check if we need to send a ping
-		now := time.Time(msg)
-		if now.Sub(m.lastPingSent) >= m.pingInterval {
-			m.lastPingSent = now
-			return m, tea.Batch(tickCmd(), m.sendPing())
+		// Check if we need to send a ping (only if connected)
+		if m.connectionState == StateConnected {
+			now := time.Time(msg)
+			if now.Sub(m.lastPingSent) >= m.pingInterval {
+				m.lastPingSent = now
+				return m, tea.Batch(tickCmd(), m.sendPing())
+			}
 		}
 		return m, tickCmd()
 	}
@@ -178,12 +222,14 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.threadCursor > 0 {
 			m.threadCursor--
+			m.threadListViewport.SetContent(m.buildThreadListContent())
 		}
 		return m, nil
 
 	case "down", "j":
 		if m.threadCursor < len(m.threads)-1 {
 			m.threadCursor++
+			m.threadListViewport.SetContent(m.buildThreadListContent())
 		}
 		return m, nil
 
@@ -192,6 +238,10 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			selectedThread := m.threads[m.threadCursor]
 			m.currentThread = &selectedThread
 			m.currentView = ViewThreadView
+			m.replyCursor = 0
+			m.newMessageIDs = make(map[uint64]bool) // Clear new message tracking
+			m.threadViewport.SetContent(m.buildThreadContent())
+			m.threadViewport.GotoTop()
 			return m, m.requestThreadReplies(selectedThread.ID)
 		}
 		return m, nil
@@ -236,16 +286,24 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleThreadViewKeys handles thread view navigation
 func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg.String() {
 	case "up", "k":
 		if m.replyCursor > 0 {
 			m.replyCursor--
+			m.markCurrentMessageAsRead()
+			m.threadViewport.SetContent(m.buildThreadContent())
+			m.scrollToKeepCursorVisible()
 		}
 		return m, nil
 
 	case "down", "j":
 		if m.replyCursor < len(m.threadReplies) {
 			m.replyCursor++
+			m.markCurrentMessageAsRead()
+			m.threadViewport.SetContent(m.buildThreadContent())
+			m.scrollToKeepCursorVisible()
 		}
 		return m, nil
 
@@ -276,12 +334,22 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.composeInput = ""
 		return m, nil
 
+	case "d":
+		// Delete message (not implemented in V1)
+		// Just consume the key to prevent viewport scrolling
+		return m, nil
+
 	case "esc":
 		// Back to thread list
 		m.currentView = ViewThreadList
 		m.threadReplies = []protocol.Message{}
 		m.replyCursor = 0
 		return m, nil
+
+	default:
+		// Pass unhandled keys to viewport for scrolling (pgup/pgdown/etc)
+		m.threadViewport, cmd = m.threadViewport.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -441,10 +509,16 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	if msg.ParentID == nil {
 		// Root messages (thread list)
 		m.threads = msg.Messages
+		m.threadListViewport.SetContent(m.buildThreadListContent())
 		m.statusMessage = fmt.Sprintf("Loaded %d threads", len(m.threads))
 	} else {
-		// Thread replies
-		m.threadReplies = msg.Messages
+		// Thread replies - sort them in depth-first order
+		if m.currentThread != nil {
+			m.threadReplies = sortThreadReplies(msg.Messages, m.currentThread.ID)
+		} else {
+			m.threadReplies = msg.Messages
+		}
+		m.threadViewport.SetContent(m.buildThreadContent())
 		m.statusMessage = fmt.Sprintf("Loaded %d replies", len(m.threadReplies))
 	}
 
@@ -496,9 +570,50 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		if newMsg.ParentID == nil {
 			// New root message - add to threads
 			m.threads = append([]protocol.Message{newMsg}, m.threads...)
-		} else if m.currentThread != nil && (newMsg.ParentID != nil && *newMsg.ParentID == m.currentThread.ID) {
-			// Reply to current thread
-			m.threadReplies = append(m.threadReplies, newMsg)
+			m.threadListViewport.SetContent(m.buildThreadListContent())
+		} else if m.currentThread != nil && newMsg.ParentID != nil {
+			// Check if this message belongs to the current thread
+			// (either replying to root or to any existing reply)
+			belongsToThread := *newMsg.ParentID == m.currentThread.ID
+			if !belongsToThread {
+				// Check if it's a reply to any existing reply in the thread
+				for _, reply := range m.threadReplies {
+					if *newMsg.ParentID == reply.ID {
+						belongsToThread = true
+						break
+					}
+				}
+			}
+
+			if belongsToThread {
+				// Reply to current thread - add it
+				m.threadReplies = append(m.threadReplies, newMsg)
+				// Sort replies in depth-first order based on tree structure
+				m.threadReplies = sortThreadReplies(m.threadReplies, m.currentThread.ID)
+
+				if m.currentView == ViewThreadView {
+					// Check if this is our own message
+					isOwnMessage := newMsg.AuthorNickname == m.nickname
+
+					if isOwnMessage {
+						// Scroll to and select our own message
+						for i, reply := range m.threadReplies {
+							if reply.ID == newMsg.ID {
+								m.replyCursor = i + 1 // +1 because 0 is root
+								break
+							}
+						}
+						m.threadViewport.SetContent(m.buildThreadContent())
+						m.scrollToKeepCursorVisible()
+					} else {
+						// Mark others' messages as new
+						m.newMessageIDs[newMsg.ID] = true
+						m.threadViewport.SetContent(m.buildThreadContent())
+					}
+				} else {
+					m.threadViewport.SetContent(m.buildThreadContent())
+				}
+			}
 		}
 	}
 
@@ -622,4 +737,89 @@ func (m Model) sendPing() tea.Cmd {
 		}
 		return nil
 	}
+}
+
+// markCurrentMessageAsRead removes the "new" indicator from the currently selected message
+func (m *Model) markCurrentMessageAsRead() {
+	if m.replyCursor == 0 && m.currentThread != nil {
+		// Root message selected
+		delete(m.newMessageIDs, m.currentThread.ID)
+	} else if m.replyCursor > 0 && m.replyCursor-1 < len(m.threadReplies) {
+		// Reply message selected
+		reply := m.threadReplies[m.replyCursor-1]
+		delete(m.newMessageIDs, reply.ID)
+	}
+}
+
+// sortThreadReplies sorts messages in depth-first order based on tree structure
+// Messages are grouped by parent and sorted by timestamp within each group
+func sortThreadReplies(replies []protocol.Message, rootID uint64) []protocol.Message {
+	if len(replies) == 0 {
+		return replies
+	}
+
+	// Build a map of parent_id -> children
+	childrenMap := make(map[uint64][]protocol.Message)
+	for _, msg := range replies {
+		if msg.ParentID != nil {
+			parentID := *msg.ParentID
+			childrenMap[parentID] = append(childrenMap[parentID], msg)
+		}
+	}
+
+	// Sort children by creation time within each parent group
+	for _, children := range childrenMap {
+		sort.Slice(children, func(i, j int) bool {
+			return children[i].CreatedAt.Before(children[j].CreatedAt)
+		})
+	}
+
+	// Depth-first traversal to build final ordered list
+	var result []protocol.Message
+	var traverse func(parentID uint64)
+	traverse = func(parentID uint64) {
+		children := childrenMap[parentID]
+		for _, child := range children {
+			result = append(result, child)
+			// Recursively add this child's children
+			traverse(child.ID)
+		}
+	}
+
+	// Start traversal from root
+	traverse(rootID)
+
+	return result
+}
+
+// handleReconnected handles successful reconnection
+func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
+	m.connectionState = StateConnected
+	m.reconnectAttempt = 0
+	m.errorMessage = ""
+	m.statusMessage = "Reconnected successfully"
+
+	// Re-request data based on current view
+	cmds := []tea.Cmd{listenForServerFrames(m.conn)}
+
+	// Re-send nickname if we have one
+	if m.nickname != "" {
+		cmds = append(cmds, m.sendSetNickname())
+	}
+
+	// Re-request channel list
+	cmds = append(cmds, m.requestChannelList())
+
+	// If we're in a channel, rejoin and reload threads
+	if m.currentChannel != nil {
+		cmds = append(cmds, m.sendJoinChannel(m.currentChannel.ID))
+		cmds = append(cmds, m.requestThreadList(m.currentChannel.ID))
+
+		// If we're viewing a specific thread, reload replies
+		if m.currentThread != nil && m.currentView == ViewThreadView {
+			cmds = append(cmds, m.requestThreadReplies(m.currentThread.ID))
+		}
+	}
+
+	return m, tea.Batch(cmds...)
 }

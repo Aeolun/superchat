@@ -24,27 +24,27 @@ type Server struct {
 
 // ServerConfig holds server configuration
 type ServerConfig struct {
-	TCPPort                 int
-	MaxConnectionsPerIP     uint8
-	MessageRateLimit        uint16
-	MaxChannelCreates       uint16
-	InactiveCleanupDays     uint16
-	MaxMessageLength        uint32
-	SessionTimeoutSeconds   int
-	ProtocolVersion         uint8
+	TCPPort               int
+	MaxConnectionsPerIP   uint8
+	MessageRateLimit      uint16
+	MaxChannelCreates     uint16
+	InactiveCleanupDays   uint16
+	MaxMessageLength      uint32
+	SessionTimeoutSeconds int
+	ProtocolVersion       uint8
 }
 
 // DefaultConfig returns default server configuration
 func DefaultConfig() ServerConfig {
 	return ServerConfig{
-		TCPPort:                 7070,
-		MaxConnectionsPerIP:     10,
-		MessageRateLimit:        10,   // per minute
-		MaxChannelCreates:       5,    // per hour
-		InactiveCleanupDays:     90,   // days
-		MaxMessageLength:        4096, // bytes
-		SessionTimeoutSeconds:   60,   // 60 seconds
-		ProtocolVersion:         1,
+		TCPPort:               6465,
+		MaxConnectionsPerIP:   10,
+		MessageRateLimit:      10,   // per minute
+		MaxChannelCreates:     5,    // per hour
+		InactiveCleanupDays:   90,   // days
+		MaxMessageLength:      4096, // bytes
+		SessionTimeoutSeconds: 60,   // 60 seconds
+		ProtocolVersion:       1,
 	}
 }
 

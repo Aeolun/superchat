@@ -21,10 +21,37 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// Configure connection pool for better concurrency
+	// Limit to 1 open connection for writes (SQLite limitation)
+	// But allow multiple readers in WAL mode
+	conn.SetMaxOpenConns(25)
+	conn.SetMaxIdleConns(5)
+	conn.SetConnMaxLifetime(5 * time.Minute)
+
+	// Enable WAL mode for better concurrent access
+	// WAL allows multiple readers and one writer at the same time
+	if _, err := conn.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+	}
+
+	// Set busy timeout to 5 seconds
+	// This makes SQLite wait and retry instead of immediately failing with SQLITE_BUSY
+	if _, err := conn.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to set busy timeout: %w", err)
+	}
+
 	// Enable foreign keys (SQLite has them disabled by default)
 	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
+	// Optimize for concurrency
+	if _, err := conn.Exec("PRAGMA synchronous = NORMAL"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to set synchronous mode: %w", err)
 	}
 
 	db := &DB{conn: conn}
@@ -458,25 +485,30 @@ func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint1
 
 // ListThreadReplies returns all replies under a parent message, sorted for depth-first display
 func (db *DB) ListThreadReplies(parentID uint64) ([]*Message, error) {
-	// Recursive CTE to get all descendants
+	// Recursive CTE to get all descendants with a path for proper depth-first ordering
 	query := `
 		WITH RECURSIVE thread_tree AS (
 			-- Base case: direct replies to parent
 			SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
-			       content, created_at, edited_at, deleted_at, thread_depth
+			       content, created_at, edited_at, deleted_at, thread_depth,
+			       printf('%010d', created_at) AS path
 			FROM Message
 			WHERE parent_id = ?
 
 			UNION ALL
 
 			-- Recursive case: replies to replies
+			-- Build path by concatenating parent path with current message's timestamp
 			SELECT m.id, m.channel_id, m.subchannel_id, m.parent_id, m.author_user_id, m.author_nickname,
-			       m.content, m.created_at, m.edited_at, m.deleted_at, m.thread_depth
+			       m.content, m.created_at, m.edited_at, m.deleted_at, m.thread_depth,
+			       tt.path || '.' || printf('%010d', m.created_at)
 			FROM Message m
 			INNER JOIN thread_tree tt ON m.parent_id = tt.id
 		)
-		SELECT * FROM thread_tree
-		ORDER BY thread_depth ASC, created_at ASC
+		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+		       content, created_at, edited_at, deleted_at, thread_depth
+		FROM thread_tree
+		ORDER BY path ASC
 	`
 
 	rows, err := db.conn.Query(query, parentID)

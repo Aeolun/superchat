@@ -42,23 +42,20 @@ var (
 	// List styles
 	selectedItemStyle = baseStyle.Copy().
 				Foreground(primaryColor).
-				Bold(true).
-				PaddingLeft(1)
+				Bold(true)
 
 	unselectedItemStyle = baseStyle.Copy().
-				Foreground(lipgloss.Color("252")).
-				PaddingLeft(1)
+				Foreground(lipgloss.Color("252"))
 
 	// Channel list styles
 	channelPaneStyle = baseStyle.Copy().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(borderColor).
-				Padding(1)
+				Padding(1, 2)
 
 	channelTitleStyle = baseStyle.Copy().
 				Bold(true).
-				Foreground(primaryColor).
-				MarginBottom(1)
+				Foreground(primaryColor)
 
 	channelItemStyle = baseStyle.Copy()
 
@@ -66,7 +63,12 @@ var (
 	threadPaneStyle = baseStyle.Copy().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(borderColor).
-			Padding(1)
+			Padding(1, 0) // Top/bottom padding only, no left/right padding
+
+	actualThreadStyle = baseStyle.Copy().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(borderColor).
+				Padding(1, 2) // Top/bottom padding only, no left/right padding
 
 	threadTitleStyle = baseStyle.Copy().
 				Bold(true).
@@ -75,11 +77,10 @@ var (
 
 	// Message styles
 	messageAuthorStyle = baseStyle.Copy().
-				Bold(true).
 				Foreground(secondaryColor)
 
 	messageAnonymousStyle = baseStyle.Copy().
-				Foreground(mutedColor)
+				Foreground(secondaryColor)
 
 	messageTimeStyle = baseStyle.Copy().
 				Foreground(mutedColor).
@@ -92,11 +93,12 @@ var (
 				Foreground(mutedColor)
 
 	// Modal styles
+	// Note: Width sets content width, border (2 chars) is added on top
 	modalStyle = baseStyle.Copy().
 			Border(lipgloss.DoubleBorder()).
 			BorderForeground(primaryColor).
 			Padding(1, 2).
-			Width(60)
+			Width(58) // 58 + 2 (border) = 60 total
 
 	modalTitleStyle = baseStyle.Copy().
 			Bold(true).

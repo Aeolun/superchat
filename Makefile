@@ -1,4 +1,4 @@
-.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean build run-server run-client
+.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean build run-server run-client run-website docker-build docker-run docker-push
 
 # Run all tests
 test:
@@ -72,6 +72,28 @@ run-server:
 # Run client
 run-client:
 	go run ./cmd/client
+
+# Run website dev server
+run-website:
+	cd website && npm run dev
+
+# Docker commands
+docker-build:
+	docker build -t aeolun/superchat:latest .
+
+docker-run:
+	docker run -d \
+		--name superchat \
+		-p 6465:6465 \
+		-v superchat-data:/data \
+		aeolun/superchat:latest
+
+docker-push:
+	docker push aeolun/superchat:latest
+
+docker-stop:
+	docker stop superchat || true
+	docker rm superchat || true
 
 # Clean coverage files
 clean:

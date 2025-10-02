@@ -12,32 +12,46 @@ import (
 )
 
 func main() {
+	// Configure logger with microsecond precision
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+
 	// Command line flags
-	port := flag.Int("port", 7070, "TCP port to listen on")
-	dbPath := flag.String("db", "", "Path to SQLite database (default: ~/.superchat/superchat.db)")
+	configPath := flag.String("config", "~/.superchat/config.toml", "Path to config file")
+	port := flag.Int("port", 0, "TCP port to listen on (overrides config)")
+	dbPath := flag.String("db", "", "Path to SQLite database (overrides config)")
 	flag.Parse()
 
-	// Default database path
-	if *dbPath == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			log.Fatalf("Failed to get home directory: %v", err)
-		}
-		*dbPath = filepath.Join(homeDir, ".superchat", "superchat.db")
+	// Load configuration (creates default if not found)
+	config, err := server.LoadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Command-line flags override config file
+	if *port != 0 {
+		config.Server.TCPPort = *port
+	}
+	if *dbPath != "" {
+		config.Server.DatabasePath = *dbPath
+	}
+
+	// Get database path with ~ expansion
+	finalDBPath, err := config.GetDatabasePath()
+	if err != nil {
+		log.Fatalf("Failed to resolve database path: %v", err)
 	}
 
 	// Ensure directory exists
-	dbDir := filepath.Dir(*dbPath)
+	dbDir := filepath.Dir(finalDBPath)
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
 		log.Fatalf("Failed to create database directory: %v", err)
 	}
 
-	// Create server configuration
-	config := server.DefaultConfig()
-	config.TCPPort = *port
+	// Convert to server config
+	serverConfig := config.ToServerConfig()
 
 	// Create and start server
-	srv, err := server.NewServer(*dbPath, config)
+	srv, err := server.NewServer(finalDBPath, serverConfig)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
@@ -47,7 +61,9 @@ func main() {
 	}
 
 	log.Printf("SuperChat server started successfully")
-	log.Printf("Database: %s", *dbPath)
+	log.Printf("Config: %s (using defaults if not found)", *configPath)
+	log.Printf("Database: %s", finalDBPath)
+	log.Printf("Port: %d", serverConfig.TCPPort)
 
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)

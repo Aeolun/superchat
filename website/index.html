@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat - Terminal-Based Threaded Chat</title>
+    <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>SuperChat</h1>
+            <p class="tagline">Terminal-based threaded chat for the command line</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <h2>Anonymous, threaded discussions in your terminal</h2>
+            <p>SuperChat brings forum-style threaded conversations to the command line. No registration required, just download and connect.</p>
+        </section>
+
+        <section class="screenshot">
+            <div class="screenshot-grid">
+                <img src="/superchat.png" alt="SuperChat channel list view" />
+                <img src="/thread-view.png" alt="SuperChat thread view with nested replies" />
+            </div>
+        </section>
+
+        <section class="features">
+            <h3>Features</h3>
+            <ul>
+                <li><strong>Terminal UI</strong> - Beautiful keyboard-driven interface built with Bubble Tea</li>
+                <li><strong>Threaded Discussions</strong> - Reddit/forum-style nested conversations with unlimited depth</li>
+                <li><strong>Anonymous by Default</strong> - No registration needed, pick a nickname and start chatting</li>
+                <li><strong>Real-time Updates</strong> - See new messages as they arrive</li>
+                <li><strong>Vim-like Navigation</strong> - j/k to navigate, Enter to select, Esc to go back</li>
+                <li><strong>Custom Binary Protocol</strong> - Efficient wire format with forward compatibility</li>
+            </ul>
+        </section>
+
+        <section class="download">
+            <h3>Download</h3>
+            <p>Get the latest release for your platform:</p>
+            <div id="download-links" class="download-links">
+                <p>Loading download links...</p>
+            </div>
+        </section>
+
+        <section class="usage">
+            <h3>Quick Start</h3>
+            <pre><code># Download for your platform above, then:
+
+# Connect to the default server (superchat.win:6465)
+./superchat
+
+# Or specify a different server
+./superchat --server yourserver.com:6465
+
+# Or run your own server
+./superchat-server --port 6465</code></pre>
+        </section>
+
+        <section class="github">
+            <h3>Open Source</h3>
+            <p>SuperChat is open source and available on <a href="https://github.com/aeolun/superchat">GitHub</a>. Contributions welcome!</p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

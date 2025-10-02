@@ -11,7 +11,8 @@ import (
 
 // State manages client-side persistent state
 type State struct {
-	db *sql.DB
+	db  *sql.DB
+	dir string // Directory where state is stored
 }
 
 // OpenState opens or creates the client state database
@@ -27,7 +28,26 @@ func OpenState(path string) (*State, error) {
 		return nil, fmt.Errorf("failed to open state database: %w", err)
 	}
 
-	state := &State{db: db}
+	// Configure for better reliability
+	db.SetMaxOpenConns(1) // Client only needs one connection
+	db.SetMaxIdleConns(1)
+
+	// Enable WAL mode
+	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+	}
+
+	// Set busy timeout
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to set busy timeout: %w", err)
+	}
+
+	state := &State{
+		db:  db,
+		dir: dir,
+	}
 
 	// Initialize schema
 	if err := state.initSchema(); err != nil {
@@ -139,4 +159,9 @@ func (s *State) GetFirstRun() bool {
 // SetFirstRunComplete marks first run as complete
 func (s *State) SetFirstRunComplete() error {
 	return s.SetConfig("first_run_complete", "true")
+}
+
+// GetStateDir returns the directory where state is stored
+func (s *State) GetStateDir() string {
+	return s.dir
 }

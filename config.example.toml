@@ -1,0 +1,26 @@
+# SuperChat Server Configuration
+# Copy this file to ~/.superchat/config.toml and customize as needed
+
+[server]
+tcp_port = 6465
+database_path = "~/.superchat/superchat.db"
+
+[limits]
+max_connections_per_ip = 10
+message_rate_limit = 10  # messages per minute
+max_message_length = 4096  # bytes
+max_nickname_length = 20
+session_timeout_seconds = 60
+
+[retention]
+default_retention_hours = 168  # 7 days
+cleanup_interval_minutes = 60
+
+[channels]
+# Default channels to seed on first run
+seed_channels = [
+  { name = "general", description = "General discussion" },
+  { name = "tech", description = "Technical topics" },
+  { name = "random", description = "Off-topic chat" },
+  { name = "feedback", description = "Bug reports and feature requests" }
+]
