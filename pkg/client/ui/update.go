@@ -209,6 +209,8 @@ func (m Model) handleChannelListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			selectedChannel := m.channels[m.channelCursor]
 			m.currentChannel = &selectedChannel
 			m.currentView = ViewThreadList
+			m.loadingMore = false
+			m.allThreadsLoaded = false
 			return m, tea.Batch(
 				m.sendJoinChannel(selectedChannel.ID),
 				m.requestThreadList(selectedChannel.ID),
@@ -234,6 +236,7 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.threadCursor > 0 {
 			m.threadCursor--
 			m.threadListViewport.SetContent(m.buildThreadListContent())
+			m.scrollThreadListToKeepCursorVisible()
 		}
 		return m, nil
 
@@ -241,6 +244,53 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.threadCursor < len(m.threads)-1 {
 			m.threadCursor++
 			m.threadListViewport.SetContent(m.buildThreadListContent())
+			m.scrollThreadListToKeepCursorVisible()
+
+			// Load more threads if we're getting close to the end (within 25 threads)
+			if !m.loadingMore && !m.allThreadsLoaded && len(m.threads) > 0 {
+				remainingThreads := len(m.threads) - m.threadCursor - 1
+				if remainingThreads <= 25 {
+					m.loadingMore = true
+					return m, m.loadMoreThreads()
+				}
+			}
+		}
+		return m, nil
+
+	case "pgup":
+		// Jump up by half the viewport height
+		jumpSize := m.threadListViewport.Height / 2
+		if jumpSize < 1 {
+			jumpSize = 1
+		}
+		m.threadCursor -= jumpSize
+		if m.threadCursor < 0 {
+			m.threadCursor = 0
+		}
+		m.threadListViewport.SetContent(m.buildThreadListContent())
+		m.scrollThreadListToKeepCursorVisible()
+		return m, nil
+
+	case "pgdown":
+		// Jump down by half the viewport height
+		jumpSize := m.threadListViewport.Height / 2
+		if jumpSize < 1 {
+			jumpSize = 1
+		}
+		m.threadCursor += jumpSize
+		if m.threadCursor >= len(m.threads) {
+			m.threadCursor = len(m.threads) - 1
+		}
+		m.threadListViewport.SetContent(m.buildThreadListContent())
+		m.scrollThreadListToKeepCursorVisible()
+
+		// Load more threads if we're getting close to the end (within 25 threads)
+		if !m.loadingMore && !m.allThreadsLoaded && len(m.threads) > 0 {
+			remainingThreads := len(m.threads) - m.threadCursor - 1
+			if remainingThreads <= 25 {
+				m.loadingMore = true
+				return m, m.loadMoreThreads()
+			}
 		}
 		return m, nil
 
@@ -291,6 +341,8 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentChannel = nil
 		m.threads = []protocol.Message{}
 		m.threadCursor = 0
+		m.loadingMore = false
+		m.allThreadsLoaded = false
 		return m, nil
 	}
 
@@ -596,9 +648,25 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 	if msg.ParentID == nil {
 		// Root messages (thread list)
-		m.threads = msg.Messages
-		m.threadListViewport.SetContent(m.buildThreadListContent())
-		m.statusMessage = fmt.Sprintf("Loaded %d threads", len(m.threads))
+		if m.loadingMore {
+			// Append to existing threads
+			m.threads = append(m.threads, msg.Messages...)
+			m.loadingMore = false
+
+			// If we got fewer than 50, we've reached the end
+			if len(msg.Messages) < 50 {
+				m.allThreadsLoaded = true
+			}
+
+			m.threadListViewport.SetContent(m.buildThreadListContent())
+			m.statusMessage = fmt.Sprintf("Loaded %d more threads", len(msg.Messages))
+		} else {
+			// Initial load - replace threads
+			m.threads = msg.Messages
+			m.allThreadsLoaded = len(msg.Messages) < 50
+			m.threadListViewport.SetContent(m.buildThreadListContent())
+			m.statusMessage = fmt.Sprintf("Loaded %d threads", len(m.threads))
+		}
 	} else {
 		// Thread replies - sort them in depth-first order
 		if m.currentThread != nil {
@@ -658,6 +726,10 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		if newMsg.ParentID == nil {
 			// New root message - add to threads
 			m.threads = append([]protocol.Message{newMsg}, m.threads...)
+			// Sort threads by created_at descending (newest first)
+			sort.Slice(m.threads, func(i, j int) bool {
+				return m.threads[i].CreatedAt.After(m.threads[j].CreatedAt)
+			})
 			m.threadListViewport.SetContent(m.buildThreadListContent())
 		} else if m.currentThread != nil && newMsg.ParentID != nil {
 			// Check if this message belongs to the current thread
@@ -828,6 +900,29 @@ func (m Model) requestThreadList(channelID uint64) tea.Cmd {
 			SubchannelID: nil,
 			Limit:        50,
 			BeforeID:     nil,
+			ParentID:     nil,
+		}
+		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) loadMoreThreads() tea.Cmd {
+	return func() tea.Msg {
+		if m.currentChannel == nil || len(m.threads) == 0 {
+			return nil
+		}
+
+		// Get the ID of the oldest thread we have
+		oldestThreadID := m.threads[len(m.threads)-1].ID
+
+		msg := &protocol.ListMessagesMessage{
+			ChannelID:    m.currentChannel.ID,
+			SubchannelID: nil,
+			Limit:        50,
+			BeforeID:     &oldestThreadID,
 			ParentID:     nil,
 		}
 		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {

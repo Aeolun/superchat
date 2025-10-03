@@ -703,6 +703,9 @@ func (m Model) buildThreadContent() string {
 		return ""
 	}
 
+	// Calculate depths once for all messages
+	depths := m.calculateThreadDepths()
+
 	// Render root message
 	rootMsg := m.formatMessage(*m.currentThread, 0, m.replyCursor == 0)
 	content.WriteString(rootMsg)
@@ -710,12 +713,48 @@ func (m Model) buildThreadContent() string {
 
 	// Render replies
 	for i, reply := range m.threadReplies {
-		msg := m.formatMessage(reply, int(reply.ThreadDepth), m.replyCursor == i+1)
+		depth := depths[reply.ID]
+		msg := m.formatMessage(reply, depth, m.replyCursor == i+1)
 		content.WriteString(msg)
 		content.WriteString("\n\n")
 	}
 
 	return content.String()
+}
+
+// calculateThreadDepths builds a depth map for all messages in the thread (single pass)
+func (m Model) calculateThreadDepths() map[uint64]int {
+	depths := make(map[uint64]int)
+
+	if m.currentThread == nil {
+		return depths
+	}
+
+	// Root is always depth 0
+	depths[m.currentThread.ID] = 0
+
+	// Build parent->children map
+	childrenMap := make(map[uint64][]protocol.Message)
+	for _, reply := range m.threadReplies {
+		if reply.ParentID != nil {
+			childrenMap[*reply.ParentID] = append(childrenMap[*reply.ParentID], reply)
+		}
+	}
+
+	// BFS traversal to assign depths
+	queue := []uint64{m.currentThread.ID}
+	for len(queue) > 0 {
+		parentID := queue[0]
+		queue = queue[1:]
+		parentDepth := depths[parentID]
+
+		for _, child := range childrenMap[parentID] {
+			depths[child.ID] = parentDepth + 1
+			queue = append(queue, child.ID)
+		}
+	}
+
+	return depths
 }
 
 // calculateCursorLinePosition returns the line number where the cursor is positioned
@@ -731,6 +770,9 @@ func (m Model) calculateCursorLinePosition() int {
 		return 0
 	}
 
+	// Calculate depths once
+	depths := m.calculateThreadDepths()
+
 	// Add root message lines + 2 newlines (one for content, one blank separator)
 	rootMsg := m.formatMessage(*m.currentThread, 0, false)
 	linePos += len(strings.Split(rootMsg, "\n")) + 2 // +2 for \n\n after root
@@ -738,7 +780,8 @@ func (m Model) calculateCursorLinePosition() int {
 	// Add lines for each reply before cursor
 	for i := 0; i < m.replyCursor-1 && i < len(m.threadReplies); i++ {
 		reply := m.threadReplies[i]
-		msg := m.formatMessage(reply, int(reply.ThreadDepth), false)
+		depth := depths[reply.ID]
+		msg := m.formatMessage(reply, depth, false)
 		linePos += len(strings.Split(msg, "\n")) + 1 // +1 for blank line separator
 	}
 
@@ -762,6 +805,9 @@ func (m Model) checkNewMessagesOutsideViewport() (hasNewAbove bool, hasNewBelow 
 		}
 	}
 
+	// Calculate depths once
+	depths := m.calculateThreadDepths()
+
 	// Check each reply
 	linePos := 0
 	if m.currentThread != nil {
@@ -780,7 +826,8 @@ func (m Model) checkNewMessagesOutsideViewport() (hasNewAbove bool, hasNewBelow 
 		}
 
 		// Update line position for next message
-		msg := m.formatMessage(reply, int(reply.ThreadDepth), false)
+		depth := depths[reply.ID]
+		msg := m.formatMessage(reply, depth, false)
 		linePos += len(strings.Split(msg, "\n")) + 1 // +1 for blank line
 	}
 
@@ -801,6 +848,22 @@ func (m *Model) scrollToKeepCursorVisible() {
 	}
 
 	m.threadViewport.SetYOffset(targetOffset)
+}
+
+// scrollThreadListToKeepCursorVisible adjusts thread list viewport to center the cursor
+func (m *Model) scrollThreadListToKeepCursorVisible() {
+	// Each thread item is 1 line
+	cursorLine := m.threadCursor
+
+	// Calculate offset to center the selected thread
+	targetOffset := cursorLine - (m.threadListViewport.Height / 2)
+
+	// Ensure we don't scroll past the beginning
+	if targetOffset < 0 {
+		targetOffset = 0
+	}
+
+	m.threadListViewport.SetYOffset(targetOffset)
 }
 
 // renderDisconnectedOverlay renders a full-screen overlay when disconnected

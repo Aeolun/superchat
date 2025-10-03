@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -20,7 +21,10 @@ var (
 
 // DB wraps the SQLite database connection
 type DB struct {
-	conn *sql.DB
+	conn        *sql.DB // Read connection pool (25 connections)
+	writeConn   *sql.DB // Dedicated write connection (1 connection)
+	snowflake   *Snowflake
+	WriteBuffer *WriteBuffer
 }
 
 // Open opens a connection to the SQLite database at the given path
@@ -64,7 +68,55 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("failed to set synchronous mode: %w", err)
 	}
 
-	db := &DB{conn: conn}
+	// Create dedicated write connection (single connection, no pooling)
+	writeConn, err := sql.Open("sqlite", path)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to open write connection: %w", err)
+	}
+
+	// Configure write connection: exactly 1 connection, no pooling
+	writeConn.SetMaxOpenConns(1)
+	writeConn.SetMaxIdleConns(1)
+	writeConn.SetConnMaxLifetime(0) // Never expire
+
+	// Enable WAL mode on write connection
+	if _, err := writeConn.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		conn.Close()
+		writeConn.Close()
+		return nil, fmt.Errorf("failed to enable WAL mode on write connection: %w", err)
+	}
+
+	// Set busy timeout on write connection
+	if _, err := writeConn.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		conn.Close()
+		writeConn.Close()
+		return nil, fmt.Errorf("failed to set busy timeout on write connection: %w", err)
+	}
+
+	// Enable foreign keys on write connection
+	if _, err := writeConn.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		conn.Close()
+		writeConn.Close()
+		return nil, fmt.Errorf("failed to enable foreign keys on write connection: %w", err)
+	}
+
+	// Synchronous mode on write connection
+	if _, err := writeConn.Exec("PRAGMA synchronous = NORMAL"); err != nil {
+		conn.Close()
+		writeConn.Close()
+		return nil, fmt.Errorf("failed to set synchronous mode on write connection: %w", err)
+	}
+
+	// Create Snowflake ID generator (epoch: 2024-01-01, workerID: 0)
+	epoch := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	snowflake := NewSnowflake(epoch, 0)
+
+	db := &DB{
+		conn:      conn,
+		writeConn: writeConn,
+		snowflake: snowflake,
+	}
 
 	// Initialize schema
 	if err := db.initSchema(); err != nil {
@@ -72,11 +124,15 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
+	// Initialize write buffer (100ms flush interval)
+	db.WriteBuffer = NewWriteBuffer(db, 100*time.Millisecond)
+
 	return db, nil
 }
 
 // Close closes the database connection
 func (db *DB) Close() error {
+	db.writeConn.Close()
 	return db.conn.Close()
 }
 
@@ -108,7 +164,7 @@ CREATE TABLE IF NOT EXISTS Session (
 
 -- Message table
 CREATE TABLE IF NOT EXISTS Message (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	id INTEGER PRIMARY KEY,
 	channel_id INTEGER NOT NULL,
 	subchannel_id INTEGER,
 	parent_id INTEGER,
@@ -118,7 +174,6 @@ CREATE TABLE IF NOT EXISTS Message (
 	created_at INTEGER NOT NULL,
 	edited_at INTEGER,
 	deleted_at INTEGER,
-	thread_depth INTEGER NOT NULL,
 	FOREIGN KEY (channel_id) REFERENCES Channel(id) ON DELETE CASCADE,
 	FOREIGN KEY (parent_id) REFERENCES Message(id) ON DELETE CASCADE
 );
@@ -180,7 +235,6 @@ type Message struct {
 	CreatedAt      int64 // Unix timestamp in milliseconds
 	EditedAt       *int64
 	DeletedAt      *int64
-	ThreadDepth    uint8
 }
 
 // MessageVersion represents a version history entry
@@ -222,16 +276,20 @@ func (db *DB) SeedDefaultChannels() error {
 
 // CreateChannel creates a new channel (returns nil if already exists)
 func (db *DB) CreateChannel(name, displayName string, description *string, channelType uint8, retentionHours uint32) error {
+	start := time.Now()
 	descStr := sql.NullString{}
 	if description != nil {
 		descStr.Valid = true
 		descStr.String = *description
 	}
 
-	_, err := db.conn.Exec(`
+	_, err := db.writeConn.Exec(`
 		INSERT OR IGNORE INTO Channel (name, display_name, description, channel_type, message_retention_hours, created_at, is_private)
 		VALUES (?, ?, ?, ?, ?, ?, 0)
 	`, name, displayName, descStr, channelType, retentionHours, nowMillis())
+
+	elapsed := time.Since(start)
+	log.Printf("DB: CreateChannel took %v", elapsed)
 
 	return err
 }
@@ -321,6 +379,7 @@ func (db *DB) GetChannel(id int64) (*Channel, error) {
 
 // CreateSession creates a new session record
 func (db *DB) CreateSession(userID *int64, nickname, connType string) (int64, error) {
+	start := time.Now()
 	var userIDVal sql.NullInt64
 	if userID != nil {
 		userIDVal.Valid = true
@@ -328,10 +387,13 @@ func (db *DB) CreateSession(userID *int64, nickname, connType string) (int64, er
 	}
 
 	now := nowMillis()
-	result, err := db.conn.Exec(`
+	result, err := db.writeConn.Exec(`
 		INSERT INTO Session (user_id, nickname, connection_type, connected_at, last_activity)
 		VALUES (?, ?, ?, ?, ?)
 	`, userIDVal, nickname, connType, now, now)
+
+	elapsed := time.Since(start)
+	log.Printf("DB: CreateSession took %v", elapsed)
 
 	if err != nil {
 		return 0, err
@@ -400,15 +462,8 @@ func (db *DB) PostMessage(channelID int64, subchannelID, parentID, authorUserID 
 	}
 	defer tx.Rollback()
 
-	// Calculate thread depth
-	depth := uint8(0)
-	if parentID != nil {
-		err := tx.QueryRow(`SELECT thread_depth FROM Message WHERE id = ?`, *parentID).Scan(&depth)
-		if err != nil {
-			return 0, fmt.Errorf("failed to get parent depth: %w", err)
-		}
-		depth++
-	}
+	// Generate Snowflake ID
+	messageID := db.snowflake.NextID()
 
 	// Insert message
 	var subchannelIDVal, parentIDVal, authorUserIDVal sql.NullInt64
@@ -426,16 +481,11 @@ func (db *DB) PostMessage(channelID int64, subchannelID, parentID, authorUserID 
 	}
 
 	now := nowMillis()
-	result, err := tx.Exec(`
-		INSERT INTO Message (channel_id, subchannel_id, parent_id, author_user_id, author_nickname, content, created_at, thread_depth)
+	_, err = tx.Exec(`
+		INSERT INTO Message (id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname, content, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, channelID, subchannelIDVal, parentIDVal, authorUserIDVal, authorNickname, content, now, depth)
+	`, messageID, channelID, subchannelIDVal, parentIDVal, authorUserIDVal, authorNickname, content, now)
 
-	if err != nil {
-		return 0, err
-	}
-
-	messageID, err := result.LastInsertId()
 	if err != nil {
 		return 0, err
 	}
@@ -468,7 +518,7 @@ func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint1
 
 	query := `
 		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
-		       content, created_at, edited_at, deleted_at, thread_depth
+		       content, created_at, edited_at, deleted_at
 		FROM Message
 		WHERE channel_id = ?
 		  AND (subchannel_id IS ? OR (subchannel_id IS NULL AND ? IS NULL))
@@ -500,7 +550,7 @@ func (db *DB) ListThreadReplies(parentID uint64) ([]*Message, error) {
 		WITH RECURSIVE thread_tree AS (
 			-- Base case: direct replies to parent
 			SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
-			       content, created_at, edited_at, deleted_at, thread_depth,
+			       content, created_at, edited_at, deleted_at,
 			       printf('%010d', created_at) AS path
 			FROM Message
 			WHERE parent_id = ?
@@ -510,13 +560,13 @@ func (db *DB) ListThreadReplies(parentID uint64) ([]*Message, error) {
 			-- Recursive case: replies to replies
 			-- Build path by concatenating parent path with current message's timestamp
 			SELECT m.id, m.channel_id, m.subchannel_id, m.parent_id, m.author_user_id, m.author_nickname,
-			       m.content, m.created_at, m.edited_at, m.deleted_at, m.thread_depth,
+			       m.content, m.created_at, m.edited_at, m.deleted_at,
 			       tt.path || '.' || printf('%010d', m.created_at)
 			FROM Message m
 			INNER JOIN thread_tree tt ON m.parent_id = tt.id
 		)
 		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
-		       content, created_at, edited_at, deleted_at, thread_depth
+		       content, created_at, edited_at, deleted_at
 		FROM thread_tree
 		ORDER BY path ASC
 	`
@@ -537,7 +587,7 @@ func (db *DB) GetMessage(messageID uint64) (*Message, error) {
 
 	err := db.conn.QueryRow(`
 		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
-		       content, created_at, edited_at, deleted_at, thread_depth
+		       content, created_at, edited_at, deleted_at
 		FROM Message
 		WHERE id = ?
 	`, messageID).Scan(
@@ -551,7 +601,6 @@ func (db *DB) GetMessage(messageID uint64) (*Message, error) {
 		&msg.CreatedAt,
 		&editedAt,
 		&deletedAt,
-		&msg.ThreadDepth,
 	)
 
 	if err != nil {
@@ -591,7 +640,7 @@ func (db *DB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, er
 
 	err = tx.QueryRow(`
 		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
-		       content, created_at, edited_at, deleted_at, thread_depth
+		       content, created_at, edited_at, deleted_at
 		FROM Message
 		WHERE id = ?
 	`, messageID).Scan(
@@ -605,7 +654,6 @@ func (db *DB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, er
 		&msg.CreatedAt,
 		&editedAt,
 		&deletedAt,
-		&msg.ThreadDepth,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -689,9 +737,10 @@ func (db *DB) CountReplies(messageID int64) (uint32, error) {
 // CleanupExpiredMessages deletes messages older than their channel's retention policy
 // Returns the number of messages deleted
 func (db *DB) CleanupExpiredMessages() (int64, error) {
+	start := time.Now()
 	// Delete root messages (and their descendants via CASCADE) that are older than retention
 	// For each channel, calculate the cutoff time based on message_retention_hours
-	result, err := db.conn.Exec(`
+	result, err := db.writeConn.Exec(`
 		DELETE FROM Message
 		WHERE id IN (
 			SELECT m.id
@@ -701,6 +750,9 @@ func (db *DB) CleanupExpiredMessages() (int64, error) {
 			  AND m.created_at < (? - (c.message_retention_hours * 3600000))
 		)
 	`, nowMillis())
+
+	elapsed := time.Since(start)
+	log.Printf("DB: CleanupExpiredMessages took %v", elapsed)
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup expired messages: %w", err)
@@ -712,12 +764,16 @@ func (db *DB) CleanupExpiredMessages() (int64, error) {
 // CleanupIdleSessions deletes sessions that have been idle for more than the timeout period
 // Returns the number of sessions deleted
 func (db *DB) CleanupIdleSessions(timeoutSeconds int64) (int64, error) {
+	start := time.Now()
 	cutoffMillis := nowMillis() - (timeoutSeconds * 1000)
 
-	result, err := db.conn.Exec(`
+	result, err := db.writeConn.Exec(`
 		DELETE FROM Session
 		WHERE last_activity < ?
 	`, cutoffMillis)
+
+	elapsed := time.Since(start)
+	log.Printf("DB: CleanupIdleSessions took %v", elapsed)
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup idle sessions: %w", err)
@@ -745,7 +801,6 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 			&msg.CreatedAt,
 			&editedAt,
 			&deletedAt,
-			&msg.ThreadDepth,
 		)
 
 		if err != nil {

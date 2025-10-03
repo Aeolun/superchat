@@ -51,6 +51,8 @@ type Model struct {
 	currentThread  *protocol.Message
 	threadReplies  []protocol.Message // All replies in current thread
 	onlineUsers    uint32
+	loadingMore    bool // True if we're currently loading more threads
+	allThreadsLoaded bool // True if we've reached the end of threads
 
 	// UI state
 	width              int
@@ -122,7 +124,7 @@ func NewModel(conn *client.Connection, state *client.State, currentVersion strin
 		threads:          []protocol.Message{},
 		threadReplies:    []protocol.Message{},
 		newMessageIDs:    make(map[uint64]bool),
-		pingInterval:     30 * time.Second, // Send ping every 30 seconds
+		pingInterval:     18 * time.Second, // Send ping every 18 seconds (3 pings within 60s timeout)
 		lastPingSent:     time.Now(),
 	}
 }

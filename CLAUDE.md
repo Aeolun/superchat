@@ -51,7 +51,48 @@ make fuzz
 
 # Clean coverage artifacts
 make clean
+
+# Run load/performance tests
+go build -o loadtest ./cmd/loadtest
+./loadtest --server localhost:6465 --clients 200 --duration 10s --min-delay 100ms --max-delay 500ms
 ```
+
+### Load Testing
+
+The `loadtest` tool simulates concurrent clients to stress test the server:
+
+**Available flags:**
+- `--server` - Server address (default: "localhost:6465")
+- `--clients` - Number of concurrent clients (default: 10)
+- `--duration` - Test duration (default: 1m)
+- `--min-delay` - Minimum delay between posts (default: 100ms)
+- `--max-delay` - Maximum delay between posts (default: 1s)
+
+**Example commands:**
+```bash
+# Light load: 50 clients for 10 seconds
+./loadtest --server localhost:6465 --clients 50 --duration 10s
+
+# Heavy load: 200 clients for 1 minute
+./loadtest --server localhost:6465 --clients 200 --duration 1m
+
+# Stress test: 500 clients with aggressive posting
+./loadtest --server localhost:6465 --clients 500 --duration 30s --min-delay 50ms --max-delay 200ms
+```
+
+**How it works:**
+- Each client connects with a randomly generated username (e.g., "partmir", "mostra")
+- Picks a random channel to join
+- 10% chance to create a new thread, 90% chance to reply to existing message
+- Posts messages with random delays between min-delay and max-delay
+- Refreshes message list every 10 posts to discover new threads
+
+**Metrics reported:**
+- Messages posted and throughput (msg/s)
+- Success rate (%)
+- Average response time (ms)
+- Efficiency (actual vs expected throughput)
+- Failure breakdown (post failures, fetch failures, timeouts, connection errors)
 
 ### Coverage Requirements
 

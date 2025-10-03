@@ -13,6 +13,12 @@ import (
 
 var nicknameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,20}$`)
 
+// dbError logs a database error and sends an error response to the client
+func (s *Server) dbError(sess *Session, operation string, err error) error {
+	errorLog.Printf("Session %d: %s failed: %v", sess.ID, operation, err)
+	return s.sendError(sess, 9001, "Database error")
+}
+
 // handleSetNickname handles SET_NICKNAME message
 func (s *Server) handleSetNickname(sess *Session, frame *protocol.Frame) error {
 	// Decode message
@@ -54,7 +60,7 @@ func (s *Server) handleListChannels(sess *Session, frame *protocol.Frame) error 
 	// Get channels from database
 	channels, err := s.db.ListChannels()
 	if err != nil {
-		return s.sendError(sess, 9001, "Database error")
+		return s.dbError(sess, "ListChannels", err)
 	}
 
 	// Convert to protocol channel list
@@ -96,6 +102,7 @@ func (s *Server) handleJoinChannel(sess *Session, frame *protocol.Frame) error {
 	// Check if channel exists
 	channel, err := s.db.GetChannel(int64(msg.ChannelID))
 	if err != nil {
+		errorLog.Printf("Session %d: GetChannel(%d) failed: %v", sess.ID, msg.ChannelID, err)
 		resp := &protocol.JoinResponseMessage{
 			Success:      false,
 			ChannelID:    msg.ChannelID,
@@ -149,7 +156,7 @@ func (s *Server) handleListMessages(sess *Session, frame *protocol.Frame) error 
 		// Get thread replies
 		dbMessages, err := s.db.ListThreadReplies(*msg.ParentID)
 		if err != nil {
-			return s.sendError(sess, 9001, "Database error")
+			return s.dbError(sess, "ListThreadReplies", err)
 		}
 		messages = convertDBMessagesToProtocol(dbMessages, s.db)
 	} else {
@@ -162,7 +169,7 @@ func (s *Server) handleListMessages(sess *Session, frame *protocol.Frame) error 
 
 		dbMessages, err := s.db.ListRootMessages(int64(msg.ChannelID), subchannelID, msg.Limit, msg.BeforeID)
 		if err != nil {
-			return s.sendError(sess, 9001, "Database error")
+			return s.dbError(sess, "ListRootMessages", err)
 		}
 		messages = convertDBMessagesToProtocol(dbMessages, s.db)
 	}
@@ -211,8 +218,8 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 		parentID = &id
 	}
 
-	// Post message to database
-	messageID, err := s.db.PostMessage(
+	// Post message to database (buffered write)
+	messageID, dbMsg, err := s.writeBuffer.PostMessage(
 		int64(msg.ChannelID),
 		subchannelID,
 		parentID,
@@ -222,7 +229,7 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 	)
 
 	if err != nil {
-		return s.sendError(sess, 9001, fmt.Sprintf("Failed to post message: %v", err))
+		return s.dbError(sess, "PostMessage", err)
 	}
 
 	// Send confirmation
@@ -236,12 +243,7 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 		return err
 	}
 
-	// Broadcast NEW_MESSAGE to all sessions in the channel
-	dbMsg, err := s.db.GetMessage(uint64(messageID))
-	if err != nil {
-		return nil // Already sent confirmation, log but don't fail
-	}
-
+	// Broadcast NEW_MESSAGE to all sessions in the channel (using message from write buffer)
 	newMsg := convertDBMessageToProtocol(dbMsg, s.db)
 	broadcastMsg := (*protocol.NewMessageMessage)(newMsg)
 
@@ -317,6 +319,13 @@ func (s *Server) handlePing(sess *Session, frame *protocol.Frame) error {
 	return s.sendMessage(sess, protocol.TypePong, resp)
 }
 
+// handleDisconnect handles graceful client disconnect
+func (s *Server) handleDisconnect(sess *Session, frame *protocol.Frame) error {
+	// Client is disconnecting gracefully, close the connection
+	// The session cleanup will be handled by the connection close handler
+	return fmt.Errorf("client disconnecting")
+}
+
 // sendMessage sends a protocol message to a session
 func (s *Server) sendMessage(sess *Session, msgType uint8, msg interface{}) error {
 	// Encode message payload
@@ -343,7 +352,7 @@ func (s *Server) sendMessage(sess *Session, msgType uint8, msg interface{}) erro
 	}
 
 	// Send frame
-	log.Printf("Session %d → SEND: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, msgType, 0, len(payload))
+	debugLog.Printf("Session %d → SEND: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, msgType, 0, len(payload))
 	return protocol.EncodeFrame(sess.Conn, frame)
 }
 
@@ -427,7 +436,6 @@ func convertDBMessageToProtocol(dbMsg *database.Message, db *database.DB) *proto
 		Content:        dbMsg.Content,
 		CreatedAt:      time.UnixMilli(dbMsg.CreatedAt),
 		EditedAt:       editedAt,
-		ThreadDepth:    dbMsg.ThreadDepth,
 		ReplyCount:     replyCount,
 	}
 }

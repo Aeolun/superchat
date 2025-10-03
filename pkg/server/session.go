@@ -23,31 +23,35 @@ type Session struct {
 
 // SessionManager manages all active sessions
 type SessionManager struct {
-	db       *database.DB
-	sessions map[uint64]*Session
-	nextID   uint64
-	mu       sync.RWMutex
+	db          *database.DB
+	writeBuffer *database.WriteBuffer
+	sessions    map[uint64]*Session
+	nextID      uint64
+	mu          sync.RWMutex
 }
 
 // NewSessionManager creates a new session manager
-func NewSessionManager(db *database.DB) *SessionManager {
+func NewSessionManager(db *database.DB, writeBuffer *database.WriteBuffer) *SessionManager {
 	return &SessionManager{
-		db:       db,
-		sessions: make(map[uint64]*Session),
-		nextID:   1,
+		db:          db,
+		writeBuffer: writeBuffer,
+		sessions:    make(map[uint64]*Session),
+		nextID:      1,
 	}
 }
 
 // CreateSession creates a new session
 func (sm *SessionManager) CreateSession(userID *int64, nickname, connType string, conn net.Conn) (*Session, error) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	// Create database session record
-	dbSessionID, err := sm.db.CreateSession(userID, nickname, connType)
+	// Create database session record (via WriteBuffer for batching)
+	// Do this OUTSIDE the lock so multiple connections can batch together
+	dbSessionID, err := sm.db.WriteBuffer.CreateSession(userID, nickname, connType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DB session: %w", err)
 	}
+
+	// Now acquire lock to add to session map
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
 	sessionID := atomic.AddUint64(&sm.nextID, 1) - 1
 
@@ -98,11 +102,8 @@ func (sm *SessionManager) RemoveSession(sessionID uint64) {
 	// Close connection
 	sess.Conn.Close()
 
-	// Delete DB session record
-	if err := sm.db.DeleteSession(sess.DBSessionID); err != nil {
-		// Log but don't fail
-		fmt.Printf("Failed to delete DB session %d: %v\n", sess.DBSessionID, err)
-	}
+	// Queue DB session deletion (buffered)
+	sm.db.WriteBuffer.DeleteSession(sess.DBSessionID)
 }
 
 // UpdateNickname updates a session's nickname
@@ -116,8 +117,9 @@ func (sm *SessionManager) UpdateNickname(sessionID uint64, nickname string) erro
 	sess.Nickname = nickname
 	sess.mu.Unlock()
 
-	// Update in database
-	return sm.db.UpdateSessionNickname(sess.DBSessionID, nickname)
+	// Update in database (no error to return - queued in buffer)
+	sm.writeBuffer.UpdateSessionNickname(sess.DBSessionID, nickname)
+	return nil
 }
 
 // SetJoinedChannel sets the currently joined channel for a session
@@ -177,7 +179,7 @@ func (sm *SessionManager) CloseAll() {
 
 	for _, sess := range sm.sessions {
 		sess.Conn.Close()
-		sm.db.DeleteSession(sess.DBSessionID)
+		sm.db.WriteBuffer.DeleteSession(sess.DBSessionID)
 	}
 
 	sm.sessions = make(map[uint64]*Session)

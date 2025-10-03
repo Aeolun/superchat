@@ -157,12 +157,10 @@ func (s *Server) handleSSHSession(channel ssh.Channel) {
 	log.Printf("New SSH connection (session %d)", sess.ID)
 
 	// Send SERVER_CONFIG immediately after connection
-	log.Printf("Session %d: Attempting to send SERVER_CONFIG...", sess.ID)
 	if err := s.sendServerConfig(sess); err != nil {
 		log.Printf("Failed to send SERVER_CONFIG to session %d: %v", sess.ID, err)
 		return
 	}
-	log.Printf("Session %d: SERVER_CONFIG sent successfully", sess.ID)
 
 	// Message loop
 	for {
@@ -177,12 +175,10 @@ func (s *Server) handleSSHSession(channel ssh.Channel) {
 			return
 		}
 
-		log.Printf("Session %d ← RECV: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, frame.Type, frame.Flags, len(frame.Payload))
+		debugLog.Printf("Session %d ← RECV: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, frame.Type, frame.Flags, len(frame.Payload))
 
-		// Update session activity
-		if err := s.db.UpdateSessionActivity(sess.DBSessionID); err != nil {
-			log.Printf("Failed to update session activity: %v", err)
-		}
+		// Update session activity (buffered write)
+		s.writeBuffer.UpdateSessionActivity(sess.DBSessionID, time.Now().UnixMilli())
 
 		// Handle message
 		if err := s.handleMessage(sess, frame); err != nil {

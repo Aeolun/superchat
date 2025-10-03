@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -12,9 +13,15 @@ import (
 	"github.com/aeolun/superchat/pkg/protocol"
 )
 
+var (
+	errorLog *log.Logger
+	debugLog *log.Logger
+)
+
 // Server represents the SuperChat server
 type Server struct {
 	db          *database.DB
+	writeBuffer *database.WriteBuffer
 	listener    net.Listener
 	sshListener net.Listener
 	sessions    *SessionManager
@@ -67,13 +74,38 @@ func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, 
 		return nil, fmt.Errorf("failed to seed channels: %w", err)
 	}
 
+	// Create write buffer with 20ms flush interval
+	writeBuffer := database.NewWriteBuffer(db, 20*time.Millisecond)
+
+	// Initialize loggers
+	if err := initLoggers(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to initialize loggers: %w", err)
+	}
+
 	return &Server{
-		db:         db,
-		sessions:   NewSessionManager(db),
-		config:     config,
-		configPath: configPath,
-		shutdown:   make(chan struct{}),
+		db:          db,
+		writeBuffer: writeBuffer,
+		sessions:    NewSessionManager(db, writeBuffer),
+		config:      config,
+		configPath:  configPath,
+		shutdown:    make(chan struct{}),
 	}, nil
+}
+
+// initLoggers sets up error and debug loggers
+func initLoggers() error {
+	// Error log goes to stderr and errors.log
+	errorFile, err := os.OpenFile("errors.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return err
+	}
+	errorLog = log.New(io.MultiWriter(os.Stderr, errorFile), "ERROR: ", log.LstdFlags)
+
+	// Debug log goes to /dev/null by default (can be enabled via config later)
+	debugLog = log.New(io.Discard, "DEBUG: ", log.LstdFlags)
+
+	return nil
 }
 
 // Start starts the TCP and SSH servers
@@ -128,11 +160,14 @@ func (s *Server) Stop() error {
 		s.sshListener = nil
 	}
 
+	// Close all sessions first to unblock handlers
+	s.sessions.CloseAll()
+
 	// Wait for goroutines to finish
 	s.wg.Wait()
 
-	// Close all sessions
-	s.sessions.CloseAll()
+	// Close write buffer (flushes remaining writes)
+	s.writeBuffer.Close()
 
 	// Close database
 	return s.db.Close()
@@ -179,12 +214,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 	log.Printf("New connection from %s (session %d)", conn.RemoteAddr(), sess.ID)
 
 	// Send SERVER_CONFIG immediately after connection
-	log.Printf("Session %d: Attempting to send SERVER_CONFIG...", sess.ID)
 	if err := s.sendServerConfig(sess); err != nil {
 		log.Printf("Failed to send SERVER_CONFIG to session %d: %v", sess.ID, err)
 		return
 	}
-	log.Printf("Session %d: SERVER_CONFIG sent successfully", sess.ID)
 
 	// Message loop
 	for {
@@ -199,12 +232,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return
 		}
 
-		log.Printf("Session %d ← RECV: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, frame.Type, frame.Flags, len(frame.Payload))
+		debugLog.Printf("Session %d ← RECV: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, frame.Type, frame.Flags, len(frame.Payload))
 
-		// Update session activity
-		if err := s.db.UpdateSessionActivity(sess.DBSessionID); err != nil {
-			log.Printf("Failed to update session activity: %v", err)
-		}
+		// Update session activity (buffered write)
+		s.writeBuffer.UpdateSessionActivity(sess.DBSessionID, time.Now().UnixMilli())
 
 		// Handle message
 		if err := s.handleMessage(sess, frame); err != nil {
@@ -234,6 +265,8 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleDeleteMessage(sess, frame)
 	case protocol.TypePing:
 		return s.handlePing(sess, frame)
+	case protocol.TypeDisconnect:
+		return s.handleDisconnect(sess, frame)
 	default:
 		// Unknown or unimplemented message type
 		return s.sendError(sess, 1001, "Unsupported message type")
@@ -263,7 +296,7 @@ func (s *Server) sendServerConfig(sess *Session) error {
 		Payload: payload,
 	}
 
-	log.Printf("Session %d → SEND: Type=0x%02X (SERVER_CONFIG) Flags=0x%02X PayloadLen=%d", sess.ID, protocol.TypeServerConfig, 0, len(payload))
+	debugLog.Printf("Session %d → SEND: Type=0x%02X (SERVER_CONFIG) Flags=0x%02X PayloadLen=%d", sess.ID, protocol.TypeServerConfig, 0, len(payload))
 	return protocol.EncodeFrame(sess.Conn, frame)
 }
 

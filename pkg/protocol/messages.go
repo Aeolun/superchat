@@ -17,6 +17,7 @@ const (
 	TypePostMessage   = 0x0A
 	TypeDeleteMessage = 0x0C
 	TypePing          = 0x10
+	TypeDisconnect    = 0x11
 )
 
 // Message type constants (Server → Client)
@@ -473,7 +474,6 @@ type Message struct {
 	Content        string
 	CreatedAt      time.Time
 	EditedAt       *time.Time
-	ThreadDepth    uint8
 	ReplyCount     uint32
 }
 
@@ -525,9 +525,6 @@ func (m *MessageListMessage) EncodeTo(w io.Writer) error {
 			return err
 		}
 		if err := WriteOptionalTimestamp(w, msg.EditedAt); err != nil {
-			return err
-		}
-		if err := WriteUint8(w, msg.ThreadDepth); err != nil {
 			return err
 		}
 		if err := WriteUint32(w, msg.ReplyCount); err != nil {
@@ -608,10 +605,6 @@ func (m *MessageListMessage) Decode(payload []byte) error {
 		if err != nil {
 			return err
 		}
-		depth, err := ReadUint8(buf)
-		if err != nil {
-			return err
-		}
 		replyCount, err := ReadUint32(buf)
 		if err != nil {
 			return err
@@ -627,7 +620,6 @@ func (m *MessageListMessage) Decode(payload []byte) error {
 			Content:        content,
 			CreatedAt:      createdAt,
 			EditedAt:       editedAt,
-			ThreadDepth:    depth,
 			ReplyCount:     replyCount,
 		}
 	}
@@ -1040,9 +1032,6 @@ func (m *NewMessageMessage) EncodeTo(w io.Writer) error {
 	if err := WriteOptionalTimestamp(w, m.EditedAt); err != nil {
 		return err
 	}
-	if err := WriteUint8(w, m.ThreadDepth); err != nil {
-		return err
-	}
 	return WriteUint32(w, m.ReplyCount)
 }
 
@@ -1093,10 +1082,6 @@ func (m *NewMessageMessage) Decode(payload []byte) error {
 	if err != nil {
 		return err
 	}
-	threadDepth, err := ReadUint8(buf)
-	if err != nil {
-		return err
-	}
 	replyCount, err := ReadUint32(buf)
 	if err != nil {
 		return err
@@ -1111,8 +1096,26 @@ func (m *NewMessageMessage) Decode(payload []byte) error {
 	m.Content = content
 	m.CreatedAt = createdAt
 	m.EditedAt = editedAt
-	m.ThreadDepth = threadDepth
 	m.ReplyCount = replyCount
 
+	return nil
+}
+
+// DisconnectMessage (0x11) - Graceful disconnect notification
+type DisconnectMessage struct {
+	// Empty message - just signals intent to disconnect
+}
+
+func (m *DisconnectMessage) EncodeTo(w io.Writer) error {
+	// No payload
+	return nil
+}
+
+func (m *DisconnectMessage) Encode() ([]byte, error) {
+	return []byte{}, nil
+}
+
+func (m *DisconnectMessage) Decode(payload []byte) error {
+	// No payload to decode
 	return nil
 }
