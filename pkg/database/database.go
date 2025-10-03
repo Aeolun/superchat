@@ -686,6 +686,46 @@ func (db *DB) CountReplies(messageID int64) (uint32, error) {
 	return count, err
 }
 
+// CleanupExpiredMessages deletes messages older than their channel's retention policy
+// Returns the number of messages deleted
+func (db *DB) CleanupExpiredMessages() (int64, error) {
+	// Delete root messages (and their descendants via CASCADE) that are older than retention
+	// For each channel, calculate the cutoff time based on message_retention_hours
+	result, err := db.conn.Exec(`
+		DELETE FROM Message
+		WHERE id IN (
+			SELECT m.id
+			FROM Message m
+			INNER JOIN Channel c ON m.channel_id = c.id
+			WHERE m.parent_id IS NULL
+			  AND m.created_at < (? - (c.message_retention_hours * 3600000))
+		)
+	`, nowMillis())
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup expired messages: %w", err)
+	}
+
+	return result.RowsAffected()
+}
+
+// CleanupIdleSessions deletes sessions that have been idle for more than the timeout period
+// Returns the number of sessions deleted
+func (db *DB) CleanupIdleSessions(timeoutSeconds int64) (int64, error) {
+	cutoffMillis := nowMillis() - (timeoutSeconds * 1000)
+
+	result, err := db.conn.Exec(`
+		DELETE FROM Session
+		WHERE last_activity < ?
+	`, cutoffMillis)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup idle sessions: %w", err)
+	}
+
+	return result.RowsAffected()
+}
+
 // scanMessages is a helper to scan multiple message rows
 func scanMessages(rows *sql.Rows) ([]*Message, error) {
 	var messages []*Message

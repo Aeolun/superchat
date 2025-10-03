@@ -98,6 +98,10 @@ func (s *Server) Start() error {
 	s.wg.Add(1)
 	go s.sessionCleanupLoop()
 
+	// Start message retention cleanup goroutine
+	s.wg.Add(1)
+	go s.retentionCleanupLoop()
+
 	// Accept TCP connections
 	s.wg.Add(1)
 	go s.acceptLoop()
@@ -318,5 +322,51 @@ func (s *Server) cleanupStaleSessions() {
 			log.Printf("Closing stale session %d (inactive for %v)", sess.ID, timeout)
 			s.sessions.RemoveSession(sess.ID)
 		}
+	}
+}
+
+// retentionCleanupLoop periodically cleans up old messages based on channel retention policies
+func (s *Server) retentionCleanupLoop() {
+	defer s.wg.Done()
+
+	// Run cleanup every hour
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	// Run cleanup immediately on startup
+	s.cleanupExpiredMessages()
+
+	for {
+		select {
+		case <-s.shutdown:
+			return
+		case <-ticker.C:
+			s.cleanupExpiredMessages()
+		}
+	}
+}
+
+// cleanupExpiredMessages deletes messages older than their channel's retention policy
+func (s *Server) cleanupExpiredMessages() {
+	count, err := s.db.CleanupExpiredMessages()
+	if err != nil {
+		log.Printf("Error cleaning up expired messages: %v", err)
+		return
+	}
+
+	if count > 0 {
+		log.Printf("Cleaned up %d expired messages", count)
+	}
+
+	// Also cleanup idle sessions from the database
+	sessionTimeout := int64(s.config.SessionTimeoutSeconds)
+	sessionCount, err := s.db.CleanupIdleSessions(sessionTimeout)
+	if err != nil {
+		log.Printf("Error cleaning up idle sessions from database: %v", err)
+		return
+	}
+
+	if sessionCount > 0 {
+		log.Printf("Cleaned up %d idle database sessions", sessionCount)
 	}
 }
