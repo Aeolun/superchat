@@ -19,6 +19,8 @@ type TOMLConfig struct {
 
 type ServerSection struct {
 	TCPPort      int    `toml:"tcp_port"`
+	SSHPort      int    `toml:"ssh_port"`
+	SSHHostKey   string `toml:"ssh_host_key"`
 	DatabasePath string `toml:"database_path"`
 }
 
@@ -49,6 +51,8 @@ func DefaultTOMLConfig() TOMLConfig {
 	return TOMLConfig{
 		Server: ServerSection{
 			TCPPort:      6465,
+			SSHPort:      6466,
+			SSHHostKey:   "~/.superchat/ssh_host_key",
 			DatabasePath: "~/.superchat/superchat.db",
 		},
 		Limits: LimitsSection{
@@ -141,16 +145,37 @@ func writeDefaultConfig(path string, config TOMLConfig) error {
 
 // ToServerConfig converts TOMLConfig to ServerConfig
 func (c *TOMLConfig) ToServerConfig() ServerConfig {
-	return ServerConfig{
-		TCPPort:               c.Server.TCPPort,
-		MaxConnectionsPerIP:   uint8(c.Limits.MaxConnectionsPerIP),
-		MessageRateLimit:      uint16(c.Limits.MessageRateLimit),
-		MaxChannelCreates:     5,  // Not configurable in V1
-		InactiveCleanupDays:   90, // Not configurable in V1
-		MaxMessageLength:      uint32(c.Limits.MaxMessageLength),
-		SessionTimeoutSeconds: c.Limits.SessionTimeoutSeconds,
-		ProtocolVersion:       1,
+	cfg := DefaultConfig()
+
+	if c.Server.TCPPort != 0 {
+		cfg.TCPPort = c.Server.TCPPort
 	}
+
+	if c.Server.SSHPort != 0 {
+		cfg.SSHPort = c.Server.SSHPort
+	}
+
+	if strings.TrimSpace(c.Server.SSHHostKey) != "" {
+		cfg.SSHHostKeyPath = c.Server.SSHHostKey
+	}
+
+	if c.Limits.MaxConnectionsPerIP != 0 {
+		cfg.MaxConnectionsPerIP = uint8(c.Limits.MaxConnectionsPerIP)
+	}
+
+	if c.Limits.MessageRateLimit != 0 {
+		cfg.MessageRateLimit = uint16(c.Limits.MessageRateLimit)
+	}
+
+	if c.Limits.MaxMessageLength != 0 {
+		cfg.MaxMessageLength = uint32(c.Limits.MaxMessageLength)
+	}
+
+	if c.Limits.SessionTimeoutSeconds != 0 {
+		cfg.SessionTimeoutSeconds = c.Limits.SessionTimeoutSeconds
+	}
+
+	return cfg
 }
 
 // GetDatabasePath returns the database path with ~ expanded

@@ -3,6 +3,8 @@
 
 [server]
 tcp_port = 6465
+ssh_port = 6466
+ssh_host_key = "~/.superchat/ssh_host_key"
 database_path = "~/.superchat/superchat.db"
 
 [limits]

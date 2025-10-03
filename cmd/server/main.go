@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/aeolun/superchat/pkg/server"
@@ -40,6 +41,18 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	resolvedConfigPath := *configPath
+	if strings.HasPrefix(resolvedConfigPath, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("Failed to resolve config path: %v", err)
+		}
+		resolvedConfigPath = filepath.Join(homeDir, resolvedConfigPath[2:])
+	}
+	if absPath, err := filepath.Abs(resolvedConfigPath); err == nil {
+		resolvedConfigPath = absPath
+	}
+
 	// Command-line flags override config file
 	if *port != 0 {
 		config.Server.TCPPort = *port
@@ -64,19 +77,43 @@ func main() {
 	serverConfig := config.ToServerConfig()
 
 	// Create and start server
-	srv, err := server.NewServer(finalDBPath, serverConfig)
+	srv, err := server.NewServer(finalDBPath, serverConfig, resolvedConfigPath)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
+
+	log.Printf("Config: %s (resolved to %s, using defaults if not found)", *configPath, resolvedConfigPath)
+	log.Printf("Database: %s", finalDBPath)
 
 	if err := srv.Start(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 
-	log.Printf("SuperChat server started successfully")
-	log.Printf("Config: %s (using defaults if not found)", *configPath)
-	log.Printf("Database: %s", finalDBPath)
+	log.Printf("SuperChat server %s started successfully", Version)
 	log.Printf("Port: %d", serverConfig.TCPPort)
+	if serverConfig.SSHPort > 0 {
+		log.Printf("SSH Port: %d", serverConfig.SSHPort)
+		log.Printf("SSH Host Key: %s", serverConfig.SSHHostKeyPath)
+	} else {
+		log.Printf("SSH server disabled (ssh_port=%d)", serverConfig.SSHPort)
+	}
+
+	// Display available channels
+	channels, err := srv.GetChannels()
+	if err != nil {
+		log.Printf("Warning: Failed to list channels: %v", err)
+	} else if len(channels) == 0 {
+		log.Printf("No channels available (use admin tools to create channels)")
+	} else {
+		log.Printf("Available channels (%d):", len(channels))
+		for _, ch := range channels {
+			desc := ""
+			if ch.Description != nil {
+				desc = *ch.Description
+			}
+			log.Printf("  - #%s: %s", ch.Name, desc)
+		}
+	}
 
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)

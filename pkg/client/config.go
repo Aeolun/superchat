@@ -166,5 +166,19 @@ func (c *TOMLConfig) GetStateDBPath() (string, error) {
 
 // GetServerAddress returns the full server address (host:port)
 func (c *TOMLConfig) GetServerAddress() string {
-	return fmt.Sprintf("%s:%d", c.Connection.DefaultServer, c.Connection.DefaultPort)
+	server := strings.TrimSpace(c.Connection.DefaultServer)
+	if server == "" {
+		return ""
+	}
+
+	if strings.Contains(server, "://") {
+		return server
+	}
+
+	port := c.Connection.DefaultPort
+	if port <= 0 {
+		return server
+	}
+
+	return fmt.Sprintf("%s:%d", server, port)
 }

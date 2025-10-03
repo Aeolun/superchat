@@ -2,6 +2,7 @@
 # Copy this file to ~/.config/superchat/config.toml (respects XDG_CONFIG_HOME)
 
 [connection]
+# default_server can be host/FQDN or an SSH URI (e.g. ssh://user@host)
 default_server = "superchat.win"
 default_port = 6465
 auto_reconnect = true

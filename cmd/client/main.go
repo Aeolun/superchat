@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/client/ui"
 	"github.com/aeolun/superchat/pkg/updater"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 var (
@@ -140,10 +140,13 @@ func main() {
 	}
 
 	// Create connection
-	conn := client.NewConnection(serverAddr)
+	conn, err := client.NewConnection(serverAddr)
+	if err != nil {
+		log.Fatalf("Invalid server address %q: %v", serverAddr, err)
+	}
 	if logger != nil {
 		conn.SetLogger(logger)
-		logger.Printf("Connecting to server: %s", serverAddr)
+		logger.Printf("Connecting to server: %s", conn.GetAddress())
 	}
 
 	// Connect to server
@@ -151,7 +154,7 @@ func main() {
 		if logger != nil {
 			logger.Printf("Failed to connect: %v", err)
 		}
-		log.Fatalf("Failed to connect to %s: %v", serverAddr, err)
+		log.Fatalf("Failed to connect to %s: %v", conn.GetAddress(), err)
 	}
 	defer conn.Close()
 

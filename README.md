@@ -41,6 +41,10 @@ sc
 # Connect to a custom server
 sc --server yourserver.com:6465
 
+# Connect over the SSH transport (defaults to port 6466)
+sc --server ssh://user@yourserver.com:6466
+# On first SSH connect you'll be asked to verify and accept the server's host key
+
 # Check version
 sc --version
 
