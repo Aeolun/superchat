@@ -14,8 +14,11 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the server binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o superchat-server ./cmd/server
+# Build argument for version (passed from build command)
+ARG VERSION=dev
+
+# Build the server binary with version
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-X main.Version=${VERSION}" -o superchat-server ./cmd/server
 
 # Final stage - minimal image
 FROM alpine:latest

@@ -315,7 +315,7 @@ auto_set_nickname = true  # Use last_nickname on connect
 
 ### Phase 3: SSH Support
 - [ ] SSH server integration
-- [ ] SSH key authentication
+- [ ] SSH key authentication (client verifies banner, stores keys with comment)
 - [ ] Auto-registration on first SSH connection
 - [ ] Multiple key support per user
 

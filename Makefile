@@ -81,7 +81,14 @@ run-website:
 
 # Docker commands
 docker-build:
-	docker build -t aeolun/superchat:latest .
+	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
+	echo "Building Docker image with version: $$VERSION"; \
+	depot build --platform linux/amd64,linux/arm64 --build-arg VERSION=$$VERSION -t aeolun/superchat:latest --load .
+
+docker-build-push:
+	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
+	echo "Building and pushing Docker image with version: $$VERSION"; \
+	depot build --platform linux/amd64,linux/arm64 --build-arg VERSION=$$VERSION -t aeolun/superchat:latest --push .
 
 docker-run:
 	docker run -d \
@@ -91,7 +98,8 @@ docker-run:
 		aeolun/superchat:latest
 
 docker-push:
-	docker push aeolun/superchat:latest
+	@echo "Use 'make docker-build-push' instead - depot requires --push during build"
+	@exit 1
 
 docker-stop:
 	docker stop superchat || true
