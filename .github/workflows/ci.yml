@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test and Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install gcov2lcov
+        run: go install github.com/jandelgado/gcov2lcov@latest
+
+      - name: Run all tests with race detector
+        run: make test
+
+      - name: Generate coverage reports
+        run: make coverage-lcov
+
+      - name: Upload protocol coverage to MyCoverage
+        uses: serialexp/mycoverage-action@v2
+        with:
+          endpoint: https://mycoverage.se1.serial-experiments.com/
+          file: protocol.lcov
+          testName: protocol
+
+      - name: Upload server coverage to MyCoverage
+        uses: serialexp/mycoverage-action@v2
+        with:
+          endpoint: https://mycoverage.se1.serial-experiments.com/
+          file: server.lcov
+          testName: server
+
+      - name: Upload client coverage to MyCoverage
+        uses: serialexp/mycoverage-action@v2
+        with:
+          endpoint: https://mycoverage.se1.serial-experiments.com/
+          file: client.lcov
+          testName: client
+
+      - name: Upload database coverage to MyCoverage
+        uses: serialexp/mycoverage-action@v2
+        with:
+          endpoint: https://mycoverage.se1.serial-experiments.com/
+          file: database.lcov
+          testName: database
+
+      - name: Display coverage summary
+        run: make coverage-summary

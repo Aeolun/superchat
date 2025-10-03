@@ -29,11 +29,16 @@ coverage-lcov:
 	go test ./pkg/client/... -coverprofile=client.out -covermode=atomic
 	gcov2lcov -infile=client.out -outfile=client.lcov
 
+	@echo "Generating coverage for database package..."
+	go test ./pkg/database/... -coverprofile=database.out -covermode=atomic
+	gcov2lcov -infile=database.out -outfile=database.lcov
+
 	@echo ""
 	@echo "LCOV coverage reports generated:"
-	@echo "  - protocol.lcov (pkg/protocol)"
-	@echo "  - server.lcov   (pkg/server)"
-	@echo "  - client.lcov   (pkg/client)"
+	@echo "  - protocol.lcov  (pkg/protocol)"
+	@echo "  - server.lcov    (pkg/server)"
+	@echo "  - client.lcov    (pkg/client)"
+	@echo "  - database.lcov  (pkg/database)"
 
 # Check protocol coverage (must be 100%)
 coverage-protocol:
@@ -55,6 +60,9 @@ coverage-summary:
 	@echo ""
 	@echo "=== Client Coverage ==="
 	@go tool cover -func=client.out | grep total || echo "Run 'make coverage-lcov' first"
+	@echo ""
+	@echo "=== Database Coverage ==="
+	@go tool cover -func=database.out | grep total || echo "Run 'make coverage-lcov' first"
 
 # Run fuzzing
 fuzz:
@@ -111,4 +119,5 @@ clean:
 	rm -f protocol.out protocol.lcov
 	rm -f server.out server.lcov
 	rm -f client.out client.lcov
+	rm -f database.out database.lcov
 	rm -f superchat-server superchat superchat-client
