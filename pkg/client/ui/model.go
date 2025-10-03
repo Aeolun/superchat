@@ -3,11 +3,11 @@ package ui
 import (
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/aeolun/superchat/pkg/updater"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // ViewState represents the current view
@@ -35,32 +35,34 @@ const (
 // Model represents the application state
 type Model struct {
 	// Connection and state
-	conn            *client.Connection
-	state           *client.State
-	connectionState ConnectionState
+	conn             *client.Connection
+	state            *client.State
+	connectionState  ConnectionState
 	reconnectAttempt int
 
 	// Current view
 	currentView ViewState
 
 	// Server state
-	serverConfig    *protocol.ServerConfigMessage
-	channels        []protocol.Channel
-	currentChannel  *protocol.Channel
-	threads         []protocol.Message  // Root messages
-	currentThread   *protocol.Message
-	threadReplies   []protocol.Message  // All replies in current thread
-	onlineUsers     uint32
+	serverConfig   *protocol.ServerConfigMessage
+	channels       []protocol.Channel
+	currentChannel *protocol.Channel
+	threads        []protocol.Message // Root messages
+	currentThread  *protocol.Message
+	threadReplies  []protocol.Message // All replies in current thread
+	onlineUsers    uint32
 
 	// UI state
-	width           int
-	height          int
-	channelCursor   int
-	threadCursor    int
-	replyCursor     int
-	threadViewport  viewport.Model  // Viewport for thread view
+	width              int
+	height             int
+	channelCursor      int
+	threadCursor       int
+	replyCursor        int
+	threadViewport     viewport.Model  // Viewport for thread view
 	threadListViewport viewport.Model  // Viewport for thread list
-	newMessageIDs   map[uint64]bool // Track new messages in current thread
+	newMessageIDs      map[uint64]bool // Track new messages in current thread
+	confirmingDelete   bool
+	pendingDeleteID    uint64
 
 	// Input state
 	nickname        string
@@ -68,13 +70,13 @@ type Model struct {
 	composeCursor   int
 	composeMode     ComposeMode
 	composeParentID *uint64
-	returnToView    ViewState  // Where to return after nickname setup
+	returnToView    ViewState // Where to return after nickname setup
 
 	// Error and status
-	errorMessage    string
-	statusMessage   string
-	showHelp        bool
-	firstRun        bool
+	errorMessage  string
+	statusMessage string
+	showHelp      bool
+	firstRun      bool
 
 	// Version tracking
 	currentVersion  string
@@ -82,11 +84,11 @@ type Model struct {
 	updateAvailable bool
 
 	// Real-time updates
-	pendingUpdates  []protocol.Message
+	pendingUpdates []protocol.Message
 
 	// Keepalive
-	lastPingSent    time.Time
-	pingInterval    time.Duration
+	lastPingSent time.Time
+	pingInterval time.Duration
 }
 
 // ComposeMode indicates what we're composing

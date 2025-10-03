@@ -50,7 +50,7 @@ func (m Model) View() string {
 func (m Model) renderSplash() string {
 	var s strings.Builder
 
-	title := splashTitleStyle.Render("SuperChat v1.0")
+	title := splashTitleStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
 	subtitle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("252")).
 		Align(lipgloss.Center).
@@ -225,24 +225,57 @@ func (m Model) renderThreadList() string {
 
 // renderThreadView renders the thread view
 func (m Model) renderThreadView() string {
-	var s strings.Builder
-
-	// Header
 	header := m.renderHeader()
-	s.WriteString(header)
-	s.WriteString("\n")
-
-	// Thread content
 	threadContent := m.renderThreadContent()
+	footerShortcuts := "[↑↓] Navigate  [r] Reply  [Esc] Back  [q] Quit  [h] Help"
+	if !m.selectedMessageDeleted() {
+		footerShortcuts = "[↑↓] Navigate  [r] Reply  [d] Delete  [Esc] Back  [q] Quit  [h] Help"
+	}
+	footer := m.renderFooter(footerShortcuts)
 
-	s.WriteString(threadContent)
-	s.WriteString("\n")
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		"",
+		threadContent,
+		"",
+		footer,
+	)
 
-	// Footer
-	footer := m.renderFooter("[↑↓] Navigate  [r] Reply  [Esc] Back  [q] Quit  [h] Help")
-	s.WriteString(footer)
+	base := lipgloss.Place(m.width, m.height, lipgloss.Top, lipgloss.Left, body)
 
-	return s.String()
+	if !m.confirmingDelete {
+		return base
+	}
+
+	available := max(20, m.width-2)
+	modalWidth := max(24, m.width-4)
+	modalWidth = min(modalWidth, available)
+	modalWidth = min(modalWidth, 52)
+
+	modal := modalStyle.
+		Width(modalWidth).
+		Render("Delete this message?\n\n[y] Confirm    [n] Cancel")
+
+	overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return mergeOverlay(base, overlay)
+}
+
+func mergeOverlay(base, overlay string) string {
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+	limit := len(baseLines)
+	if len(overlayLines) < limit {
+		limit = len(overlayLines)
+	}
+
+	for i := 0; i < limit; i++ {
+		if strings.TrimSpace(overlayLines[i]) != "" {
+			baseLines[i] = overlayLines[i]
+		}
+	}
+
+	return strings.Join(baseLines, "\n")
 }
 
 // renderCompose renders the composition modal
@@ -333,7 +366,7 @@ func (m Model) renderHelp() string {
 
 // renderHeader renders the header
 func (m Model) renderHeader() string {
-	left := headerStyle.Render("SuperChat v1.0")
+	left := headerStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
 
 	status := "Disconnected"
 	if m.conn.IsConnected() {
@@ -619,6 +652,13 @@ func formatTime(t time.Time) string {
 
 func max(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

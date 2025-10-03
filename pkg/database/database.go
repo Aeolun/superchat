@@ -2,10 +2,20 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite"
+)
+
+var (
+	// ErrMessageNotFound indicates the message does not exist.
+	ErrMessageNotFound = errors.New("message not found")
+	// ErrMessageNotOwned indicates the caller is not the message author.
+	ErrMessageNotOwned = errors.New("cannot delete message not authored by this nickname")
+	// ErrMessageAlreadyDeleted indicates the message has already been soft-deleted.
+	ErrMessageAlreadyDeleted = errors.New("message already deleted")
 )
 
 // DB wraps the SQLite database connection
@@ -137,15 +147,15 @@ CREATE INDEX IF NOT EXISTS idx_sessions_activity ON Session(last_activity);
 
 // Channel represents a channel record
 type Channel struct {
-	ID                     int64
-	Name                   string
-	DisplayName            string
-	Description            *string
-	ChannelType            uint8 // 0=chat, 1=forum
-	MessageRetentionHours  uint32
-	CreatedBy              *int64
-	CreatedAt              int64 // Unix timestamp in milliseconds
-	IsPrivate              bool
+	ID                    int64
+	Name                  string
+	DisplayName           string
+	Description           *string
+	ChannelType           uint8 // 0=chat, 1=forum
+	MessageRetentionHours uint32
+	CreatedBy             *int64
+	CreatedAt             int64 // Unix timestamp in milliseconds
+	IsPrivate             bool
 }
 
 // Session represents an active connection
@@ -179,7 +189,7 @@ type MessageVersion struct {
 	MessageID      int64
 	Content        string
 	AuthorNickname string
-	CreatedAt      int64 // Unix timestamp in milliseconds
+	CreatedAt      int64  // Unix timestamp in milliseconds
 	VersionType    string // "created", "edited", "deleted"
 }
 
@@ -563,6 +573,97 @@ func (db *DB) GetMessage(messageID uint64) (*Message, error) {
 	if deletedAt.Valid {
 		msg.DeletedAt = &deletedAt.Int64
 	}
+
+	return msg, nil
+}
+
+// SoftDeleteMessage performs a soft delete on the message if owned by the nickname.
+func (db *DB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Load message row
+	msg := &Message{}
+	var subchannelID, parentID, authorUserID, editedAt, deletedAt sql.NullInt64
+
+	err = tx.QueryRow(`
+		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+		       content, created_at, edited_at, deleted_at, thread_depth
+		FROM Message
+		WHERE id = ?
+	`, messageID).Scan(
+		&msg.ID,
+		&msg.ChannelID,
+		&subchannelID,
+		&parentID,
+		&authorUserID,
+		&msg.AuthorNickname,
+		&msg.Content,
+		&msg.CreatedAt,
+		&editedAt,
+		&deletedAt,
+		&msg.ThreadDepth,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrMessageNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if subchannelID.Valid {
+		msg.SubchannelID = &subchannelID.Int64
+	}
+	if parentID.Valid {
+		msg.ParentID = &parentID.Int64
+	}
+	if authorUserID.Valid {
+		msg.AuthorUserID = &authorUserID.Int64
+	}
+	if editedAt.Valid {
+		msg.EditedAt = &editedAt.Int64
+	}
+	if deletedAt.Valid {
+		msg.DeletedAt = &deletedAt.Int64
+	}
+
+	if msg.AuthorNickname != nickname {
+		return nil, ErrMessageNotOwned
+	}
+	if msg.DeletedAt != nil {
+		return nil, ErrMessageAlreadyDeleted
+	}
+
+	deletedAtMillis := nowMillis()
+	deletedContent := fmt.Sprintf("[deleted by ~%s]", nickname)
+
+	// Update message content and deleted_at
+	if _, err := tx.Exec(`
+		UPDATE Message
+		SET content = ?, deleted_at = ?
+		WHERE id = ?
+	`, deletedContent, deletedAtMillis, messageID); err != nil {
+		return nil, err
+	}
+
+	// Record deletion version with original content
+	if _, err := tx.Exec(`
+		INSERT INTO MessageVersion (message_id, content, author_nickname, created_at, version_type)
+		VALUES (?, ?, ?, ?, 'deleted')
+	`, messageID, msg.Content, msg.AuthorNickname, deletedAtMillis); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	msg.Content = deletedContent
+	msg.DeletedAt = &deletedAtMillis
 
 	return msg, nil
 }

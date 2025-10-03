@@ -1,7 +1,9 @@
 package server
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"time"
 
@@ -67,7 +69,7 @@ func (s *Server) handleListChannels(sess *Session, frame *protocol.Frame) error 
 			ID:             uint64(ch.ID),
 			Name:           ch.Name,
 			Description:    desc,
-			UserCount:      0, // TODO: Count sessions in channel
+			UserCount:      0,     // TODO: Count sessions in channel
 			IsOperator:     false, // TODO: Check if user is operator
 			Type:           ch.ChannelType,
 			RetentionHours: ch.MessageRetentionHours,
@@ -253,8 +255,50 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 
 // handleDeleteMessage handles DELETE_MESSAGE message
 func (s *Server) handleDeleteMessage(sess *Session, frame *protocol.Frame) error {
-	// V1: Not implemented yet
-	return s.sendError(sess, 1001, "Message deletion not supported in V1")
+	msg := &protocol.DeleteMessageMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	sess.mu.RLock()
+	nickname := sess.Nickname
+	sess.mu.RUnlock()
+
+	if nickname == "" {
+		return s.sendError(sess, protocol.ErrCodeNicknameRequired, "Nickname required. Use SET_NICKNAME first.")
+	}
+
+	dbMsg, err := s.db.SoftDeleteMessage(msg.MessageID, nickname)
+	if err != nil {
+		switch {
+		case errors.Is(err, database.ErrMessageNotFound):
+			return s.sendError(sess, protocol.ErrCodeMessageNotFound, "Message not found")
+		case errors.Is(err, database.ErrMessageNotOwned):
+			return s.sendError(sess, protocol.ErrCodePermissionDenied, "You can only delete your own messages")
+		case errors.Is(err, database.ErrMessageAlreadyDeleted):
+			return s.sendError(sess, protocol.ErrCodeInvalidInput, "Message already deleted")
+		default:
+			return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to delete message")
+		}
+	}
+
+	deletedAt := time.UnixMilli(*dbMsg.DeletedAt)
+	resp := &protocol.MessageDeletedMessage{
+		Success:   true,
+		MessageID: msg.MessageID,
+		DeletedAt: deletedAt,
+		Message:   dbMsg.Content,
+	}
+
+	if err := s.sendMessage(sess, protocol.TypeMessageDeleted, resp); err != nil {
+		return err
+	}
+
+	if err := s.broadcastToChannel(dbMsg.ChannelID, protocol.TypeMessageDeleted, resp); err != nil {
+		log.Printf("Failed to broadcast message deletion: %v", err)
+	}
+
+	return nil
 }
 
 // handlePing handles PING message
@@ -299,6 +343,7 @@ func (s *Server) sendMessage(sess *Session, msgType uint8, msg interface{}) erro
 	}
 
 	// Send frame
+	log.Printf("Session %d → SEND: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, msgType, 0, len(payload))
 	return protocol.EncodeFrame(sess.Conn, frame)
 }
 

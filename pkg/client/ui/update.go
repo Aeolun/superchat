@@ -3,11 +3,12 @@ package ui
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/aeolun/superchat/pkg/protocol"
 )
 
 // Update handles messages and updates the model
@@ -100,10 +101,15 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case "?", "h":
-		if m.currentView != ViewCompose {
+		if m.currentView != ViewCompose && m.currentView != ViewNicknameSetup {
 			m.showHelp = !m.showHelp
 			return m, nil
 		}
+	}
+
+	if msg.String() == "esc" && m.showHelp {
+		m.showHelp = false
+		return m, nil
 	}
 
 	// View-specific handling
@@ -245,6 +251,7 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentView = ViewThreadView
 			m.replyCursor = 0
 			m.newMessageIDs = make(map[uint64]bool) // Clear new message tracking
+			m.confirmingDelete = false
 			m.threadViewport.SetContent(m.buildThreadContent())
 			m.threadViewport.GotoTop()
 			return m, m.requestThreadReplies(selectedThread.ID)
@@ -277,6 +284,7 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		// Back to channel list
 		m.currentView = ViewChannelList
+		m.confirmingDelete = false
 		if m.currentChannel != nil {
 			m.sendLeaveChannel()
 		}
@@ -292,6 +300,32 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleThreadViewKeys handles thread view navigation
 func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+
+	if m.confirmingDelete {
+		switch msg.String() {
+		case "y", "enter":
+			if m.pendingDeleteID == 0 {
+				m.confirmingDelete = false
+				m.pendingDeleteID = 0
+				return m, nil
+			}
+			id := m.pendingDeleteID
+			m.confirmingDelete = false
+			m.pendingDeleteID = 0
+			m.statusMessage = "Deleting message..."
+			return m, tea.Batch(
+				listenForServerFrames(m.conn),
+				m.sendDeleteMessage(id),
+			)
+		case "n", "esc":
+			m.confirmingDelete = false
+			m.pendingDeleteID = 0
+			m.statusMessage = "Deletion canceled"
+			return m, nil
+		default:
+			return m, nil
+		}
+	}
 
 	switch msg.String() {
 	case "up", "k":
@@ -340,8 +374,21 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "d":
-		// Delete message (not implemented in V1)
-		// Just consume the key to prevent viewport scrolling
+		msgPtr, ok := m.selectedMessage()
+		if !ok {
+			return m, nil
+		}
+		if m.nickname == "" {
+			m.errorMessage = "Set a nickname before deleting messages"
+			return m, nil
+		}
+		if isDeletedMessageContent(msgPtr.Content) {
+			m.statusMessage = "Message already deleted"
+			return m, nil
+		}
+		m.pendingDeleteID = msgPtr.ID
+		m.confirmingDelete = true
+		m.statusMessage = ""
 		return m, nil
 
 	case "esc":
@@ -349,6 +396,8 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewThreadList
 		m.threadReplies = []protocol.Message{}
 		m.replyCursor = 0
+		m.confirmingDelete = false
+		m.pendingDeleteID = 0
 		return m, nil
 
 	default:
@@ -358,6 +407,38 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// selectedMessage returns the currently highlighted message, if any.
+func (m Model) selectedMessage() (*protocol.Message, bool) {
+	if m.currentThread == nil {
+		return nil, false
+	}
+	if m.replyCursor == 0 {
+		return m.currentThread, true
+	}
+	idx := m.replyCursor - 1
+	if idx >= 0 && idx < len(m.threadReplies) {
+		return &m.threadReplies[idx], true
+	}
+	return nil, false
+}
+
+// selectedMessageID returns the id of the highlighted message.
+func (m Model) selectedMessageID() (uint64, bool) {
+	msg, ok := m.selectedMessage()
+	if !ok {
+		return 0, false
+	}
+	return msg.ID, true
+}
+
+func (m Model) selectedMessageDeleted() bool {
+	msg, ok := m.selectedMessage()
+	if !ok {
+		return false
+	}
+	return isDeletedMessageContent(msg.Content)
 }
 
 // handleComposeKeys handles message composition
@@ -433,6 +514,8 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleMessagePosted(frame)
 	case protocol.TypeNewMessage:
 		return m.handleNewMessage(frame)
+	case protocol.TypeMessageDeleted:
+		return m.handleMessageDeleted(frame)
 	case protocol.TypeError:
 		return m.handleError(frame)
 	}
@@ -625,6 +708,24 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	return m, listenForServerFrames(m.conn)
 }
 
+// handleMessageDeleted processes MESSAGE_DELETED confirmations and broadcasts.
+func (m Model) handleMessageDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.MessageDeletedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode message deletion: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	if msg.Success {
+		m.applyMessageDeletion(msg.MessageID, msg.Message)
+		m.statusMessage = "Message deleted"
+	} else {
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn)
+}
+
 // handleError processes ERROR messages
 func (m Model) handleError(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.ErrorMessage{}
@@ -639,6 +740,41 @@ func (m Model) handleError(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 }
 
 // Command helpers
+
+// applyMessageDeletion updates local state to reflect a deleted message.
+func (m *Model) applyMessageDeletion(messageID uint64, replacement string) {
+	if m.pendingDeleteID == messageID {
+		m.pendingDeleteID = 0
+		m.confirmingDelete = false
+	}
+
+	updatedThreadList := false
+	for i := range m.threads {
+		if m.threads[i].ID == messageID {
+			m.threads[i].Content = replacement
+			updatedThreadList = true
+		}
+	}
+
+	if m.currentThread != nil && m.currentThread.ID == messageID {
+		m.currentThread.Content = replacement
+	}
+
+	for i := range m.threadReplies {
+		if m.threadReplies[i].ID == messageID {
+			m.threadReplies[i].Content = replacement
+		}
+	}
+
+	delete(m.newMessageIDs, messageID)
+
+	if updatedThreadList {
+		m.threadListViewport.SetContent(m.buildThreadListContent())
+	}
+	if m.currentView == ViewThreadView {
+		m.threadViewport.SetContent(m.buildThreadContent())
+	}
+}
 
 func (m Model) sendSetNickname() tea.Cmd {
 	return func() tea.Msg {
@@ -732,6 +868,18 @@ func (m Model) sendPostMessage(channelID uint64, parentID *uint64, content strin
 	}
 }
 
+func (m Model) sendDeleteMessage(messageID uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.DeleteMessageMessage{
+			MessageID: messageID,
+		}
+		if err := m.conn.SendMessage(protocol.TypeDeleteMessage, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
 func (m Model) sendPing() tea.Cmd {
 	return func() tea.Msg {
 		msg := &protocol.PingMessage{
@@ -795,6 +943,10 @@ func sortThreadReplies(replies []protocol.Message, rootID uint64) []protocol.Mes
 	traverse(rootID)
 
 	return result
+}
+
+func isDeletedMessageContent(content string) bool {
+	return strings.HasPrefix(content, "[deleted")
 }
 
 // handleReconnected handles successful reconnection

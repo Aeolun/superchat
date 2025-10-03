@@ -67,8 +67,17 @@ func EncodeFrame(w io.Writer, f *Frame) error {
 
 	// Write payload
 	if len(f.Payload) > 0 {
-		_, err := w.Write(f.Payload)
-		return err
+		if _, err := w.Write(f.Payload); err != nil {
+			return err
+		}
+	}
+
+	// Flush if the writer supports it (e.g., *bufio.Writer or net.TCPConn)
+	type flusher interface {
+		Flush() error
+	}
+	if f, ok := w.(flusher); ok {
+		return f.Flush()
 	}
 
 	return nil
