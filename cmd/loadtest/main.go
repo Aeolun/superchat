@@ -166,6 +166,9 @@ func NewBotClient(id int, serverAddr string, stats *Stats) (*BotClient, error) {
 		return nil, fmt.Errorf("failed to create connection: %w", err)
 	}
 
+	// Disable auto-reconnect for predictable load testing
+	conn.DisableAutoReconnect()
+
 	return &BotClient{
 		id:       id,
 		nickname: nickname,
@@ -198,16 +201,33 @@ func (bc *BotClient) Connect() error {
 	}
 
 	// Wait for nickname response
-	select {
-	case frame := <-bc.conn.Incoming():
-		if frame.Type == protocol.TypeError {
-			return fmt.Errorf("nickname rejected")
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case frame := <-bc.conn.Incoming():
+			if frame == nil {
+				return fmt.Errorf("connection closed while waiting for nickname response")
+			}
+			if frame.Type == protocol.TypeError {
+				return fmt.Errorf("nickname rejected")
+			}
+			if frame.Type == protocol.TypeNicknameResponse {
+				// Check if nickname was accepted
+				resp := &protocol.NicknameResponseMessage{}
+				if err := resp.Decode(frame.Payload); err != nil {
+					return fmt.Errorf("failed to decode nickname response: %w", err)
+				}
+				if !resp.Success {
+					return fmt.Errorf("nickname rejected: %s", resp.Message)
+				}
+				return nil
+			}
+			// Ignore other message types (broadcasts, etc.) and keep waiting
+			// log.Printf("[Bot %d] Ignoring message type 0x%02X while waiting for nickname response", bc.id, frame.Type)
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for nickname response")
 		}
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("timeout waiting for nickname response")
 	}
-
-	return nil
 }
 
 func (bc *BotClient) Setup() error {
@@ -218,20 +238,27 @@ func (bc *BotClient) Setup() error {
 
 	// Wait for channel list
 	var channels []protocol.Channel
-	select {
-	case frame := <-bc.conn.Incoming():
-		if frame.Type != protocol.TypeChannelList {
-			return fmt.Errorf("expected channel list, got type 0x%02X", frame.Type)
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case frame := <-bc.conn.Incoming():
+			if frame == nil {
+				return fmt.Errorf("connection closed while waiting for channel list")
+			}
+			if frame.Type == protocol.TypeChannelList {
+				resp := &protocol.ChannelListMessage{}
+				if err := resp.Decode(frame.Payload); err != nil {
+					return err
+				}
+				channels = resp.Channels
+				goto gotChannelList
+			}
+			// Ignore other message types and keep waiting
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for channel list")
 		}
-
-		resp := &protocol.ChannelListMessage{}
-		if err := resp.Decode(frame.Payload); err != nil {
-			return err
-		}
-		channels = resp.Channels
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("timeout waiting for channel list")
 	}
+gotChannelList:
 
 	if len(channels) == 0 {
 		return fmt.Errorf("no channels available")
@@ -248,16 +275,24 @@ func (bc *BotClient) Setup() error {
 	}
 
 	// Wait for join response
-	select {
-	case frame := <-bc.conn.Incoming():
-		if frame.Type == protocol.TypeError {
-			return fmt.Errorf("failed to join channel")
+	timeout = time.After(5 * time.Second)
+	for {
+		select {
+		case frame := <-bc.conn.Incoming():
+			if frame == nil {
+				return fmt.Errorf("connection closed while waiting for join response")
+			}
+			if frame.Type == protocol.TypeError {
+				return fmt.Errorf("failed to join channel")
+			}
+			if frame.Type == protocol.TypeJoinResponse {
+				return nil
+			}
+			// Ignore other message types and keep waiting
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for join response")
 		}
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("timeout waiting for join response")
 	}
-
-	return nil
 }
 
 func (bc *BotClient) PostRandomMessage() error {
@@ -313,6 +348,10 @@ func (bc *BotClient) PostRandomMessage() error {
 		responseTime := time.Since(start).Microseconds()
 
 		if frame.Type == protocol.TypeError {
+			errMsg := &protocol.ErrorMessage{}
+			if decodeErr := errMsg.Decode(frame.Payload); decodeErr == nil {
+				log.Printf("[Bot %d] POST failed with error %d: %s", bc.id, errMsg.ErrorCode, errMsg.Message)
+			}
 			bc.stats.recordPostFailure()
 			return fmt.Errorf("post message failed")
 		}
@@ -370,13 +409,15 @@ func (bc *BotClient) FetchMessages() error {
 }
 
 func (bc *BotClient) Run(duration time.Duration, minDelay, maxDelay time.Duration, shutdownDelay time.Duration) {
-	defer bc.conn.Close()
+	defer func() {
+		// Send graceful disconnect before closing
+		bc.conn.SendMessage(protocol.TypeDisconnect, &protocol.DisconnectMessage{})
+		time.Sleep(100 * time.Millisecond)
+		bc.conn.Close()
+	}()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Bot %d] PANIC: %v", bc.id, r)
-			// Try to send graceful disconnect even on panic
-			bc.conn.SendMessage(protocol.TypeDisconnect, &protocol.DisconnectMessage{})
-			time.Sleep(50 * time.Millisecond)
 		}
 	}()
 

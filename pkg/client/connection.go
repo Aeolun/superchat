@@ -92,6 +92,13 @@ func (c *Connection) SetLogger(logger *log.Logger) {
 	c.logger = logger
 }
 
+// DisableAutoReconnect disables automatic reconnection on connection loss
+func (c *Connection) DisableAutoReconnect() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.autoReconnect = false
+}
+
 // logf logs a message if a logger is set
 func (c *Connection) logf(format string, args ...interface{}) {
 	if c.logger != nil {

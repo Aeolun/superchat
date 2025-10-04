@@ -372,6 +372,8 @@ func (wb *WriteBuffer) flush() {
 
 				_, err := stmt.Exec(messageID, msg.channelID, subchannelIDVal, parentIDVal, authorUserIDVal, msg.authorNickname, msg.content, msg.timestamp)
 				if err != nil {
+					log.Printf("WriteBuffer: failed to insert message (channel=%d, parent=%v, author=%s): %v",
+						msg.channelID, msg.parentID, msg.authorNickname, err)
 					messageResults[msg.resultIndex] <- messageResult{err: err}
 					continue
 				}

@@ -11,7 +11,12 @@ import (
 	"github.com/aeolun/superchat/pkg/protocol"
 )
 
-var nicknameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,20}$`)
+var (
+	nicknameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,20}$`)
+
+	// ErrClientDisconnecting is returned when client sends graceful disconnect
+	ErrClientDisconnecting = errors.New("client disconnecting")
+)
 
 // dbError logs a database error and sends an error response to the client
 func (s *Server) dbError(sess *Session, operation string, err error) error {
@@ -24,11 +29,15 @@ func (s *Server) handleSetNickname(sess *Session, frame *protocol.Frame) error {
 	// Decode message
 	msg := &protocol.SetNicknameMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
+		log.Printf("Session %d: SET_NICKNAME decode failed: %v", sess.ID, err)
 		return s.sendError(sess, 1000, "Invalid message format")
 	}
 
+	log.Printf("Session %d: SET_NICKNAME received (nickname=%s)", sess.ID, msg.Nickname)
+
 	// Validate nickname
 	if !nicknameRegex.MatchString(msg.Nickname) {
+		log.Printf("Session %d: nickname '%s' failed regex validation", sess.ID, msg.Nickname)
 		resp := &protocol.NicknameResponseMessage{
 			Success: false,
 			Message: "Invalid nickname. Must be 3-20 characters, alphanumeric plus - and _",
@@ -38,6 +47,7 @@ func (s *Server) handleSetNickname(sess *Session, frame *protocol.Frame) error {
 
 	// Update session nickname
 	if err := s.sessions.UpdateNickname(sess.ID, msg.Nickname); err != nil {
+		log.Printf("Session %d: UpdateNickname failed: %v", sess.ID, err)
 		return s.sendError(sess, 9000, "Failed to update nickname")
 	}
 
@@ -199,6 +209,7 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 	sess.mu.RUnlock()
 
 	if nickname == "" {
+		log.Printf("Session %d tried to POST without nickname set", sess.ID)
 		return s.sendError(sess, 2000, "Nickname required. Use SET_NICKNAME first.")
 	}
 
@@ -323,7 +334,7 @@ func (s *Server) handlePing(sess *Session, frame *protocol.Frame) error {
 func (s *Server) handleDisconnect(sess *Session, frame *protocol.Frame) error {
 	// Client is disconnecting gracefully, close the connection
 	// The session cleanup will be handled by the connection close handler
-	return fmt.Errorf("client disconnecting")
+	return ErrClientDisconnecting
 }
 
 // sendMessage sends a protocol message to a session

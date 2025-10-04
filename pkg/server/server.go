@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -104,6 +105,14 @@ func initLoggers() error {
 
 	// Debug log goes to /dev/null by default (can be enabled via config later)
 	debugLog = log.New(io.Discard, "DEBUG: ", log.LstdFlags)
+
+	// Redirect standard log (used by database package) to stdout and server.log
+	// Truncate server.log on startup to avoid confusion from multiple runs
+	serverLogFile, err := os.OpenFile("server.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		return err
+	}
+	log.SetOutput(io.MultiWriter(os.Stdout, serverLogFile))
 
 	return nil
 }
@@ -239,8 +248,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 		// Handle message
 		if err := s.handleMessage(sess, frame); err != nil {
+			// If it's a graceful disconnect, exit cleanly
+			if errors.Is(err, ErrClientDisconnecting) {
+				log.Printf("Session %d disconnected gracefully", sess.ID)
+				return
+			}
+			// Log and send error response for other errors
 			log.Printf("Session %d handle error: %v", sess.ID, err)
-			// Send error response
 			s.sendError(sess, 9000, fmt.Sprintf("Internal error: %v", err))
 		}
 	}

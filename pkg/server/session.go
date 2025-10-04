@@ -114,8 +114,11 @@ func (sm *SessionManager) UpdateNickname(sessionID uint64, nickname string) erro
 	}
 
 	sess.mu.Lock()
+	oldNickname := sess.Nickname
 	sess.Nickname = nickname
 	sess.mu.Unlock()
+
+	fmt.Printf("Session %d: nickname set to '%s' (was: '%s')\n", sessionID, nickname, oldNickname)
 
 	// Update in database (no error to return - queued in buffer)
 	sm.writeBuffer.UpdateSessionNickname(sess.DBSessionID, nickname)
