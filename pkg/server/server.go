@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -8,8 +9,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/aeolun/superchat/pkg/database"
@@ -24,8 +27,7 @@ var (
 
 // Server represents the SuperChat server
 type Server struct {
-	db          *database.DB
-	writeBuffer *database.WriteBuffer
+	db          *database.MemDB
 	listener    net.Listener
 	sshListener net.Listener
 	sessions    *SessionManager
@@ -38,17 +40,6 @@ type Server struct {
 	// Connection deltas for periodic reporting
 	connectionsSinceReport    atomic.Int64
 	disconnectionsSinceReport atomic.Int64
-
-	// Channel list cache (invalidated on channel creation)
-	channelCacheMu   sync.RWMutex
-	channelCache     []protocol.Channel
-	channelCacheByID map[uint64]*cachedChannel // Fast lookup by ID
-}
-
-// cachedChannel holds both protocol and database channel info for cache
-type cachedChannel struct {
-	Protocol    protocol.Channel
-	DisplayName string // From database, used in JOIN responses
 }
 
 // ServerConfig holds server configuration
@@ -87,93 +78,46 @@ func DefaultConfig() ServerConfig {
 
 // NewServer creates a new server instance
 func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, error) {
-	db, err := database.Open(dbPath)
+	// Open underlying SQLite database for snapshots
+	sqliteDB, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	// Seed default channels if they don't exist
-	if err := db.SeedDefaultChannels(); err != nil {
-		db.Close()
+	if err := sqliteDB.SeedDefaultChannels(); err != nil {
+		sqliteDB.Close()
 		return nil, fmt.Errorf("failed to seed channels: %w", err)
 	}
 
-	// Create write buffer with 20ms flush interval
-	writeBuffer := database.NewWriteBuffer(db, 20*time.Millisecond)
+	// Create in-memory database with 30-second snapshot interval
+	memDB, err := database.NewMemDB(sqliteDB, 30*time.Second)
+	if err != nil {
+		sqliteDB.Close()
+		return nil, fmt.Errorf("failed to create in-memory database: %w", err)
+	}
 
 	// Initialize loggers
 	if err := initLoggers(); err != nil {
-		db.Close()
+		memDB.Close()
+		sqliteDB.Close()
 		return nil, fmt.Errorf("failed to initialize loggers: %w", err)
 	}
 
 	metrics := NewMetrics()
-	sessions := NewSessionManager(db, writeBuffer, config.SessionTimeoutSeconds)
+	sessions := NewSessionManager(memDB, config.SessionTimeoutSeconds)
 	sessions.SetMetrics(metrics)
 
 	server := &Server{
-		db:          db,
-		writeBuffer: writeBuffer,
-		sessions:    sessions,
-		config:      config,
-		configPath:  configPath,
-		shutdown:    make(chan struct{}),
-		metrics:     metrics,
-	}
-
-	// Pre-cache channel list on startup
-	if err := server.refreshChannelCache(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to cache channels: %w", err)
+		db:         memDB,
+		sessions:   sessions,
+		config:     config,
+		configPath: configPath,
+		shutdown:   make(chan struct{}),
+		metrics:    metrics,
 	}
 
 	return server, nil
-}
-
-// refreshChannelCache rebuilds the channel list cache from the database
-func (s *Server) refreshChannelCache() error {
-	// Get channels from database
-	channels, err := s.db.ListChannels()
-	if err != nil {
-		return fmt.Errorf("failed to list channels: %w", err)
-	}
-
-	// Convert to protocol channel list and build lookup map
-	channelList := make([]protocol.Channel, 0, len(channels))
-	channelByID := make(map[uint64]*cachedChannel, len(channels))
-
-	for _, ch := range channels {
-		desc := ""
-		if ch.Description != nil {
-			desc = *ch.Description
-		}
-
-		info := protocol.Channel{
-			ID:             uint64(ch.ID),
-			Name:           ch.Name,
-			Description:    desc,
-			UserCount:      0,     // TODO: Count sessions in channel
-			IsOperator:     false, // TODO: Check if user is operator
-			Type:           ch.ChannelType,
-			RetentionHours: ch.MessageRetentionHours,
-		}
-		channelList = append(channelList, info)
-
-		// Also populate lookup map with DisplayName
-		channelByID[uint64(ch.ID)] = &cachedChannel{
-			Protocol:    info,
-			DisplayName: ch.DisplayName,
-		}
-	}
-
-	// Update cache atomically
-	s.channelCacheMu.Lock()
-	s.channelCache = channelList
-	s.channelCacheByID = channelByID
-	s.channelCacheMu.Unlock()
-
-	log.Printf("Channel cache refreshed: %d channels loaded", len(channelList))
-	return nil
 }
 
 // initLoggers sets up error and debug loggers
@@ -210,13 +154,36 @@ func initLoggers() error {
 func (s *Server) Start() error {
 	// Start TCP server
 	addr := fmt.Sprintf(":%d", s.config.TCPPort)
-	listener, err := net.Listen("tcp", addr)
+
+	// Use ListenConfig to enable SO_REUSEADDR
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			err := c.Control(func(fd uintptr) {
+				// Set SO_REUSEADDR to allow quick restart
+				opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+			})
+			if err != nil {
+				return err
+			}
+			return opErr
+		},
+	}
+
+	listener, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
 	s.listener = listener
-	log.Printf("TCP server listening on %s", addr)
+	logListenBacklog(addr)
+
+	// Start listen overflow monitor (Linux only)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.monitorListenOverflows()
+	}()
 
 	// Start SSH server
 	if err := s.startSSHServer(); err != nil {
@@ -277,10 +244,7 @@ func (s *Server) Stop() error {
 	// Wait for goroutines to finish
 	s.wg.Wait()
 
-	// Close write buffer (flushes remaining writes)
-	s.writeBuffer.Close()
-
-	// Close database
+	// Close in-memory database (triggers final snapshot to SQLite)
 	return s.db.Close()
 }
 
@@ -300,27 +264,31 @@ func (s *Server) acceptLoop() {
 			}
 		}
 
-		// Handle connection in goroutine
+		// Handle connection directly in goroutine
 		go s.handleConnection(conn)
 	}
 }
 
-// handleConnection handles a single client connection
+// handleConnection handles initial connection setup, then spawns message loop goroutine
 func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	startTime := time.Now()
 
 	// Disable Nagle's algorithm for immediate sends
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		tcpConn.SetNoDelay(true)
 	}
 
+	afterTCP := time.Now()
+
 	// Create session
 	sess, err := s.sessions.CreateSession(nil, "", "tcp", conn)
 	if err != nil {
 		log.Printf("Failed to create session: %v", err)
+		conn.Close()
 		return
 	}
-	defer s.sessions.RemoveSession(sess.ID)
+
+	afterCreateSession := time.Now()
 
 	// Track connection for periodic metrics
 	s.connectionsSinceReport.Add(1)
@@ -328,9 +296,33 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	// Send SERVER_CONFIG immediately after connection
 	if err := s.sendServerConfig(sess); err != nil {
-		// Debug log already shows the send attempt, just return on error
+		// Debug log already shows the send attempt, clean up and return
+		s.sessions.RemoveSession(sess.ID)
+		conn.Close()
 		return
 	}
+
+	afterServerConfig := time.Now()
+
+	// Log timing if it took more than 100ms
+	totalTime := afterServerConfig.Sub(startTime)
+	if totalTime > 100*time.Millisecond {
+		debugLog.Printf("Session %d: SLOW connection setup: total=%v (tcp=%v, createSess=%v, sendConfig=%v)",
+			sess.ID,
+			totalTime,
+			afterTCP.Sub(startTime),
+			afterCreateSession.Sub(afterTCP),
+			afterServerConfig.Sub(afterCreateSession))
+	}
+
+	// Spawn goroutine for message loop (worker returns to pool)
+	go s.messageLoop(sess, conn)
+}
+
+// messageLoop handles messages for an established connection
+func (s *Server) messageLoop(sess *Session, conn net.Conn) {
+	defer conn.Close()
+	defer s.sessions.RemoveSession(sess.ID)
 
 	// Message loop
 	for {
@@ -480,13 +472,14 @@ func (s *Server) metricsLoggingLoop() {
 		case <-ticker.C:
 			// Get current counts
 			activeSessions := s.sessions.CountOnlineUsers()
+			goroutines := runtime.NumGoroutine()
 
 			// Get deltas and reset
 			connected := s.connectionsSinceReport.Swap(0)
 			disconnected := s.disconnectionsSinceReport.Swap(0)
 
-			log.Printf("[METRICS] Active sessions: %d, connected since last: %d, disconnected since last: %d",
-				activeSessions, connected, disconnected)
+			log.Printf("[METRICS] Active sessions: %d, connected since last: %d, disconnected since last: %d, goroutines: %d",
+				activeSessions, connected, disconnected, goroutines)
 		}
 	}
 }

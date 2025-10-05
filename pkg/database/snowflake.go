@@ -1,7 +1,7 @@
 package database
 
 import (
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -11,11 +11,9 @@ import (
 // - Worker ID: 0-1023 (for multi-server deployments)
 // - Sequence: 0-4095 (up to 4096 IDs per millisecond per worker)
 type Snowflake struct {
-	mu        sync.Mutex
-	epoch     int64  // Custom epoch in milliseconds
-	workerID  int64  // Worker/node ID (0-1023)
-	sequence  int64  // Sequence number (0-4095)
-	lastTime  int64  // Last timestamp in milliseconds
+	epoch    int64 // Custom epoch in milliseconds
+	workerID int64 // Worker/node ID (0-1023)
+	state    int64 // Atomic state: upper 52 bits = timestamp, lower 12 bits = sequence
 }
 
 const (
@@ -37,44 +35,69 @@ func NewSnowflake(epoch int64, workerID int64) *Snowflake {
 	return &Snowflake{
 		epoch:    epoch,
 		workerID: workerID,
-		sequence: 0,
-		lastTime: 0,
+		state:    0,
 	}
 }
 
-// NextID generates the next unique ID
+// NextID generates the next unique ID using lock-free atomic operations
 func (s *Snowflake) NextID() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	for {
+		// Load current state atomically
+		oldState := atomic.LoadInt64(&s.state)
+		lastTime := oldState >> sequenceBits
+		sequence := oldState & sequenceMask
 
-	now := time.Now().UnixMilli()
+		// Get current timestamp
+		now := time.Now().UnixMilli()
 
-	// Clock moved backwards
-	if now < s.lastTime {
-		// Wait until time catches up
-		now = s.lastTime
-	}
+		var newSequence int64
+		var newTime int64
 
-	if now == s.lastTime {
-		// Same millisecond - increment sequence
-		s.sequence = (s.sequence + 1) & sequenceMask
-		if s.sequence == 0 {
-			// Sequence exhausted - wait for next millisecond
-			for now <= s.lastTime {
+		if now == lastTime {
+			// Same millisecond - increment sequence
+			newSequence = (sequence + 1) & sequenceMask
+			if newSequence == 0 {
+				// Sequence exhausted - wait for next millisecond
+				for time.Now().UnixMilli() <= lastTime {
+					// Busy wait (should be very rare - only if >4096 IDs/ms)
+				}
 				now = time.Now().UnixMilli()
+				newTime = now
+				newSequence = 0
+			} else {
+				newTime = lastTime
+			}
+		} else if now > lastTime {
+			// New millisecond - reset sequence
+			newTime = now
+			newSequence = 0
+		} else {
+			// Clock moved backwards - use last known time and increment sequence
+			newTime = lastTime
+			newSequence = (sequence + 1) & sequenceMask
+			if newSequence == 0 {
+				// Sequence exhausted - wait for time to catch up
+				for time.Now().UnixMilli() < lastTime {
+					// Wait for clock to catch up
+				}
+				now = time.Now().UnixMilli()
+				newTime = now
+				newSequence = 0
 			}
 		}
-	} else {
-		// New millisecond - reset sequence
-		s.sequence = 0
+
+		// Pack new state
+		newState := (newTime << sequenceBits) | newSequence
+
+		// Try to update state atomically
+		if atomic.CompareAndSwapInt64(&s.state, oldState, newState) {
+			// Success - construct and return the ID
+			id := ((newTime - s.epoch) << timestampShift) |
+				(s.workerID << workerIDShift) |
+				newSequence
+			return id
+		}
+
+		// CAS failed - another goroutine updated state, retry
 	}
-
-	s.lastTime = now
-
-	// Construct the ID: timestamp | workerID | sequence
-	id := ((now - s.epoch) << timestampShift) |
-		(s.workerID << workerIDShift) |
-		s.sequence
-
-	return id
 }

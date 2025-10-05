@@ -108,6 +108,36 @@ The `loadtest` tool simulates concurrent clients to stress test the server:
 - Efficiency (actual vs expected throughput)
 - Failure breakdown (post failures, fetch failures, timeouts, connection errors)
 
+### Performance Profiling
+
+**TODO**: Profile server CPU usage to identify bottlenecks at high connection counts (10k+).
+
+Current observations:
+- Local machine maxes out at ~10k concurrent connections (CPU-bound)
+- Average response time: 75ms (after switching to in-memory writes with background flush)
+- CPU is the limiting factor, not kernel limits
+
+To profile:
+```bash
+# Add to server main.go:
+import _ "net/http/pprof"
+import "net/http"
+
+# Start pprof server:
+go func() {
+    log.Println(http.ListenAndServe("localhost:6060", nil))
+}()
+
+# During load test, capture 30s CPU profile:
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+
+# Check for:
+# - Broadcasting overhead (N writes per message)
+# - Lock contention (RWMutex with 10k goroutines)
+# - Allocation pressure / GC
+# - Protocol encoding cost
+```
+
 ### Coverage Requirements
 
 - **Protocol package (`pkg/protocol/*`)**: **100% coverage required** - build fails if not met

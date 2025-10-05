@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -97,6 +99,14 @@ func main() {
 	} else {
 		log.Printf("SSH server disabled (ssh_port=%d)", serverConfig.SSHPort)
 	}
+
+	// Start pprof HTTP server for profiling
+	go func() {
+		log.Println("Starting pprof server on http://localhost:6060")
+		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+			log.Printf("pprof server error: %v", err)
+		}
+	}()
 
 	// Display available channels
 	channels, err := srv.GetChannels()

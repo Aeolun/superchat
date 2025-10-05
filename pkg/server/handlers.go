@@ -64,19 +64,28 @@ func (s *Server) handleListChannels(sess *Session, frame *protocol.Frame) error 
 		return s.sendError(sess, 1000, "Invalid message format")
 	}
 
-	// Serve from cache (no DB query)
-	s.channelCacheMu.RLock()
-	fullList := s.channelCache
-	s.channelCacheMu.RUnlock()
+	// Get channels from MemDB (already in memory, instant)
+	dbChannels, err := s.db.ListChannels()
+	if err != nil {
+		return s.sendError(sess, 1002, "Failed to list channels")
+	}
 
 	// Apply pagination
-	channelList := make([]protocol.Channel, 0, len(fullList))
-	for _, ch := range fullList {
+	channelList := make([]protocol.Channel, 0, len(dbChannels))
+	for _, dbCh := range dbChannels {
 		// Skip channels before cursor
-		if msg.FromChannelID > 0 && ch.ID <= msg.FromChannelID {
+		if msg.FromChannelID > 0 && uint64(dbCh.ID) <= msg.FromChannelID {
 			continue
 		}
 
+		// Convert to protocol format
+		ch := protocol.Channel{
+			ID:          uint64(dbCh.ID),
+			Name:        dbCh.Name,
+			Description: *dbCh.Description,
+			UserCount:   0, // TODO: Track active user count
+			IsOperator:   false,
+		}
 		channelList = append(channelList, ch)
 
 		// Stop if we've reached the limit
@@ -101,13 +110,10 @@ func (s *Server) handleJoinChannel(sess *Session, frame *protocol.Frame) error {
 		return s.sendError(sess, 1000, "Invalid message format")
 	}
 
-	// Check if channel exists in cache (no DB query)
-	s.channelCacheMu.RLock()
-	cachedChan, exists := s.channelCacheByID[msg.ChannelID]
-	s.channelCacheMu.RUnlock()
-
-	if !exists {
-		errorLog.Printf("Session %d: Channel %d not found in cache", sess.ID, msg.ChannelID)
+	// Check if channel exists in MemDB (instant lookup)
+	exists, err := s.db.ChannelExists(int64(msg.ChannelID))
+	if err != nil || !exists {
+		errorLog.Printf("Session %d: Channel %d not found", sess.ID, msg.ChannelID)
 		resp := &protocol.JoinResponseMessage{
 			Success:      false,
 			ChannelID:    msg.ChannelID,
@@ -128,7 +134,7 @@ func (s *Server) handleJoinChannel(sess *Session, frame *protocol.Frame) error {
 		Success:      true,
 		ChannelID:    msg.ChannelID,
 		SubchannelID: msg.SubchannelID,
-		Message:      fmt.Sprintf("Joined %s", cachedChan.DisplayName),
+		Message:      "Joined channel",
 	}
 
 	return s.sendMessage(sess, protocol.TypeJoinResponse, resp)
@@ -224,8 +230,8 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 		parentID = &id
 	}
 
-	// Post message to database (buffered write)
-	messageID, dbMsg, err := s.writeBuffer.PostMessage(
+	// Post message to in-memory database (instant)
+	messageID, dbMsg, err := s.db.PostMessage(
 		int64(msg.ChannelID),
 		subchannelID,
 		parentID,
@@ -457,35 +463,27 @@ func (s *Server) broadcastNewMessage(msg *protocol.NewMessageMessage, threadRoot
 		broadcastType = "channel"
 	}
 
-	// Broadcast to subscribed sessions
+	// Get subscribers using reverse index (no iteration through all sessions!)
+	var targetSessions []*Session
+	if isTopLevel {
+		// Top-level message: get channel subscribers
+		targetSessions = s.sessions.GetChannelSubscribers(channelSub)
+	} else if threadRootID != nil {
+		// Reply: get thread subscribers
+		targetSessions = s.sessions.GetThreadSubscribers(*threadRootID)
+	}
+
+	// Broadcast to target sessions synchronously (writes are already buffered by TCP)
+	recipientCount = len(targetSessions)
 	deadSessions := make([]uint64, 0)
-
-	s.sessions.mu.RLock()
-	for _, sess := range s.sessions.sessions {
-		shouldSend := false
-
-		if isTopLevel {
-			// Top-level message: send to channel subscribers
-			shouldSend = sess.IsSubscribedToChannel(channelSub)
-		} else if threadRootID != nil {
-			// Reply: send to thread subscribers
-			_, shouldSend = sess.IsSubscribedToThread(*threadRootID)
-		}
-
-		if shouldSend {
-			// Write pre-encoded bytes directly (no re-encoding)
-			if writeErr := sess.Conn.WriteBytes(frameBytes); writeErr != nil {
-				debugLog.Printf("Session %d: Broadcast write failed: %v", sess.ID, writeErr)
-				deadSessions = append(deadSessions, sess.ID)
-			} else {
-				recipientCount++
-				s.metrics.RecordMessageDelivered(msg.ChannelID, threadRootID)
-			}
+	for _, sess := range targetSessions {
+		if writeErr := sess.Conn.WriteBytes(frameBytes); writeErr != nil {
+			debugLog.Printf("Session %d: Broadcast write failed: %v", sess.ID, writeErr)
+			deadSessions = append(deadSessions, sess.ID)
 		}
 	}
-	s.sessions.mu.RUnlock()
 
-	// Remove dead sessions from broadcast pool
+	// Remove dead sessions
 	for _, sessID := range deadSessions {
 		s.sessions.RemoveSession(sessID)
 	}
@@ -498,7 +496,7 @@ func (s *Server) broadcastNewMessage(msg *protocol.NewMessageMessage, threadRoot
 }
 
 // convertDBMessagesToProtocol converts database messages to protocol messages
-func convertDBMessagesToProtocol(dbMessages []*database.Message, db *database.DB) []protocol.Message {
+func convertDBMessagesToProtocol(dbMessages []*database.Message, db *database.MemDB) []protocol.Message {
 	messages := make([]protocol.Message, len(dbMessages))
 	for i, dbMsg := range dbMessages {
 		messages[i] = *convertDBMessageToProtocol(dbMsg, db)
@@ -507,7 +505,7 @@ func convertDBMessagesToProtocol(dbMessages []*database.Message, db *database.DB
 }
 
 // convertDBMessageToProtocol converts a database message to protocol message
-func convertDBMessageToProtocol(dbMsg *database.Message, db *database.DB) *protocol.Message {
+func convertDBMessageToProtocol(dbMsg *database.Message, db *database.MemDB) *protocol.Message {
 	var subchannelID, parentID, authorUserID *uint64
 	var editedAt *time.Time
 
@@ -568,7 +566,7 @@ func (s *Server) handleSubscribeThread(sess *Session, frame *protocol.Frame) err
 	}
 
 	// Get thread's channel for tracking
-	threadMsg, err := s.db.GetMessage(msg.ThreadID)
+	threadMsg, err := s.db.GetMessage(int64(msg.ThreadID))
 	if err != nil {
 		return s.dbError(sess, "GetMessage", err)
 	}
@@ -589,7 +587,7 @@ func (s *Server) handleSubscribeThread(sess *Session, frame *protocol.Frame) err
 		return s.sendError(sess, protocol.ErrCodeThreadSubscriptionLimit, fmt.Sprintf("Thread subscription limit exceeded (max %d per session)", s.config.MaxThreadSubscriptions))
 	}
 
-	sess.SubscribeToThread(msg.ThreadID, channelSub)
+	s.sessions.SubscribeToThread(sess, msg.ThreadID, channelSub)
 
 	// Send success response
 	resp := &protocol.SubscribeOkMessage{
@@ -608,7 +606,7 @@ func (s *Server) handleUnsubscribeThread(sess *Session, frame *protocol.Frame) e
 	}
 
 	// Remove subscription (idempotent - no error if not subscribed)
-	sess.UnsubscribeFromThread(msg.ThreadID)
+	s.sessions.UnsubscribeFromThread(sess, msg.ThreadID)
 
 	// Send success response
 	resp := &protocol.SubscribeOkMessage{
@@ -625,12 +623,9 @@ func (s *Server) handleSubscribeChannel(sess *Session, frame *protocol.Frame) er
 		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
 	}
 
-	// Validate channel exists (check cache, no DB query)
-	s.channelCacheMu.RLock()
-	_, exists := s.channelCacheByID[msg.ChannelID]
-	s.channelCacheMu.RUnlock()
-
-	if !exists {
+	// Validate channel exists in MemDB (instant lookup)
+	exists, err := s.db.ChannelExists(int64(msg.ChannelID))
+	if err != nil || !exists {
 		return s.sendError(sess, protocol.ErrCodeChannelNotFound, "Channel does not exist")
 	}
 
@@ -655,7 +650,7 @@ func (s *Server) handleSubscribeChannel(sess *Session, frame *protocol.Frame) er
 		return s.sendError(sess, protocol.ErrCodeChannelSubscriptionLimit, fmt.Sprintf("Channel subscription limit exceeded (max %d per session)", s.config.MaxChannelSubscriptions))
 	}
 
-	sess.SubscribeToChannel(channelSub)
+	s.sessions.SubscribeToChannel(sess, channelSub)
 
 	// Send success response
 	resp := &protocol.SubscribeOkMessage{
@@ -679,7 +674,7 @@ func (s *Server) handleUnsubscribeChannel(sess *Session, frame *protocol.Frame) 
 	}
 
 	// Remove subscription (idempotent - no error if not subscribed)
-	sess.UnsubscribeFromChannel(channelSub)
+	s.sessions.UnsubscribeFromChannel(sess, channelSub)
 
 	// Send success response
 	resp := &protocol.SubscribeOkMessage{

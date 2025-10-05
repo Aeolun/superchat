@@ -239,6 +239,7 @@ type Message struct {
 	CreatedAt      int64 // Unix timestamp in milliseconds
 	EditedAt       *int64
 	DeletedAt      *int64
+	ReplyCount     uint32 // Cached reply count (in-memory only, not persisted to SQLite)
 }
 
 // MessageVersion represents a version history entry

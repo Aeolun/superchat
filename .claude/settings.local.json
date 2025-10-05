@@ -8,7 +8,8 @@
       "Bash(go test:*)",
       "Bash(go build:*)",
       "Bash(make:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(go tool pprof:*)"
     ],
     "deny": [],
     "ask": []
