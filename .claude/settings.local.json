@@ -7,7 +7,8 @@
       "Bash(go get:*)",
       "Bash(go test:*)",
       "Bash(go build:*)",
-      "Bash(make:*)"
+      "Bash(make:*)",
+      "Bash(sqlite3:*)"
     ],
     "deny": [],
     "ask": []

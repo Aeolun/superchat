@@ -152,9 +152,9 @@ CREATE TABLE IF NOT EXISTS Channel (
 	is_private INTEGER NOT NULL DEFAULT 0
 );
 
--- Session table
+-- Session table (uses Snowflake IDs for performance)
 CREATE TABLE IF NOT EXISTS Session (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	id INTEGER PRIMARY KEY,
 	user_id INTEGER,
 	nickname TEXT NOT NULL,
 	connection_type TEXT NOT NULL,
@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS Message (
 	channel_id INTEGER NOT NULL,
 	subchannel_id INTEGER,
 	parent_id INTEGER,
+	thread_root_id INTEGER,
 	author_user_id INTEGER,
 	author_nickname TEXT NOT NULL,
 	content TEXT NOT NULL,
@@ -175,7 +176,8 @@ CREATE TABLE IF NOT EXISTS Message (
 	edited_at INTEGER,
 	deleted_at INTEGER,
 	FOREIGN KEY (channel_id) REFERENCES Channel(id) ON DELETE CASCADE,
-	FOREIGN KEY (parent_id) REFERENCES Message(id) ON DELETE CASCADE
+	FOREIGN KEY (parent_id) REFERENCES Message(id) ON DELETE CASCADE,
+	FOREIGN KEY (thread_root_id) REFERENCES Message(id) ON DELETE CASCADE
 );
 
 -- MessageVersion table
@@ -192,6 +194,7 @@ CREATE TABLE IF NOT EXISTS MessageVersion (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON Message(channel_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_parent ON Message(parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON Message(thread_root_id) WHERE thread_root_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_retention ON Message(created_at, parent_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_activity ON Session(last_activity);
 `
@@ -229,6 +232,7 @@ type Message struct {
 	ChannelID      int64
 	SubchannelID   *int64
 	ParentID       *int64
+	ThreadRootID   *int64 // Root message ID of thread (denormalized for fast broadcast)
 	AuthorUserID   *int64
 	AuthorNickname string
 	Content        string
@@ -517,7 +521,7 @@ func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint1
 	}
 
 	query := `
-		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+		SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname,
 		       content, created_at, edited_at, deleted_at
 		FROM Message
 		WHERE channel_id = ?
@@ -549,7 +553,7 @@ func (db *DB) ListThreadReplies(parentID uint64) ([]*Message, error) {
 	query := `
 		WITH RECURSIVE thread_tree AS (
 			-- Base case: direct replies to parent
-			SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+			SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname,
 			       content, created_at, edited_at, deleted_at,
 			       printf('%010d', created_at) AS path
 			FROM Message
@@ -559,13 +563,13 @@ func (db *DB) ListThreadReplies(parentID uint64) ([]*Message, error) {
 
 			-- Recursive case: replies to replies
 			-- Build path by concatenating parent path with current message's timestamp
-			SELECT m.id, m.channel_id, m.subchannel_id, m.parent_id, m.author_user_id, m.author_nickname,
+			SELECT m.id, m.channel_id, m.subchannel_id, m.parent_id, m.thread_root_id, m.author_user_id, m.author_nickname,
 			       m.content, m.created_at, m.edited_at, m.deleted_at,
 			       tt.path || '.' || printf('%010d', m.created_at)
 			FROM Message m
 			INNER JOIN thread_tree tt ON m.parent_id = tt.id
 		)
-		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+		SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname,
 		       content, created_at, edited_at, deleted_at
 		FROM thread_tree
 		ORDER BY path ASC
@@ -583,10 +587,10 @@ func (db *DB) ListThreadReplies(parentID uint64) ([]*Message, error) {
 // GetMessage returns a single message by ID
 func (db *DB) GetMessage(messageID uint64) (*Message, error) {
 	msg := &Message{}
-	var subchannelID, parentID, authorUserID, editedAt, deletedAt sql.NullInt64
+	var subchannelID, parentID, threadRootID, authorUserID, editedAt, deletedAt sql.NullInt64
 
 	err := db.conn.QueryRow(`
-		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+		SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname,
 		       content, created_at, edited_at, deleted_at
 		FROM Message
 		WHERE id = ?
@@ -595,6 +599,7 @@ func (db *DB) GetMessage(messageID uint64) (*Message, error) {
 		&msg.ChannelID,
 		&subchannelID,
 		&parentID,
+		&threadRootID,
 		&authorUserID,
 		&msg.AuthorNickname,
 		&msg.Content,
@@ -612,6 +617,9 @@ func (db *DB) GetMessage(messageID uint64) (*Message, error) {
 	}
 	if parentID.Valid {
 		msg.ParentID = &parentID.Int64
+	}
+	if threadRootID.Valid {
+		msg.ThreadRootID = &threadRootID.Int64
 	}
 	if authorUserID.Valid {
 		msg.AuthorUserID = &authorUserID.Int64
@@ -788,13 +796,14 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 
 	for rows.Next() {
 		msg := &Message{}
-		var subchannelID, parentID, authorUserID, editedAt, deletedAt sql.NullInt64
+		var subchannelID, parentID, threadRootID, authorUserID, editedAt, deletedAt sql.NullInt64
 
 		err := rows.Scan(
 			&msg.ID,
 			&msg.ChannelID,
 			&subchannelID,
 			&parentID,
+			&threadRootID,
 			&authorUserID,
 			&msg.AuthorNickname,
 			&msg.Content,
@@ -813,6 +822,9 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 		if parentID.Valid {
 			msg.ParentID = &parentID.Int64
 		}
+		if threadRootID.Valid {
+			msg.ThreadRootID = &threadRootID.Int64
+		}
 		if authorUserID.Valid {
 			msg.AuthorUserID = &authorUserID.Int64
 		}
@@ -827,4 +839,25 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 	}
 
 	return messages, rows.Err()
+}
+
+// ChannelExists checks if a channel exists
+func (db *DB) ChannelExists(channelID int64) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM Channel WHERE id = ?)`, channelID).Scan(&exists)
+	return exists, err
+}
+
+// SubchannelExists checks if a subchannel exists
+func (db *DB) SubchannelExists(subchannelID int64) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM Subchannel WHERE id = ?)`, subchannelID).Scan(&exists)
+	return exists, err
+}
+
+// MessageExists checks if a message exists
+func (db *DB) MessageExists(messageID int64) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM Message WHERE id = ? AND deleted_at IS NULL)`, messageID).Scan(&exists)
+	return exists, err
 }

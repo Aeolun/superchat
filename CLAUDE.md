@@ -25,6 +25,20 @@ go run ./cmd/server
 go run ./cmd/client
 ```
 
+## Logging
+
+**Server logs:**
+- `server.log` - All server activity (connections, messages, errors). Truncated on each server startup.
+- `errors.log` - Error-level logs only (append mode, persists across restarts).
+
+**Load test logs:**
+- `loadtest.log` - All load test output (same as console output). Truncated on each test run.
+
+**Client logs:**
+- Client uses bubbletea TUI and does not write to log files by default.
+
+All log files (*.log) are git-ignored and written to the current working directory.
+
 ## Testing
 
 ```bash
@@ -285,3 +299,6 @@ Critical for: user registration, channel creation, message posting with versions
 - Property-based tests (rapid) for serialization round-trips
 - Fuzzing for malformed input handling
 - Integration tests for multi-client real-time broadcasts
+- Anything less than a 100% success rate, is _NOT_ production-ready performance. Don't suggest 
+that we should accept failures just because we're operating under heavy load. Under heavy load we 
+should gracefully degrade, NOT fail.

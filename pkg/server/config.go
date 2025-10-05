@@ -60,7 +60,7 @@ func DefaultTOMLConfig() TOMLConfig {
 			MessageRateLimit:      10,
 			MaxMessageLength:      4096,
 			MaxNicknameLength:     20,
-			SessionTimeoutSeconds: 60,
+			SessionTimeoutSeconds: 120,
 		},
 		Retention: RetentionSection{
 			DefaultRetentionHours:  168, // 7 days

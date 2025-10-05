@@ -150,11 +150,15 @@ All messages use a simple frame-based format:
 | 0x0E | GET_UNREAD_COUNTS | Request unread counts for specific channels |
 | 0x0F | GET_USER_INFO | Get info about a user |
 | 0x10 | PING | Keepalive ping |
-| 0x11 | GET_SERVER_STATS | Request server statistics |
+| 0x11 | DISCONNECT | Graceful disconnect notification |
 | 0x12 | START_DM | Initiate a direct message conversation |
 | 0x13 | PROVIDE_PUBLIC_KEY | Upload public key for encryption |
 | 0x14 | ALLOW_UNENCRYPTED | Explicitly allow unencrypted DMs |
 | 0x15 | GET_SUBCHANNELS | Request subchannels for a channel |
+| 0x51 | SUBSCRIBE_THREAD | Subscribe to thread updates |
+| 0x52 | UNSUBSCRIBE_THREAD | Unsubscribe from thread updates |
+| 0x53 | SUBSCRIBE_CHANNEL | Subscribe to new threads in channel |
+| 0x54 | UNSUBSCRIBE_CHANNEL | Unsubscribe from channel updates |
 
 ### Server → Client Messages
 
@@ -184,6 +188,7 @@ All messages use a simple frame-based format:
 | 0x96 | DM_REQUEST | Incoming DM request from another user |
 | 0x97 | SUBCHANNEL_LIST | List of subchannels for a channel |
 | 0x98 | SERVER_CONFIG | Server configuration and limits (sent on connect) |
+| 0x99 | SUBSCRIBE_OK | Subscription confirmation |
 
 ## Message Payloads
 
@@ -874,12 +879,18 @@ Keepalive heartbeat to maintain session when idle.
 
 **Notes:**
 - Client's local timestamp for RTT calculation
-- **Session timeout:** Server disconnects if no activity (any message) for 60 seconds
-- **Client behavior:** Send PING if no other activity in last 30 seconds
-  - Don't send PING if you've recently sent other messages (POST_MESSAGE, etc.)
-  - Only send PING during idle periods to keep session alive
-- Server updates `Session.last_activity` on any received message (not just PING)
+- **Session timeout:** Server disconnects if no PING received for 60 seconds
+- **CRITICAL: Clients MUST send PING to keep session alive**
+  - Server ONLY updates `Session.last_activity` on PING messages
+  - Other messages (POST_MESSAGE, LIST_MESSAGES, etc.) do NOT reset the idle timer
+  - **Send PING every 30 seconds to maintain session** (regardless of other activity)
+  - Failure to send PING will result in disconnection after 60 seconds
 - Connection also closed if socket dies
+
+**Rationale:**
+- Updating session activity on every message creates excessive DB writes (55% overhead)
+- PING provides explicit keepalive signal that is cheap to process
+- Active clients posting messages every 100ms still need PING for session tracking
 
 ### 0x90 - PONG (Server → Client)
 
@@ -923,6 +934,8 @@ Server configuration and limits. Sent automatically after successful connection 
 +---------------------------+---------------------------+
 | max_connections_per_ip(u8)| max_message_length (u32)  |
 +---------------------------+---------------------------+
+| max_thread_subs (u16)     | max_channel_subs (u16)    |
++---------------------------+---------------------------+
 ```
 
 **Fields:**
@@ -932,6 +945,8 @@ Server configuration and limits. Sent automatically after successful connection 
 - `inactive_cleanup_days`: Days of inactivity before user state is purged (for registered users)
 - `max_connections_per_ip`: Maximum simultaneous connections allowed per IP address
 - `max_message_length`: Maximum length of message content in bytes
+- `max_thread_subs`: Maximum thread subscriptions per session (default: 50)
+- `max_channel_subs`: Maximum channel subscriptions per session (default: 10)
 
 **Delivery:**
 - Sent once automatically after connection is established
@@ -945,6 +960,103 @@ Server configuration and limits. Sent automatically after successful connection 
 - Display cleanup policy to users so they know their data retention
 - Show connection limits in error messages when appropriate
 - Validate message length before sending to avoid errors
+
+### 0x51 - SUBSCRIBE_THREAD (Client → Server)
+
+Subscribe to real-time updates for a specific thread. When subscribed, the client will receive NEW_MESSAGE notifications for all new messages posted to this thread (including replies at any depth).
+
+```
++-------------------+
+| thread_id (u64)   |
++-------------------+
+```
+
+**Notes:**
+- `thread_id`: The root message ID of the thread to subscribe to
+- Server validates that the thread exists (ERROR 4003 if not found)
+- Server checks subscription limit per session (ERROR 5004 if exceeded)
+- Client will receive NEW_MESSAGE for any message posted under this thread root
+- On success, server responds with SUBSCRIBE_OK
+
+**Recommended client behavior:**
+- Subscribe when entering a thread view
+- Unsubscribe when leaving the thread view
+- Track subscriptions locally to avoid duplicate subscriptions
+
+### 0x52 - UNSUBSCRIBE_THREAD (Client → Server)
+
+Unsubscribe from a previously subscribed thread.
+
+```
++-------------------+
+| thread_id (u64)   |
++-------------------+
+```
+
+**Notes:**
+- `thread_id`: The root message ID to unsubscribe from
+- No error if already unsubscribed (idempotent)
+- No response sent (fire-and-forget)
+
+### 0x53 - SUBSCRIBE_CHANNEL (Client → Server)
+
+Subscribe to new threads in a channel or subchannel. When subscribed, the client will receive NEW_MESSAGE notifications for new root messages (thread starters) posted to this channel.
+
+```
++-------------------+-----------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)|
++-------------------+-----------------------------+
+```
+
+**Notes:**
+- Subscribe to root-level messages only (not replies)
+- Server validates channel exists (ERROR 4001 if not found)
+- Server validates subchannel exists if provided (ERROR 4004 if not found)
+- Server checks subscription limit per session (ERROR 5005 if exceeded)
+- On success, server responds with SUBSCRIBE_OK
+
+**Recommended client behavior:**
+- Subscribe when viewing a channel's thread list
+- Unsubscribe when leaving the channel
+- Typically combined with thread subscriptions for full coverage
+
+### 0x54 - UNSUBSCRIBE_CHANNEL (Client → Server)
+
+Unsubscribe from a previously subscribed channel.
+
+```
++-------------------+-----------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)|
++-------------------+-----------------------------+
+```
+
+**Notes:**
+- No error if already unsubscribed (idempotent)
+- No response sent (fire-and-forget)
+
+### 0x99 - SUBSCRIBE_OK (Server → Client)
+
+Confirmation that a subscription was successful.
+
+```
++-------------------+-------------------+-----------------------------+
+| type (u8)         | id (u64)          | subchannel_id (Optional u64)|
++-------------------+-------------------+-----------------------------+
+```
+
+**Type values:**
+- 0x51 = Thread subscription confirmed
+- 0x53 = Channel subscription confirmed
+
+**Fields:**
+- `type`: Indicates which type of subscription was confirmed (matches request type)
+- `id`: The ID that was subscribed to (thread_id or channel_id depending on type)
+- `subchannel_id`: Only present for channel subscriptions, null for thread subscriptions
+
+**Notes:**
+- Sent in response to SUBSCRIBE_THREAD or SUBSCRIBE_CHANNEL
+- Client can use this to confirm the subscription was registered
+- Not sent for unsubscribe operations
 
 ### 0x91 - ERROR (Server → Client)
 
@@ -982,7 +1094,7 @@ Generic error response.
 - 4000: Resource not found
 - 4001: Channel not found
 - 4002: Message not found
-- 4003: User not found
+- 4003: Thread not found
 - 4004: Subchannel not found
 
 **5xxx - Rate Limit Errors:**
@@ -990,6 +1102,8 @@ Generic error response.
 - 5001: Message rate limit exceeded
 - 5002: Channel creation rate limit exceeded
 - 5003: Too many connections from IP
+- 5004: Thread subscription limit exceeded (max 50 per session)
+- 5005: Channel subscription limit exceeded (max 10 per session)
 
 **6xxx - Validation Errors:**
 - 6000: Invalid input

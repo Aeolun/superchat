@@ -6,12 +6,15 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aeolun/superchat/pkg/database"
 	"github.com/aeolun/superchat/pkg/protocol"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -30,35 +33,55 @@ type Server struct {
 	configPath  string
 	shutdown    chan struct{}
 	wg          sync.WaitGroup
+	metrics     *Metrics
+
+	// Connection deltas for periodic reporting
+	connectionsSinceReport    atomic.Int64
+	disconnectionsSinceReport atomic.Int64
+
+	// Channel list cache (invalidated on channel creation)
+	channelCacheMu   sync.RWMutex
+	channelCache     []protocol.Channel
+	channelCacheByID map[uint64]*cachedChannel // Fast lookup by ID
+}
+
+// cachedChannel holds both protocol and database channel info for cache
+type cachedChannel struct {
+	Protocol    protocol.Channel
+	DisplayName string // From database, used in JOIN responses
 }
 
 // ServerConfig holds server configuration
 type ServerConfig struct {
-	TCPPort               int
-	SSHPort               int
-	SSHHostKeyPath        string
-	MaxConnectionsPerIP   uint8
-	MessageRateLimit      uint16
-	MaxChannelCreates     uint16
-	InactiveCleanupDays   uint16
-	MaxMessageLength      uint32
-	SessionTimeoutSeconds int
-	ProtocolVersion       uint8
+	TCPPort                 int
+	SSHPort                 int
+	SSHHostKeyPath          string
+	MaxConnectionsPerIP     uint8
+	MessageRateLimit        uint16
+	MaxChannelCreates       uint16
+	InactiveCleanupDays     uint16
+	MaxMessageLength        uint32
+	SessionTimeoutSeconds   int
+	ProtocolVersion         uint8
+	MaxThreadSubscriptions  uint16
+	MaxChannelSubscriptions uint16
 }
 
 // DefaultConfig returns default server configuration
 func DefaultConfig() ServerConfig {
 	return ServerConfig{
-		TCPPort:               6465,
-		SSHPort:               6466,
-		SSHHostKeyPath:        "~/.superchat/ssh_host_key",
-		MaxConnectionsPerIP:   10,
-		MessageRateLimit:      10,   // per minute
-		MaxChannelCreates:     5,    // per hour
-		InactiveCleanupDays:   90,   // days
-		MaxMessageLength:      4096, // bytes
-		SessionTimeoutSeconds: 60,   // 60 seconds
-		ProtocolVersion:       1,
+		TCPPort:                 6465,
+		SSHPort:                 6466,
+		SSHHostKeyPath:          "~/.superchat/ssh_host_key",
+		MaxConnectionsPerIP:     10,
+		MessageRateLimit:        10,   // per minute
+		MaxChannelCreates:       5,    // per hour
+		InactiveCleanupDays:     90,   // days
+		MaxMessageLength:        4096, // bytes
+		SessionTimeoutSeconds:   120,  // 2 minutes
+		ProtocolVersion:         1,
+		MaxThreadSubscriptions:  50, // max thread subscriptions per session
+		MaxChannelSubscriptions: 10, // max channel subscriptions per session
 	}
 }
 
@@ -84,14 +107,73 @@ func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, 
 		return nil, fmt.Errorf("failed to initialize loggers: %w", err)
 	}
 
-	return &Server{
+	metrics := NewMetrics()
+	sessions := NewSessionManager(db, writeBuffer, config.SessionTimeoutSeconds)
+	sessions.SetMetrics(metrics)
+
+	server := &Server{
 		db:          db,
 		writeBuffer: writeBuffer,
-		sessions:    NewSessionManager(db, writeBuffer),
+		sessions:    sessions,
 		config:      config,
 		configPath:  configPath,
 		shutdown:    make(chan struct{}),
-	}, nil
+		metrics:     metrics,
+	}
+
+	// Pre-cache channel list on startup
+	if err := server.refreshChannelCache(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to cache channels: %w", err)
+	}
+
+	return server, nil
+}
+
+// refreshChannelCache rebuilds the channel list cache from the database
+func (s *Server) refreshChannelCache() error {
+	// Get channels from database
+	channels, err := s.db.ListChannels()
+	if err != nil {
+		return fmt.Errorf("failed to list channels: %w", err)
+	}
+
+	// Convert to protocol channel list and build lookup map
+	channelList := make([]protocol.Channel, 0, len(channels))
+	channelByID := make(map[uint64]*cachedChannel, len(channels))
+
+	for _, ch := range channels {
+		desc := ""
+		if ch.Description != nil {
+			desc = *ch.Description
+		}
+
+		info := protocol.Channel{
+			ID:             uint64(ch.ID),
+			Name:           ch.Name,
+			Description:    desc,
+			UserCount:      0,     // TODO: Count sessions in channel
+			IsOperator:     false, // TODO: Check if user is operator
+			Type:           ch.ChannelType,
+			RetentionHours: ch.MessageRetentionHours,
+		}
+		channelList = append(channelList, info)
+
+		// Also populate lookup map with DisplayName
+		channelByID[uint64(ch.ID)] = &cachedChannel{
+			Protocol:    info,
+			DisplayName: ch.DisplayName,
+		}
+	}
+
+	// Update cache atomically
+	s.channelCacheMu.Lock()
+	s.channelCache = channelList
+	s.channelCacheByID = channelByID
+	s.channelCacheMu.Unlock()
+
+	log.Printf("Channel cache refreshed: %d channels loaded", len(channelList))
+	return nil
 }
 
 // initLoggers sets up error and debug loggers
@@ -101,6 +183,13 @@ func initLoggers() error {
 	if err != nil {
 		return err
 	}
+
+	// Write startup marker to errors.log (for distinguishing between runs)
+	startupMsg := fmt.Sprintf("=== Server started at %s ===\n", time.Now().Format(time.RFC3339))
+	if _, err := errorFile.WriteString(startupMsg); err != nil {
+		return err
+	}
+
 	errorLog = log.New(io.MultiWriter(os.Stderr, errorFile), "ERROR: ", log.LstdFlags)
 
 	// Debug log goes to /dev/null by default (can be enabled via config later)
@@ -134,6 +223,19 @@ func (s *Server) Start() error {
 		s.listener.Close()
 		return fmt.Errorf("failed to start SSH server: %w", err)
 	}
+
+	// Start Prometheus metrics HTTP server
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Printf("Metrics server listening on :9090")
+		if err := http.ListenAndServe(":9090", nil); err != nil {
+			log.Printf("Metrics server error: %v", err)
+		}
+	}()
+
+	// Start metrics logging goroutine (log metrics every 5 seconds)
+	s.wg.Add(1)
+	go s.metricsLoggingLoop()
 
 	// Start session cleanup goroutine
 	s.wg.Add(1)
@@ -220,11 +322,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 	defer s.sessions.RemoveSession(sess.ID)
 
-	log.Printf("New connection from %s (session %d)", conn.RemoteAddr(), sess.ID)
+	// Track connection for periodic metrics
+	s.connectionsSinceReport.Add(1)
+	debugLog.Printf("New connection from %s (session %d)", conn.RemoteAddr(), sess.ID)
 
 	// Send SERVER_CONFIG immediately after connection
 	if err := s.sendServerConfig(sess); err != nil {
-		log.Printf("Failed to send SERVER_CONFIG to session %d: %v", sess.ID, err)
+		// Debug log already shows the send attempt, just return on error
 		return
 	}
 
@@ -233,24 +337,38 @@ func (s *Server) handleConnection(conn net.Conn) {
 		// Read frame
 		frame, err := protocol.DecodeFrame(conn)
 		if err != nil {
-			if err == io.EOF {
-				log.Printf("Session %d disconnected", sess.ID)
-			} else {
-				log.Printf("Session %d read error: %v", sess.ID, err)
+			// Check if session still exists (if not, it was closed by stale cleanup)
+			_, exists := s.sessions.GetSession(sess.ID)
+
+			// Remove from sessions map immediately to prevent broadcast attempts
+			s.sessions.RemoveSession(sess.ID)
+
+			// Only log if we're the ones who discovered the error (session existed)
+			if exists {
+				s.disconnectionsSinceReport.Add(1)
+				if err == io.EOF {
+					debugLog.Printf("Session %d: Client disconnected (message loop read)", sess.ID)
+				} else {
+					debugLog.Printf("Session %d: Message loop read error: %v", sess.ID, err)
+				}
 			}
 			return
 		}
 
 		debugLog.Printf("Session %d ← RECV: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, frame.Type, frame.Flags, len(frame.Payload))
 
-		// Update session activity (buffered write)
-		s.writeBuffer.UpdateSessionActivity(sess.DBSessionID, time.Now().UnixMilli())
+		// Update session activity (buffered write, rate-limited to half of session timeout)
+		s.sessions.UpdateSessionActivity(sess, time.Now().UnixMilli())
+
+		// Track message received
+		s.metrics.RecordMessageReceived(messageTypeToString(frame.Type))
 
 		// Handle message
 		if err := s.handleMessage(sess, frame); err != nil {
 			// If it's a graceful disconnect, exit cleanly
 			if errors.Is(err, ErrClientDisconnecting) {
-				log.Printf("Session %d disconnected gracefully", sess.ID)
+				s.disconnectionsSinceReport.Add(1)
+				debugLog.Printf("Session %d disconnected gracefully", sess.ID)
 				return
 			}
 			// Log and send error response for other errors
@@ -281,6 +399,14 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handlePing(sess, frame)
 	case protocol.TypeDisconnect:
 		return s.handleDisconnect(sess, frame)
+	case protocol.TypeSubscribeThread:
+		return s.handleSubscribeThread(sess, frame)
+	case protocol.TypeUnsubscribeThread:
+		return s.handleUnsubscribeThread(sess, frame)
+	case protocol.TypeSubscribeChannel:
+		return s.handleSubscribeChannel(sess, frame)
+	case protocol.TypeUnsubscribeChannel:
+		return s.handleUnsubscribeChannel(sess, frame)
 	default:
 		// Unknown or unimplemented message type
 		return s.sendError(sess, 1001, "Unsupported message type")
@@ -290,12 +416,14 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 // sendServerConfig sends the SERVER_CONFIG message to a session
 func (s *Server) sendServerConfig(sess *Session) error {
 	msg := &protocol.ServerConfigMessage{
-		ProtocolVersion:     s.config.ProtocolVersion,
-		MaxMessageRate:      s.config.MessageRateLimit,
-		MaxChannelCreates:   s.config.MaxChannelCreates,
-		InactiveCleanupDays: s.config.InactiveCleanupDays,
-		MaxConnectionsPerIP: s.config.MaxConnectionsPerIP,
-		MaxMessageLength:    s.config.MaxMessageLength,
+		ProtocolVersion:         s.config.ProtocolVersion,
+		MaxMessageRate:          s.config.MessageRateLimit,
+		MaxChannelCreates:       s.config.MaxChannelCreates,
+		InactiveCleanupDays:     s.config.InactiveCleanupDays,
+		MaxConnectionsPerIP:     s.config.MaxConnectionsPerIP,
+		MaxMessageLength:        s.config.MaxMessageLength,
+		MaxThreadSubscriptions:  s.config.MaxThreadSubscriptions,
+		MaxChannelSubscriptions: s.config.MaxChannelSubscriptions,
 	}
 
 	payload, err := msg.Encode()
@@ -311,7 +439,8 @@ func (s *Server) sendServerConfig(sess *Session) error {
 	}
 
 	debugLog.Printf("Session %d → SEND: Type=0x%02X (SERVER_CONFIG) Flags=0x%02X PayloadLen=%d", sess.ID, protocol.TypeServerConfig, 0, len(payload))
-	return protocol.EncodeFrame(sess.Conn, frame)
+	s.metrics.RecordMessageSent(messageTypeToString(protocol.TypeServerConfig))
+	return sess.Conn.EncodeFrame(frame)
 }
 
 // sendError sends an ERROR message to a session
@@ -333,7 +462,33 @@ func (s *Server) sendError(sess *Session, code uint16, message string) error {
 		Payload: payload,
 	}
 
-	return protocol.EncodeFrame(sess.Conn, frame)
+	s.metrics.RecordMessageSent(messageTypeToString(protocol.TypeError))
+	return sess.Conn.EncodeFrame(frame)
+}
+
+// metricsLoggingLoop periodically logs key metrics
+func (s *Server) metricsLoggingLoop() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.shutdown:
+			return
+		case <-ticker.C:
+			// Get current counts
+			activeSessions := s.sessions.CountOnlineUsers()
+
+			// Get deltas and reset
+			connected := s.connectionsSinceReport.Swap(0)
+			disconnected := s.disconnectionsSinceReport.Swap(0)
+
+			log.Printf("[METRICS] Active sessions: %d, connected since last: %d, disconnected since last: %d",
+				activeSessions, connected, disconnected)
+		}
+	}
 }
 
 // sessionCleanupLoop periodically cleans up stale sessions
@@ -366,7 +521,8 @@ func (s *Server) cleanupStaleSessions() {
 		}
 
 		if dbSess.LastActivity < cutoff {
-			log.Printf("Closing stale session %d (inactive for %v)", sess.ID, timeout)
+			s.disconnectionsSinceReport.Add(1)
+			debugLog.Printf("Closing stale session %d (inactive for %v)", sess.ID, timeout)
 			s.sessions.RemoveSession(sess.ID)
 		}
 	}

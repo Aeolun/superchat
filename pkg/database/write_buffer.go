@@ -2,15 +2,20 @@ package database
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
+	"io"
 	"log"
+	"net"
 	"sync"
+	"syscall"
 	"time"
 )
 
 // WriteBuffer batches database writes to reduce lock contention
 type WriteBuffer struct {
-	db            *DB
-	flushInterval time.Duration
+	db       *DB
+	interval time.Duration // Fixed flush interval
 
 	// Session creation
 	sessionCreateMu      sync.Mutex
@@ -34,7 +39,7 @@ type WriteBuffer struct {
 	deletionMu       sync.Mutex
 	sessionDeletions map[int64]bool // sessionID -> pending deletion
 
-	// Shutdown
+	// Shutdown control
 	shutdown chan struct{}
 	wg       sync.WaitGroup
 }
@@ -45,6 +50,7 @@ type pendingSessionCreate struct {
 	connType    string
 	timestamp   int64
 	resultIndex int
+	conn        net.Conn // Check health before creating
 }
 
 type sessionCreateResult struct {
@@ -73,7 +79,7 @@ type messageResult struct {
 func NewWriteBuffer(db *DB, flushInterval time.Duration) *WriteBuffer {
 	wb := &WriteBuffer{
 		db:                   db,
-		flushInterval:        flushInterval,
+		interval:             flushInterval,
 		sessionCreates:       make([]*pendingSessionCreate, 0, 50),
 		sessionCreateResults: make(map[int]chan sessionCreateResult),
 		sessionUpdates:       make(map[int64]int64),
@@ -92,7 +98,7 @@ func NewWriteBuffer(db *DB, flushInterval time.Duration) *WriteBuffer {
 }
 
 // CreateSession queues a session creation and returns the session ID once flushed
-func (wb *WriteBuffer) CreateSession(userID *int64, nickname, connType string) (int64, error) {
+func (wb *WriteBuffer) CreateSession(userID *int64, nickname, connType string, conn net.Conn) (int64, error) {
 	resultChan := make(chan sessionCreateResult, 1)
 
 	wb.sessionCreateMu.Lock()
@@ -103,6 +109,7 @@ func (wb *WriteBuffer) CreateSession(userID *int64, nickname, connType string) (
 		connType:    connType,
 		timestamp:   nowMillis(),
 		resultIndex: resultIndex,
+		conn:        conn,
 	})
 	wb.sessionCreateResults[resultIndex] = resultChan
 	wb.sessionCreateMu.Unlock()
@@ -157,11 +164,11 @@ func (wb *WriteBuffer) DeleteSession(sessionID int64) {
 	wb.deletionMu.Unlock()
 }
 
-// flushLoop periodically flushes buffered writes
+// flushLoop periodically flushes buffered writes at fixed interval
 func (wb *WriteBuffer) flushLoop() {
 	defer wb.wg.Done()
 
-	ticker := time.NewTicker(wb.flushInterval)
+	ticker := time.NewTicker(wb.interval)
 	defer ticker.Stop()
 
 	for {
@@ -247,45 +254,87 @@ func (wb *WriteBuffer) flush() {
 	}
 	defer tx.Rollback()
 
-	// 1. Session creation
+	// Track timing for each operation type
+	var sessionCreateTime, sessionUpdateTime, nicknameUpdateTime, sessionDeleteTime, messageInsertTime time.Duration
+
+	// 1. Session creation (batch INSERT with Snowflake IDs)
 	if len(sessionCreates) > 0 {
-		stmt, err := tx.Prepare(`
-			INSERT INTO Session (user_id, nickname, connection_type, connected_at, last_activity)
-			VALUES (?, ?, ?, ?, ?)
-		`)
-		if err != nil {
-			log.Printf("WriteBuffer: failed to prepare session create statement: %v", err)
-			for _, resultChan := range sessionCreateResults {
-				resultChan <- sessionCreateResult{err: err}
+		opStart := time.Now()
+
+		// Filter out dead connections and generate IDs upfront
+		type sessionWithID struct {
+			sess      *pendingSessionCreate
+			sessionID int64
+		}
+		validSessions := make([]sessionWithID, 0, len(sessionCreates))
+
+		for _, sess := range sessionCreates {
+			// Check if connection is still alive before creating session
+			if !isConnAlive(sess.conn) {
+				sessionCreateResults[sess.resultIndex] <- sessionCreateResult{err: errors.New("connection closed before session creation")}
+				continue
 			}
-		} else {
-			defer stmt.Close()
-			for _, sess := range sessionCreates {
-				var userIDVal sql.NullInt64
-				if sess.userID != nil {
-					userIDVal.Valid = true
-					userIDVal.Int64 = *sess.userID
+
+			validSessions = append(validSessions, sessionWithID{
+				sess:      sess,
+				sessionID: wb.db.snowflake.NextID(),
+			})
+		}
+
+		if len(validSessions) > 0 {
+			// SQLite 3.32.0+ has a limit of 32766 parameters per query
+			// With 6 columns, we can insert max 5461 rows per batch (32766/6 = 5461)
+			const maxRowsPerBatch = 5461
+
+			// Process in chunks
+			for chunkStart := 0; chunkStart < len(validSessions); chunkStart += maxRowsPerBatch {
+				chunkEnd := chunkStart + maxRowsPerBatch
+				if chunkEnd > len(validSessions) {
+					chunkEnd = len(validSessions)
+				}
+				chunk := validSessions[chunkStart:chunkEnd]
+
+				// Build batch INSERT for this chunk
+				placeholders := make([]byte, 0, len(chunk)*20)
+				args := make([]interface{}, 0, len(chunk)*6)
+
+				for i, s := range chunk {
+					if i > 0 {
+						placeholders = append(placeholders, ',')
+					}
+					placeholders = append(placeholders, '(', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ')')
+
+					var userIDVal sql.NullInt64
+					if s.sess.userID != nil {
+						userIDVal.Valid = true
+						userIDVal.Int64 = *s.sess.userID
+					}
+
+					args = append(args, s.sessionID, userIDVal, s.sess.nickname, s.sess.connType, s.sess.timestamp, s.sess.timestamp)
 				}
 
-				result, err := stmt.Exec(userIDVal, sess.nickname, sess.connType, sess.timestamp, sess.timestamp)
+				query := "INSERT INTO Session (id, user_id, nickname, connection_type, connected_at, last_activity) VALUES " + string(placeholders)
+				_, err := tx.Exec(query, args...)
 				if err != nil {
-					sessionCreateResults[sess.resultIndex] <- sessionCreateResult{err: err}
-					continue
+					log.Printf("WriteBuffer: failed to batch insert sessions (chunk %d-%d): %v", chunkStart, chunkEnd, err)
+					for _, s := range chunk {
+						sessionCreateResults[s.sess.resultIndex] <- sessionCreateResult{err: err}
+					}
+				} else {
+					// Send success with generated IDs
+					for _, s := range chunk {
+						sessionCreateResults[s.sess.resultIndex] <- sessionCreateResult{sessionID: s.sessionID}
+					}
 				}
-
-				sessionID, err := result.LastInsertId()
-				if err != nil {
-					sessionCreateResults[sess.resultIndex] <- sessionCreateResult{err: err}
-					continue
-				}
-
-				sessionCreateResults[sess.resultIndex] <- sessionCreateResult{sessionID: sessionID}
 			}
 		}
+
+		sessionCreateTime = time.Since(opStart)
 	}
 
 	// 2. Session activity updates
 	if len(sessionUpdates) > 0 {
+		opStart := time.Now()
 		stmt, err := tx.Prepare(`UPDATE Session SET last_activity = ? WHERE id = ?`)
 		if err != nil {
 			log.Printf("WriteBuffer: failed to prepare session statement: %v", err)
@@ -297,10 +346,12 @@ func (wb *WriteBuffer) flush() {
 				}
 			}
 		}
+		sessionUpdateTime = time.Since(opStart)
 	}
 
 	// 3. Nickname updates
 	if len(nicknameUpdates) > 0 {
+		opStart := time.Now()
 		stmt, err := tx.Prepare(`UPDATE Session SET nickname = ? WHERE id = ?`)
 		if err != nil {
 			log.Printf("WriteBuffer: failed to prepare nickname statement: %v", err)
@@ -312,10 +363,12 @@ func (wb *WriteBuffer) flush() {
 				}
 			}
 		}
+		nicknameUpdateTime = time.Since(opStart)
 	}
 
 	// 4. Session deletions
 	if len(sessionDeletions) > 0 {
+		opStart := time.Now()
 		// Build DELETE ... WHERE id IN (?, ?, ...) query
 		sessionIDs := make([]int64, 0, len(sessionDeletions))
 		for sessionID := range sessionDeletions {
@@ -336,27 +389,80 @@ func (wb *WriteBuffer) flush() {
 		if _, err := tx.Exec(query, args...); err != nil {
 			log.Printf("WriteBuffer: failed to delete %d sessions: %v", len(sessionIDs), err)
 		}
+		sessionDeleteTime = time.Since(opStart)
 	}
 
 	// 5. Message inserts (batch INSERT with prepared statement)
 	if len(messageInserts) > 0 {
-		stmt, err := tx.Prepare(`
-			INSERT INTO Message (id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname, content, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`)
-		if err != nil {
-			log.Printf("WriteBuffer: failed to prepare message insert: %v", err)
-			for _, resultChan := range messageResults {
-				resultChan <- messageResult{err: err}
+		opStart := time.Now()
+
+		// Batch-fetch all parent thread_root_ids in one query
+		uniqueParentIDs := make(map[int64]bool)
+		for _, msg := range messageInserts {
+			if msg.parentID != nil {
+				uniqueParentIDs[*msg.parentID] = true
 			}
-		} else {
-			defer stmt.Close()
+		}
+
+		parentThreadRoots := make(map[int64]sql.NullInt64)
+		batchFetchFailed := false
+		if len(uniqueParentIDs) > 0 {
+			// Build IN clause query
+			parentIDList := make([]int64, 0, len(uniqueParentIDs))
+			for parentID := range uniqueParentIDs {
+				parentIDList = append(parentIDList, parentID)
+			}
+
+			placeholders := make([]byte, 0, len(parentIDList)*2)
+			args := make([]interface{}, len(parentIDList))
+			for i, id := range parentIDList {
+				if i > 0 {
+					placeholders = append(placeholders, ',')
+				}
+				placeholders = append(placeholders, '?')
+				args[i] = id
+			}
+
+			query := "SELECT id, thread_root_id FROM Message WHERE id IN (" + string(placeholders) + ")"
+			rows, err := tx.Query(query, args...)
+			if err != nil {
+				log.Printf("WriteBuffer: failed to batch fetch parent thread_root_ids: %v", err)
+				for _, resultChan := range messageResults {
+					resultChan <- messageResult{err: err}
+				}
+				batchFetchFailed = true
+			} else {
+				defer rows.Close()
+
+				for rows.Next() {
+					var id int64
+					var threadRootID sql.NullInt64
+					if err := rows.Scan(&id, &threadRootID); err != nil {
+						log.Printf("WriteBuffer: failed to scan parent thread_root_id: %v", err)
+						continue
+					}
+					parentThreadRoots[id] = threadRootID
+				}
+				rows.Close()
+			}
+		}
+
+		if !batchFetchFailed {
+			// Prepare message data with IDs generated upfront
+			type messageWithID struct {
+				msg              *pendingMessage
+				messageID        int64
+				subchannelIDVal  sql.NullInt64
+				parentIDVal      sql.NullInt64
+				threadRootIDVal  sql.NullInt64
+				authorUserIDVal  sql.NullInt64
+			}
+			validMessages := make([]messageWithID, 0, len(messageInserts))
 
 			for _, msg := range messageInserts {
-				// Generate Snowflake ID
 				messageID := wb.db.snowflake.NextID()
 
-				var subchannelIDVal, parentIDVal, authorUserIDVal sql.NullInt64
+				var subchannelIDVal, parentIDVal, threadRootIDVal, authorUserIDVal sql.NullInt64
 				if msg.subchannelID != nil {
 					subchannelIDVal.Valid = true
 					subchannelIDVal.Int64 = *msg.subchannelID
@@ -364,38 +470,99 @@ func (wb *WriteBuffer) flush() {
 				if msg.parentID != nil {
 					parentIDVal.Valid = true
 					parentIDVal.Int64 = *msg.parentID
+
+					// Look up parent's thread_root_id from batch-fetched map
+					parentThreadRootID, found := parentThreadRoots[*msg.parentID]
+					if !found {
+						log.Printf("WriteBuffer: parent message not found in batch (parent=%d)", *msg.parentID)
+						messageResults[msg.resultIndex] <- messageResult{err: fmt.Errorf("parent message not found")}
+						continue
+					}
+
+					threadRootIDVal = parentThreadRootID
+				} else {
+					// Top-level message: thread_root_id = message_id (self-referential)
+					threadRootIDVal.Valid = true
+					threadRootIDVal.Int64 = messageID
 				}
 				if msg.authorUserID != nil {
 					authorUserIDVal.Valid = true
 					authorUserIDVal.Int64 = *msg.authorUserID
 				}
 
-				_, err := stmt.Exec(messageID, msg.channelID, subchannelIDVal, parentIDVal, authorUserIDVal, msg.authorNickname, msg.content, msg.timestamp)
-				if err != nil {
-					log.Printf("WriteBuffer: failed to insert message (channel=%d, parent=%v, author=%s): %v",
-						msg.channelID, msg.parentID, msg.authorNickname, err)
-					messageResults[msg.resultIndex] <- messageResult{err: err}
-					continue
-				}
+				validMessages = append(validMessages, messageWithID{
+					msg:             msg,
+					messageID:       messageID,
+					subchannelIDVal: subchannelIDVal,
+					parentIDVal:     parentIDVal,
+					threadRootIDVal: threadRootIDVal,
+					authorUserIDVal: authorUserIDVal,
+				})
+			}
 
-				// Construct the full message to return
-				dbMessage := &Message{
-					ID:             messageID,
-					ChannelID:      msg.channelID,
-					SubchannelID:   msg.subchannelID,
-					ParentID:       msg.parentID,
-					AuthorUserID:   msg.authorUserID,
-					AuthorNickname: msg.authorNickname,
-					Content:        msg.content,
-					CreatedAt:      msg.timestamp,
-					EditedAt:       nil,
-					DeletedAt:      nil,
-				}
+			if len(validMessages) > 0 {
+				// SQLite 3.32.0+ has a limit of 32766 parameters per query
+				// With 9 columns, we can insert max 3640 rows per batch (32766/9 = 3640)
+				const maxRowsPerBatch = 3640
 
-				// Send success with full message
-				messageResults[msg.resultIndex] <- messageResult{messageID: messageID, message: dbMessage}
+				// Process in chunks
+				for chunkStart := 0; chunkStart < len(validMessages); chunkStart += maxRowsPerBatch {
+					chunkEnd := chunkStart + maxRowsPerBatch
+					if chunkEnd > len(validMessages) {
+						chunkEnd = len(validMessages)
+					}
+					chunk := validMessages[chunkStart:chunkEnd]
+
+					// Build batch INSERT for this chunk
+					placeholders := make([]byte, 0, len(chunk)*30)
+					args := make([]interface{}, 0, len(chunk)*9)
+
+					for i, m := range chunk {
+						if i > 0 {
+							placeholders = append(placeholders, ',')
+						}
+						placeholders = append(placeholders, '(', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ')')
+
+						args = append(args, m.messageID, m.msg.channelID, m.subchannelIDVal, m.parentIDVal, m.threadRootIDVal, m.authorUserIDVal, m.msg.authorNickname, m.msg.content, m.msg.timestamp)
+					}
+
+					query := "INSERT INTO Message (id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname, content, created_at) VALUES " + string(placeholders)
+					_, err := tx.Exec(query, args...)
+					if err != nil {
+						log.Printf("WriteBuffer: failed to batch insert messages (chunk %d-%d): %v", chunkStart, chunkEnd, err)
+						for _, m := range chunk {
+							messageResults[m.msg.resultIndex] <- messageResult{err: err}
+						}
+					} else {
+						// Send success with full message for each
+						for _, m := range chunk {
+							var threadRootID *int64
+							if m.threadRootIDVal.Valid {
+								threadRootID = &m.threadRootIDVal.Int64
+							}
+
+							dbMessage := &Message{
+								ID:             m.messageID,
+								ChannelID:      m.msg.channelID,
+								SubchannelID:   m.msg.subchannelID,
+								ParentID:       m.msg.parentID,
+								ThreadRootID:   threadRootID,
+								AuthorUserID:   m.msg.authorUserID,
+								AuthorNickname: m.msg.authorNickname,
+								Content:        m.msg.content,
+								CreatedAt:      m.msg.timestamp,
+								EditedAt:       nil,
+								DeletedAt:      nil,
+							}
+
+							messageResults[m.msg.resultIndex] <- messageResult{messageID: m.messageID, message: dbMessage}
+						}
+					}
+				}
 			}
 		}
+
+		messageInsertTime = time.Since(opStart)
 	}
 
 	// Commit the single transaction
@@ -410,10 +577,16 @@ func (wb *WriteBuffer) flush() {
 	elapsed := time.Since(start)
 	txTime := elapsed - lockWait
 
-	// Only log slow flushes (those that exceed the flush interval)
-	if elapsed > wb.flushInterval {
-		log.Printf("WriteBuffer: flushed %d items (session_create:%d, session_activity:%d, nickname_update:%d, session_deletion:%d, message_insert:%d) lock_wait=%v tx_time=%v total=%v",
-			totalItems, sessionCreateCount, sessionCount, nicknameCount, deletionCount, messageCount, lockWait, txTime, elapsed)
+	// Log slow batches (taking longer than interval) to help diagnose issues
+	if elapsed > wb.interval {
+		log.Printf("WriteBuffer: flushed %d items (session_create:%d/%v, session_activity:%d/%v, nickname_update:%d/%v, session_deletion:%d/%v, message_insert:%d/%v) lock_wait=%v tx_time=%v total=%v interval:%v",
+			totalItems,
+			sessionCreateCount, sessionCreateTime,
+			sessionCount, sessionUpdateTime,
+			nicknameCount, nicknameUpdateTime,
+			deletionCount, sessionDeleteTime,
+			messageCount, messageInsertTime,
+			lockWait, txTime, elapsed, wb.interval)
 	}
 }
 
@@ -421,4 +594,33 @@ func (wb *WriteBuffer) flush() {
 func (wb *WriteBuffer) Close() {
 	close(wb.shutdown)
 	wb.wg.Wait()
+}
+
+// isConnAlive checks if a connection is still open by attempting a non-blocking read
+func isConnAlive(conn net.Conn) bool {
+	// Set a very short read deadline to detect closed connections
+	conn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
+	defer conn.SetReadDeadline(time.Time{}) // Reset to no deadline
+
+	var probe [1]byte
+	_, err := conn.Read(probe[:])
+
+	if err == nil {
+		// Client sent data before SERVER_CONFIG - protocol violation but connection is alive
+		return true
+	}
+
+	// Check error type
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		// Timeout means connection is alive (client waiting for us)
+		return true
+	}
+
+	// Check for common disconnection errors
+	if errors.Is(err, io.EOF) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		return false
+	}
+
+	// Any other error - assume dead to be safe
+	return false
 }

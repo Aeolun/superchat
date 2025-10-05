@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -154,11 +155,13 @@ func (s *Server) handleSSHSession(channel ssh.Channel) {
 	}
 	defer s.sessions.RemoveSession(sess.ID)
 
-	log.Printf("New SSH connection (session %d)", sess.ID)
+	// Track connection for periodic metrics
+	s.connectionsSinceReport.Add(1)
+	debugLog.Printf("New SSH connection (session %d)", sess.ID)
 
 	// Send SERVER_CONFIG immediately after connection
 	if err := s.sendServerConfig(sess); err != nil {
-		log.Printf("Failed to send SERVER_CONFIG to session %d: %v", sess.ID, err)
+		// Debug log already shows the send attempt, just return on error
 		return
 	}
 
@@ -167,23 +170,39 @@ func (s *Server) handleSSHSession(channel ssh.Channel) {
 		// Read frame
 		frame, err := protocol.DecodeFrame(conn)
 		if err != nil {
-			if err == io.EOF {
-				log.Printf("Session %d disconnected", sess.ID)
-			} else {
-				log.Printf("Session %d read error: %v", sess.ID, err)
+			// Check if session still exists (if not, it was closed by stale cleanup)
+			_, exists := s.sessions.GetSession(sess.ID)
+
+			// Remove from sessions map immediately to prevent broadcast attempts
+			s.sessions.RemoveSession(sess.ID)
+
+			// Only log if we're the ones who discovered the error (session existed)
+			if exists {
+				s.disconnectionsSinceReport.Add(1)
+				if err == io.EOF {
+					debugLog.Printf("Session %d: Client disconnected (message loop read)", sess.ID)
+				} else {
+					debugLog.Printf("Session %d: Message loop read error: %v", sess.ID, err)
+				}
 			}
 			return
 		}
 
 		debugLog.Printf("Session %d ← RECV: Type=0x%02X Flags=0x%02X PayloadLen=%d", sess.ID, frame.Type, frame.Flags, len(frame.Payload))
 
-		// Update session activity (buffered write)
-		s.writeBuffer.UpdateSessionActivity(sess.DBSessionID, time.Now().UnixMilli())
+		// Update session activity (buffered write, rate-limited to half of session timeout)
+		s.sessions.UpdateSessionActivity(sess, time.Now().UnixMilli())
 
 		// Handle message
 		if err := s.handleMessage(sess, frame); err != nil {
+			// If it's a graceful disconnect, exit cleanly
+			if errors.Is(err, ErrClientDisconnecting) {
+				s.disconnectionsSinceReport.Add(1)
+				debugLog.Printf("Session %d disconnected gracefully", sess.ID)
+				return
+			}
+			// Log and send error response for other errors
 			log.Printf("Session %d handle error: %v", sess.ID, err)
-			// Send error response
 			s.sendError(sess, 9000, fmt.Sprintf("Internal error: %v", err))
 		}
 	}

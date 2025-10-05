@@ -9,15 +9,19 @@ import (
 
 // Message type constants (Client → Server)
 const (
-	TypeSetNickname   = 0x02
-	TypeListChannels  = 0x04
-	TypeJoinChannel   = 0x05
-	TypeLeaveChannel  = 0x06
-	TypeListMessages  = 0x09
-	TypePostMessage   = 0x0A
-	TypeDeleteMessage = 0x0C
-	TypePing          = 0x10
-	TypeDisconnect    = 0x11
+	TypeSetNickname        = 0x02
+	TypeListChannels       = 0x04
+	TypeJoinChannel        = 0x05
+	TypeLeaveChannel       = 0x06
+	TypeListMessages       = 0x09
+	TypePostMessage        = 0x0A
+	TypeDeleteMessage      = 0x0C
+	TypePing               = 0x10
+	TypeDisconnect         = 0x11
+	TypeSubscribeThread    = 0x51
+	TypeUnsubscribeThread  = 0x52
+	TypeSubscribeChannel   = 0x53
+	TypeUnsubscribeChannel = 0x54
 )
 
 // Message type constants (Server → Client)
@@ -34,6 +38,7 @@ const (
 	TypePong             = 0x90
 	TypeError            = 0x91
 	TypeServerConfig     = 0x98
+	TypeSubscribeOk      = 0x99
 )
 
 // Error codes
@@ -53,10 +58,14 @@ const (
 	ErrCodeNotFound        = 4000
 	ErrCodeChannelNotFound = 4001
 	ErrCodeMessageNotFound = 4002
+	ErrCodeThreadNotFound  = 4003
+	ErrCodeSubchannelNotFound = 4004
 
 	// Rate limit errors (5xxx)
 	ErrCodeRateLimitExceeded = 5000
 	ErrCodeMessageRateLimit  = 5001
+	ErrCodeThreadSubscriptionLimit = 5004
+	ErrCodeChannelSubscriptionLimit = 5005
 
 	// Validation errors (6xxx)
 	ErrCodeInvalidInput   = 6000
@@ -929,12 +938,14 @@ func (m *ErrorMessage) Decode(payload []byte) error {
 
 // ServerConfigMessage (0x98) - Server configuration and limits
 type ServerConfigMessage struct {
-	ProtocolVersion       uint8
-	MaxMessageRate        uint16
-	MaxChannelCreates     uint16
-	InactiveCleanupDays   uint16
-	MaxConnectionsPerIP   uint8
-	MaxMessageLength      uint32
+	ProtocolVersion         uint8
+	MaxMessageRate          uint16
+	MaxChannelCreates       uint16
+	InactiveCleanupDays     uint16
+	MaxConnectionsPerIP     uint8
+	MaxMessageLength        uint32
+	MaxThreadSubscriptions  uint16
+	MaxChannelSubscriptions uint16
 }
 
 func (m *ServerConfigMessage) EncodeTo(w io.Writer) error {
@@ -953,7 +964,13 @@ func (m *ServerConfigMessage) EncodeTo(w io.Writer) error {
 	if err := WriteUint8(w, m.MaxConnectionsPerIP); err != nil {
 		return err
 	}
-	return WriteUint32(w, m.MaxMessageLength)
+	if err := WriteUint32(w, m.MaxMessageLength); err != nil {
+		return err
+	}
+	if err := WriteUint16(w, m.MaxThreadSubscriptions); err != nil {
+		return err
+	}
+	return WriteUint16(w, m.MaxChannelSubscriptions)
 }
 
 func (m *ServerConfigMessage) Encode() ([]byte, error) {
@@ -990,6 +1007,14 @@ func (m *ServerConfigMessage) Decode(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	maxThreadSubs, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+	maxChannelSubs, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
 
 	m.ProtocolVersion = protocolVersion
 	m.MaxMessageRate = maxMessageRate
@@ -997,6 +1022,8 @@ func (m *ServerConfigMessage) Decode(payload []byte) error {
 	m.InactiveCleanupDays = inactiveCleanup
 	m.MaxConnectionsPerIP = maxConnsPerIP
 	m.MaxMessageLength = maxMsgLen
+	m.MaxThreadSubscriptions = maxThreadSubs
+	m.MaxChannelSubscriptions = maxChannelSubs
 	return nil
 }
 
@@ -1117,5 +1144,176 @@ func (m *DisconnectMessage) Encode() ([]byte, error) {
 
 func (m *DisconnectMessage) Decode(payload []byte) error {
 	// No payload to decode
+	return nil
+}
+
+// SubscribeThreadMessage (0x51) - Subscribe to a thread
+type SubscribeThreadMessage struct {
+	ThreadID uint64
+}
+
+func (m *SubscribeThreadMessage) EncodeTo(w io.Writer) error {
+	return WriteUint64(w, m.ThreadID)
+}
+
+func (m *SubscribeThreadMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *SubscribeThreadMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	threadID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	m.ThreadID = threadID
+	return nil
+}
+
+// UnsubscribeThreadMessage (0x52) - Unsubscribe from a thread
+type UnsubscribeThreadMessage struct {
+	ThreadID uint64
+}
+
+func (m *UnsubscribeThreadMessage) EncodeTo(w io.Writer) error {
+	return WriteUint64(w, m.ThreadID)
+}
+
+func (m *UnsubscribeThreadMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UnsubscribeThreadMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	threadID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	m.ThreadID = threadID
+	return nil
+}
+
+// SubscribeChannelMessage (0x53) - Subscribe to a channel/subchannel
+type SubscribeChannelMessage struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+}
+
+func (m *SubscribeChannelMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	return WriteOptionalUint64(w, m.SubchannelID)
+}
+
+func (m *SubscribeChannelMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *SubscribeChannelMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	m.ChannelID = channelID
+	m.SubchannelID = subchannelID
+	return nil
+}
+
+// UnsubscribeChannelMessage (0x54) - Unsubscribe from a channel/subchannel
+type UnsubscribeChannelMessage struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+}
+
+func (m *UnsubscribeChannelMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	return WriteOptionalUint64(w, m.SubchannelID)
+}
+
+func (m *UnsubscribeChannelMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UnsubscribeChannelMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	m.ChannelID = channelID
+	m.SubchannelID = subchannelID
+	return nil
+}
+
+// SubscribeOkMessage (0x99) - Subscription confirmed
+type SubscribeOkMessage struct {
+	Type         uint8   // 1=thread, 2=channel
+	ID           uint64  // thread_id or channel_id
+	SubchannelID *uint64 // Present if subscribing to subchannel
+}
+
+func (m *SubscribeOkMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint8(w, m.Type); err != nil {
+		return err
+	}
+	if err := WriteUint64(w, m.ID); err != nil {
+		return err
+	}
+	return WriteOptionalUint64(w, m.SubchannelID)
+}
+
+func (m *SubscribeOkMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *SubscribeOkMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	subType, err := ReadUint8(buf)
+	if err != nil {
+		return err
+	}
+	id, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	m.Type = subType
+	m.ID = id
+	m.SubchannelID = subchannelID
 	return nil
 }

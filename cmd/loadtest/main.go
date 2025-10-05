@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"os"
@@ -31,7 +32,14 @@ func init() {
 	if err != nil {
 		log.Fatalf("Failed to load words.txt: %v", err)
 	}
-	usernameWords = strings.Fields(string(wordsData))
+	// Split by newlines and filter out empty lines
+	lines := strings.Split(string(wordsData), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			usernameWords = append(usernameWords, line)
+		}
+	}
 	if len(usernameWords) == 0 {
 		log.Fatal("words.txt is empty")
 	}
@@ -95,6 +103,7 @@ type Stats struct {
 	messagesFailed    atomic.Int64
 	totalResponseTime atomic.Int64 // in microseconds
 	connectionErrors  atomic.Int64
+	successfulClients atomic.Int64 // clients that successfully connected and started running
 
 	// Detailed failure tracking
 	postFailures     atomic.Int64
@@ -149,13 +158,27 @@ func (s *Stats) snapshot() (posted, failed, connErrors int64, avgResponseUs floa
 
 // BotClient represents a fake client for load testing
 type BotClient struct {
-	id         int
-	nickname   string
-	conn       *client.Connection
-	stats      *Stats
-	channelID  uint64
-	messages   []uint64 // Cache of message IDs we've seen
-	messagesMu sync.Mutex
+	id                 int
+	nickname           string
+	conn               *client.Connection
+	stats              *Stats
+	channelID          uint64
+	messages           []uint64 // Cache of message IDs we've seen
+	messagesMu         sync.Mutex
+	currentThreadID    *uint64 // Currently subscribed thread (nil if not subscribed)
+	currentThreadIDMu  sync.Mutex
+
+	// Async message handling channels
+	serverConfig    chan *protocol.Frame
+	nicknameResp    chan *protocol.Frame
+	channelList     chan *protocol.Frame
+	joinResp        chan *protocol.Frame
+	subscribeResp   chan *protocol.Frame
+	postResp        chan *protocol.Frame
+	messageList     chan *protocol.Frame
+	errors          chan *protocol.Frame
+	stopReader      chan struct{}
+	readerStopped   chan struct{}
 }
 
 func NewBotClient(id int, serverAddr string, stats *Stats) (*BotClient, error) {
@@ -166,16 +189,99 @@ func NewBotClient(id int, serverAddr string, stats *Stats) (*BotClient, error) {
 		return nil, fmt.Errorf("failed to create connection: %w", err)
 	}
 
+	// Enable connection logging for debugging (writes to loadtest_debug.log only)
+	// Create a prefixed logger for this bot
+	botLogger := log.New(debugLogger.Writer(), fmt.Sprintf("[Bot %d] ", id), log.LstdFlags|log.Lmicroseconds)
+	conn.SetLogger(botLogger)
+
 	// Disable auto-reconnect for predictable load testing
 	conn.DisableAutoReconnect()
 
 	return &BotClient{
-		id:       id,
-		nickname: nickname,
-		conn:     conn,
-		stats:    stats,
-		messages: make([]uint64, 0, 100),
+		id:            id,
+		nickname:      nickname,
+		conn:          conn,
+		stats:         stats,
+		messages:      make([]uint64, 0, 100),
+		serverConfig:  make(chan *protocol.Frame, 1),
+		nicknameResp:  make(chan *protocol.Frame, 1),
+		channelList:   make(chan *protocol.Frame, 1),
+		joinResp:      make(chan *protocol.Frame, 1),
+		subscribeResp: make(chan *protocol.Frame, 1),
+		postResp:      make(chan *protocol.Frame, 1),
+		messageList:   make(chan *protocol.Frame, 1),
+		errors:        make(chan *protocol.Frame, 10),
+		stopReader:    make(chan struct{}),
+		readerStopped: make(chan struct{}),
 	}, nil
+}
+
+// startMessageReader starts a background goroutine that dispatches incoming messages
+func (bc *BotClient) startMessageReader() {
+	go func() {
+		defer close(bc.readerStopped)
+
+		for {
+			select {
+			case <-bc.stopReader:
+				return
+			case frame := <-bc.conn.Incoming():
+				if frame == nil {
+					// Connection closed
+					return
+				}
+
+				// Dispatch to appropriate channel
+				switch frame.Type {
+				case protocol.TypeServerConfig:
+					select {
+					case bc.serverConfig <- frame:
+					default:
+						// Drop if channel full
+					}
+				case protocol.TypeNicknameResponse:
+					select {
+					case bc.nicknameResp <- frame:
+					default:
+					}
+				case protocol.TypeChannelList:
+					select {
+					case bc.channelList <- frame:
+					default:
+					}
+				case protocol.TypeJoinResponse:
+					select {
+					case bc.joinResp <- frame:
+					default:
+					}
+				case protocol.TypeSubscribeOk:
+					select {
+					case bc.subscribeResp <- frame:
+					default:
+					}
+				case protocol.TypeMessagePosted:
+					select {
+					case bc.postResp <- frame:
+					default:
+					}
+				case protocol.TypeMessageList:
+					select {
+					case bc.messageList <- frame:
+					default:
+					}
+				case protocol.TypeError:
+					select {
+					case bc.errors <- frame:
+					default:
+					}
+				case protocol.TypeNewMessage:
+					// Silently discard broadcasts
+				default:
+					// Ignore unknown message types
+				}
+			}
+		}
+	}()
 }
 
 func (bc *BotClient) Connect() error {
@@ -184,12 +290,13 @@ func (bc *BotClient) Connect() error {
 		return err
 	}
 
+	// Start async message reader
+	bc.startMessageReader()
+
 	// Wait for server config
 	select {
-	case frame := <-bc.conn.Incoming():
-		if frame.Type != protocol.TypeServerConfig {
-			return fmt.Errorf("expected server config, got type 0x%02X", frame.Type)
-		}
+	case <-bc.serverConfig:
+		// Got server config
 	case <-time.After(5 * time.Second):
 		return fmt.Errorf("timeout waiting for server config")
 	}
@@ -201,32 +308,22 @@ func (bc *BotClient) Connect() error {
 	}
 
 	// Wait for nickname response
-	timeout := time.After(5 * time.Second)
-	for {
-		select {
-		case frame := <-bc.conn.Incoming():
-			if frame == nil {
-				return fmt.Errorf("connection closed while waiting for nickname response")
-			}
-			if frame.Type == protocol.TypeError {
-				return fmt.Errorf("nickname rejected")
-			}
-			if frame.Type == protocol.TypeNicknameResponse {
-				// Check if nickname was accepted
-				resp := &protocol.NicknameResponseMessage{}
-				if err := resp.Decode(frame.Payload); err != nil {
-					return fmt.Errorf("failed to decode nickname response: %w", err)
-				}
-				if !resp.Success {
-					return fmt.Errorf("nickname rejected: %s", resp.Message)
-				}
-				return nil
-			}
-			// Ignore other message types (broadcasts, etc.) and keep waiting
-			// log.Printf("[Bot %d] Ignoring message type 0x%02X while waiting for nickname response", bc.id, frame.Type)
-		case <-timeout:
-			return fmt.Errorf("timeout waiting for nickname response")
+	select {
+	case frame := <-bc.nicknameResp:
+		resp := &protocol.NicknameResponseMessage{}
+		if err := resp.Decode(frame.Payload); err != nil {
+			return fmt.Errorf("failed to decode nickname response: %w", err)
 		}
+		if !resp.Success {
+			return fmt.Errorf("nickname rejected: %s", resp.Message)
+		}
+		return nil
+	case frame := <-bc.errors:
+		errMsg := &protocol.ErrorMessage{}
+		errMsg.Decode(frame.Payload)
+		return fmt.Errorf("nickname rejected: %s", errMsg.Message)
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout waiting for nickname response")
 	}
 }
 
@@ -238,27 +335,18 @@ func (bc *BotClient) Setup() error {
 
 	// Wait for channel list
 	var channels []protocol.Channel
-	timeout := time.After(5 * time.Second)
-	for {
-		select {
-		case frame := <-bc.conn.Incoming():
-			if frame == nil {
-				return fmt.Errorf("connection closed while waiting for channel list")
-			}
-			if frame.Type == protocol.TypeChannelList {
-				resp := &protocol.ChannelListMessage{}
-				if err := resp.Decode(frame.Payload); err != nil {
-					return err
-				}
-				channels = resp.Channels
-				goto gotChannelList
-			}
-			// Ignore other message types and keep waiting
-		case <-timeout:
-			return fmt.Errorf("timeout waiting for channel list")
+	select {
+	case frame := <-bc.channelList:
+		resp := &protocol.ChannelListMessage{}
+		if err := resp.Decode(frame.Payload); err != nil {
+			return err
 		}
+		channels = resp.Channels
+	case <-bc.errors:
+		return fmt.Errorf("failed to list channels")
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout waiting for channel list")
 	}
-gotChannelList:
 
 	if len(channels) == 0 {
 		return fmt.Errorf("no channels available")
@@ -275,24 +363,35 @@ gotChannelList:
 	}
 
 	// Wait for join response
-	timeout = time.After(5 * time.Second)
-	for {
-		select {
-		case frame := <-bc.conn.Incoming():
-			if frame == nil {
-				return fmt.Errorf("connection closed while waiting for join response")
-			}
-			if frame.Type == protocol.TypeError {
-				return fmt.Errorf("failed to join channel")
-			}
-			if frame.Type == protocol.TypeJoinResponse {
-				return nil
-			}
-			// Ignore other message types and keep waiting
-		case <-timeout:
-			return fmt.Errorf("timeout waiting for join response")
-		}
+	select {
+	case <-bc.joinResp:
+		// Joined successfully
+	case <-bc.errors:
+		return fmt.Errorf("failed to join channel")
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout waiting for join response")
 	}
+
+	// Subscribe to channel for new thread notifications
+	subscribeMsg := &protocol.SubscribeChannelMessage{
+		ChannelID:    channel.ID,
+		SubchannelID: nil,
+	}
+	if err := bc.conn.SendMessage(protocol.TypeSubscribeChannel, subscribeMsg); err != nil {
+		return err
+	}
+
+	// Wait for subscribe confirmation (not critical if it fails)
+	select {
+	case <-bc.subscribeResp:
+		// Subscribed successfully
+	case <-bc.errors:
+		// Subscription failed, but not critical - continue anyway
+	case <-time.After(5 * time.Second):
+		// Timeout on subscribe is not critical - continue anyway
+	}
+
+	return nil
 }
 
 func (bc *BotClient) PostRandomMessage() error {
@@ -302,6 +401,7 @@ func (bc *BotClient) PostRandomMessage() error {
 	var parentID *uint64
 	if !createNewThread && len(bc.messages) > 0 {
 		// Pick random message to reply to
+		// NOTE: All cached messages are thread roots (from FetchMessages)
 		bc.messagesMu.Lock()
 		randomMsg := bc.messages[rand.Intn(len(bc.messages))]
 		bc.messagesMu.Unlock()
@@ -338,48 +438,35 @@ func (bc *BotClient) PostRandomMessage() error {
 
 	// Wait for response
 	select {
-	case frame := <-bc.conn.Incoming():
-		// Check if channel was closed (connection died)
-		if frame == nil {
-			bc.stats.recordDisconnection()
-			return fmt.Errorf("connection closed")
-		}
-
+	case frame := <-bc.postResp:
 		responseTime := time.Since(start).Microseconds()
-
-		if frame.Type == protocol.TypeError {
-			errMsg := &protocol.ErrorMessage{}
-			if decodeErr := errMsg.Decode(frame.Payload); decodeErr == nil {
-				log.Printf("[Bot %d] POST failed with error %d: %s", bc.id, errMsg.ErrorCode, errMsg.Message)
-			}
-			bc.stats.recordPostFailure()
-			return fmt.Errorf("post message failed")
+		resp := &protocol.MessagePostedMessage{}
+		if err := resp.Decode(frame.Payload); err == nil {
+			// Cache the message ID
+			bc.messagesMu.Lock()
+			bc.messages = append(bc.messages, resp.MessageID)
+			bc.messagesMu.Unlock()
 		}
-
-		if frame.Type == protocol.TypeMessagePosted {
-			resp := &protocol.MessagePostedMessage{}
-			if err := resp.Decode(frame.Payload); err == nil {
-				// Cache the message ID
-				bc.messagesMu.Lock()
-				bc.messages = append(bc.messages, resp.MessageID)
-				bc.messagesMu.Unlock()
-			}
-		}
-
 		bc.stats.recordSuccess(responseTime)
+		return nil
+	case frame := <-bc.errors:
+		errMsg := &protocol.ErrorMessage{}
+		if decodeErr := errMsg.Decode(frame.Payload); decodeErr == nil {
+			log.Printf("[Bot %d] POST failed with error %d: %s", bc.id, errMsg.ErrorCode, errMsg.Message)
+		}
+		bc.stats.recordPostFailure()
+		return fmt.Errorf("post message failed")
 	case <-time.After(10 * time.Second):
 		bc.stats.recordTimeout()
 		return fmt.Errorf("timeout waiting for post response")
 	}
-
-	return nil
 }
 
 func (bc *BotClient) FetchMessages() error {
 	// Periodically fetch messages to update our cache
 	listMsg := &protocol.ListMessagesMessage{
 		ChannelID: bc.channelID,
-		ParentID:  nil,
+		ParentID:  nil, // Fetch root messages only (thread starters)
 		Limit:     50,
 	}
 
@@ -389,31 +476,68 @@ func (bc *BotClient) FetchMessages() error {
 
 	// Wait for response
 	select {
-	case frame := <-bc.conn.Incoming():
-		if frame.Type == protocol.TypeMessageList {
-			resp := &protocol.MessageListMessage{}
-			if err := resp.Decode(frame.Payload); err == nil {
-				bc.messagesMu.Lock()
-				for _, msg := range resp.Messages {
-					bc.messages = append(bc.messages, msg.ID)
-				}
-				bc.messagesMu.Unlock()
+	case frame := <-bc.messageList:
+		resp := &protocol.MessageListMessage{}
+		if err := resp.Decode(frame.Payload); err == nil {
+			bc.messagesMu.Lock()
+			// Update cache with root messages
+			bc.messages = bc.messages[:0] // Clear old messages
+			for _, msg := range resp.Messages {
+				bc.messages = append(bc.messages, msg.ID)
+			}
+
+			// Pick a random thread to subscribe to
+			var newThreadID *uint64
+			if len(bc.messages) > 0 {
+				randomThread := bc.messages[rand.Intn(len(bc.messages))]
+				newThreadID = &randomThread
+			}
+			bc.messagesMu.Unlock()
+
+			// Handle thread subscription switching
+			bc.currentThreadIDMu.Lock()
+			oldThreadID := bc.currentThreadID
+			bc.currentThreadID = newThreadID
+			bc.currentThreadIDMu.Unlock()
+
+			// Unsubscribe from old thread
+			if oldThreadID != nil {
+				unsubMsg := &protocol.UnsubscribeThreadMessage{ThreadID: *oldThreadID}
+				bc.conn.SendMessage(protocol.TypeUnsubscribeThread, unsubMsg)
+			}
+
+			// Subscribe to new thread
+			if newThreadID != nil {
+				subMsg := &protocol.SubscribeThreadMessage{ThreadID: *newThreadID}
+				bc.conn.SendMessage(protocol.TypeSubscribeThread, subMsg)
 			}
 		}
+		return nil
+	case <-bc.errors:
+		bc.stats.recordFetchFailure()
+		return fmt.Errorf("failed to fetch messages")
 	case <-time.After(5 * time.Second):
 		bc.stats.recordFetchFailure()
 		return fmt.Errorf("timeout fetching messages")
 	}
-
-	return nil
 }
 
-func (bc *BotClient) Run(duration time.Duration, minDelay, maxDelay time.Duration, shutdownDelay time.Duration) {
+func (bc *BotClient) Run(duration time.Duration, minDelay, maxDelay time.Duration, shutdownDelay time.Duration, disconnectTimes chan<- time.Time) {
 	defer func() {
+		// Stop message reader
+		close(bc.stopReader)
+		<-bc.readerStopped
+
 		// Send graceful disconnect before closing
 		bc.conn.SendMessage(protocol.TypeDisconnect, &protocol.DisconnectMessage{})
 		time.Sleep(100 * time.Millisecond)
 		bc.conn.Close()
+
+		// Record disconnect time
+		select {
+		case disconnectTimes <- time.Now():
+		default:
+		}
 	}()
 	defer func() {
 		if r := recover(); r != nil {
@@ -461,6 +585,31 @@ func (bc *BotClient) Run(duration time.Duration, minDelay, maxDelay time.Duratio
 	time.Sleep(100 * time.Millisecond)
 }
 
+var debugLogger *log.Logger
+
+func initLogging() error {
+	// Create loadtest.log file (truncate on each run to avoid confusion)
+	logFile, err := os.OpenFile("loadtest.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		return fmt.Errorf("failed to create loadtest.log: %w", err)
+	}
+
+	// Create loadtest_debug.log file for detailed bot communication logs
+	debugLogFile, err := os.OpenFile("loadtest_debug.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		return fmt.Errorf("failed to create loadtest_debug.log: %w", err)
+	}
+
+	// Configure standard log to write to both stdout and file
+	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	log.SetFlags(log.LstdFlags)
+
+	// Configure debug logger to write only to debug file
+	debugLogger = log.New(debugLogFile, "", log.LstdFlags|log.Lmicroseconds)
+
+	return nil
+}
+
 func main() {
 	// Command-line flags
 	serverAddr := flag.String("server", "localhost:6465", "Server address (host:port)")
@@ -469,6 +618,14 @@ func main() {
 	minDelay := flag.Duration("min-delay", 100*time.Millisecond, "Minimum delay between posts")
 	maxDelay := flag.Duration("max-delay", 1*time.Second, "Maximum delay between posts")
 	flag.Parse()
+
+	// Initialize logging to both stdout and file
+	if err := initLogging(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logging: %v\n", err)
+		os.Exit(1)
+	}
+	log.Printf("Load test logs will be written to loadtest.log")
+	log.Printf("Detailed bot communication logs in loadtest_debug.log")
 
 	// Calculate stagger delay: ramp up over 25% of test duration
 	rampUpDuration := *duration / 4
@@ -511,6 +668,13 @@ func main() {
 		}
 	}()
 
+	// Track ramp-up and ramp-down timing
+	rampUpStart := time.Now()
+	var firstConnectTime, lastConnectTime atomic.Value
+	var firstDisconnectTime, lastDisconnectTime atomic.Value
+	connectTimes := make(chan time.Time, *numClients)
+	disconnectTimes := make(chan time.Time, *numClients)
+
 	// Spawn clients
 	for i := 0; i < *numClients; i++ {
 		wg.Add(1)
@@ -534,7 +698,23 @@ func main() {
 
 			if err := bot.Setup(); err != nil {
 				stats.recordConnectionError()
+				// Clean up connection if setup fails
+				close(bot.stopReader)
+				<-bot.readerStopped
+				bot.conn.SendMessage(protocol.TypeDisconnect, &protocol.DisconnectMessage{})
+				time.Sleep(100 * time.Millisecond)
+				bot.conn.Close()
 				return
+			}
+
+			// Record successful client connection
+			stats.successfulClients.Add(1)
+
+			// Record connection time
+			connectTime := time.Now()
+			select {
+			case connectTimes <- connectTime:
+			default:
 			}
 
 			// Only log every 100th client during ramp-up
@@ -542,12 +722,31 @@ func main() {
 				log.Printf("[Bot %d] Connected", id)
 			}
 
-			bot.Run(*duration, *minDelay, *maxDelay, shutdownDelay)
+			bot.Run(*duration, *minDelay, *maxDelay, shutdownDelay, disconnectTimes)
 		}(i, shutdownDelay)
 
 		// Stagger client connections based on calculated delay
 		time.Sleep(staggerDelay)
 	}
+
+	// Track connection and disconnection times in background
+	go func() {
+		for t := range connectTimes {
+			if firstConnectTime.Load() == nil {
+				firstConnectTime.Store(t)
+			}
+			lastConnectTime.Store(t)
+		}
+	}()
+
+	go func() {
+		for t := range disconnectTimes {
+			if firstDisconnectTime.Load() == nil {
+				firstDisconnectTime.Store(t)
+			}
+			lastDisconnectTime.Store(t)
+		}
+	}()
 
 	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -562,18 +761,75 @@ func main() {
 	// Wait for all clients to finish
 	wg.Wait()
 	close(stopStats)
+	close(connectTimes)
+	close(disconnectTimes)
+
+	// Check ramp-up timing
+	if lastConnectTime.Load() != nil && firstConnectTime.Load() != nil {
+		first := firstConnectTime.Load().(time.Time)
+		last := lastConnectTime.Load().(time.Time)
+		actualRampUp := last.Sub(first)
+		expectedRampUp := rampUpDuration
+
+		tolerance := 1 * time.Second
+		withinTolerance := actualRampUp >= expectedRampUp-tolerance && actualRampUp <= expectedRampUp+tolerance
+
+		status := "✓"
+		if !withinTolerance {
+			status = "✗"
+		}
+
+		log.Printf("\n%s Ramp-up timing: expected %v, took %v (first: %v, last: %v)",
+			status, expectedRampUp.Round(time.Second), actualRampUp.Round(time.Second),
+			first.Sub(rampUpStart).Round(time.Millisecond), last.Sub(rampUpStart).Round(time.Millisecond))
+	}
+
+	// Check ramp-down timing
+	if lastDisconnectTime.Load() != nil && firstDisconnectTime.Load() != nil {
+		first := firstDisconnectTime.Load().(time.Time)
+		last := lastDisconnectTime.Load().(time.Time)
+		actualRampDown := last.Sub(first)
+		expectedRampDown := rampUpDuration // Same as ramp-up
+
+		tolerance := 1 * time.Second
+		withinTolerance := actualRampDown >= expectedRampDown-tolerance && actualRampDown <= expectedRampDown+tolerance
+
+		status := "✓"
+		if !withinTolerance {
+			status = "✗"
+		}
+
+		log.Printf("%s Ramp-down timing: expected %v, took %v (first: %v after start, last: %v after start)",
+			status, expectedRampDown.Round(time.Second), actualRampDown.Round(time.Second),
+			first.Sub(rampUpStart).Round(time.Second), last.Sub(rampUpStart).Round(time.Second))
+	}
+
+	// Total test duration (from first connect to last disconnect)
+	if firstConnectTime.Load() != nil && lastDisconnectTime.Load() != nil {
+		first := firstConnectTime.Load().(time.Time)
+		last := lastDisconnectTime.Load().(time.Time)
+		totalTestDuration := last.Sub(first)
+		expectedTotal := *duration + rampUpDuration // ramp-up + test duration, ramp-down overlaps
+		log.Printf("Total test duration: %v (expected: ~%v)\n",
+			totalTestDuration.Round(time.Second),
+			expectedTotal.Round(time.Second))
+	}
 
 	// Final stats
 	posted, failed, connErrors, avgUs := stats.snapshot()
+	successfulClients := stats.successfulClients.Load()
 	totalDuration := *duration
 	rate := float64(posted) / totalDuration.Seconds()
 	avgMs := avgUs / 1000.0
 
-	// Calculate expected throughput
+	// Calculate expected throughput based on successful clients
 	avgDelay := (*minDelay + *maxDelay) / 2
 	expectedPerClient := float64(totalDuration) / float64(avgDelay)
-	expectedTotal := expectedPerClient * float64(*numClients)
-	efficiency := float64(posted) / expectedTotal * 100
+	expectedTotal := expectedPerClient * float64(successfulClients)
+	efficiency := 0.0
+	if expectedTotal > 0 {
+		efficiency = float64(posted) / expectedTotal * 100
+	}
 
 	// Detailed failure breakdown
 	postFails := stats.postFailures.Load()
@@ -582,6 +838,7 @@ func main() {
 	disconnects := stats.disconnections.Load()
 
 	log.Printf("\n=== Final Results ===")
+	log.Printf("Clients: %d attempted, %d successful (%.1f%%)", *numClients, successfulClients, float64(successfulClients)/float64(*numClients)*100)
 	log.Printf("Duration: %v", totalDuration)
 	log.Printf("Messages posted: %d (%.1f/s)", posted, rate)
 	log.Printf("Messages failed: %d", failed)

@@ -36,3 +36,6 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+
+# Log files
+*.log

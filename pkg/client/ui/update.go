@@ -214,6 +214,7 @@ func (m Model) handleChannelListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(
 				m.sendJoinChannel(selectedChannel.ID),
 				m.requestThreadList(selectedChannel.ID),
+				m.sendSubscribeChannel(selectedChannel.ID),
 			)
 		}
 		return m, nil
@@ -304,7 +305,10 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirmingDelete = false
 			m.threadViewport.SetContent(m.buildThreadContent())
 			m.threadViewport.GotoTop()
-			return m, m.requestThreadReplies(selectedThread.ID)
+			return m, tea.Batch(
+				m.requestThreadReplies(selectedThread.ID),
+				m.sendSubscribeThread(selectedThread.ID),
+			)
 		}
 		return m, nil
 
@@ -335,15 +339,19 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Back to channel list
 		m.currentView = ViewChannelList
 		m.confirmingDelete = false
+		var cmd tea.Cmd
 		if m.currentChannel != nil {
-			m.sendLeaveChannel()
+			cmd = tea.Batch(
+				m.sendLeaveChannel(),
+				m.sendUnsubscribeChannel(m.currentChannel.ID),
+			)
 		}
 		m.currentChannel = nil
 		m.threads = []protocol.Message{}
 		m.threadCursor = 0
 		m.loadingMore = false
 		m.allThreadsLoaded = false
-		return m, nil
+		return m, cmd
 	}
 
 	return m, nil
@@ -446,11 +454,15 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		// Back to thread list
 		m.currentView = ViewThreadList
+		var cmd tea.Cmd
+		if m.currentThread != nil {
+			cmd = m.sendUnsubscribeThread(m.currentThread.ID)
+		}
 		m.threadReplies = []protocol.Message{}
 		m.replyCursor = 0
 		m.confirmingDelete = false
 		m.pendingDeleteID = 0
-		return m, nil
+		return m, cmd
 
 	default:
 		// Pass unhandled keys to viewport for scrolling (pgup/pgdown/etc)
@@ -568,6 +580,8 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleNewMessage(frame)
 	case protocol.TypeMessageDeleted:
 		return m.handleMessageDeleted(frame)
+	case protocol.TypeSubscribeOk:
+		return m.handleSubscribeOk(frame)
 	case protocol.TypeError:
 		return m.handleError(frame)
 	}
@@ -798,6 +812,21 @@ func (m Model) handleMessageDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 	return m, listenForServerFrames(m.conn)
 }
 
+// handleSubscribeOk processes SUBSCRIBE_OK confirmations
+func (m Model) handleSubscribeOk(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.SubscribeOkMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode subscribe OK: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	// Subscription confirmed - no user-visible action needed
+	// The subscription is now active on the server
+	_ = msg // silence unused variable warning
+
+	return m, listenForServerFrames(m.conn)
+}
+
 // handleError processes ERROR messages
 func (m Model) handleError(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.ErrorMessage{}
@@ -987,6 +1016,56 @@ func (m Model) sendPing() tea.Cmd {
 	}
 }
 
+func (m Model) sendSubscribeThread(threadID uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.SubscribeThreadMessage{
+			ThreadID: threadID,
+		}
+		if err := m.conn.SendMessage(protocol.TypeSubscribeThread, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendUnsubscribeThread(threadID uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.UnsubscribeThreadMessage{
+			ThreadID: threadID,
+		}
+		if err := m.conn.SendMessage(protocol.TypeUnsubscribeThread, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendSubscribeChannel(channelID uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.SubscribeChannelMessage{
+			ChannelID:    channelID,
+			SubchannelID: nil,
+		}
+		if err := m.conn.SendMessage(protocol.TypeSubscribeChannel, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendUnsubscribeChannel(channelID uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.UnsubscribeChannelMessage{
+			ChannelID:    channelID,
+			SubchannelID: nil,
+		}
+		if err := m.conn.SendMessage(protocol.TypeUnsubscribeChannel, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
 // markCurrentMessageAsRead removes the "new" indicator from the currently selected message
 func (m *Model) markCurrentMessageAsRead() {
 	if m.replyCursor == 0 && m.currentThread != nil {
@@ -1067,9 +1146,15 @@ func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.sendJoinChannel(m.currentChannel.ID))
 		cmds = append(cmds, m.requestThreadList(m.currentChannel.ID))
 
-		// If we're viewing a specific thread, reload replies
+		// Re-subscribe to channel if we're in thread list or thread view
+		if m.currentView == ViewThreadList || m.currentView == ViewThreadView {
+			cmds = append(cmds, m.sendSubscribeChannel(m.currentChannel.ID))
+		}
+
+		// If we're viewing a specific thread, reload replies and re-subscribe
 		if m.currentThread != nil && m.currentView == ViewThreadView {
 			cmds = append(cmds, m.requestThreadReplies(m.currentThread.ID))
+			cmds = append(cmds, m.sendSubscribeThread(m.currentThread.ID))
 		}
 	}
 
