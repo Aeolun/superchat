@@ -9,10 +9,13 @@ import (
 
 // Message type constants (Client → Server)
 const (
+	TypeAuthRequest        = 0x01
 	TypeSetNickname        = 0x02
+	TypeRegisterUser       = 0x03
 	TypeListChannels       = 0x04
 	TypeJoinChannel        = 0x05
 	TypeLeaveChannel       = 0x06
+	TypeCreateChannel      = 0x07
 	TypeListMessages       = 0x09
 	TypePostMessage        = 0x0A
 	TypeDeleteMessage      = 0x0C
@@ -26,19 +29,23 @@ const (
 
 // Message type constants (Server → Client)
 const (
-	TypeNicknameResponse = 0x82
-	TypeChannelList      = 0x84
-	TypeJoinResponse     = 0x85
-	TypeLeaveResponse    = 0x86
-	TypeMessageList      = 0x89
-	TypeMessagePosted    = 0x8A
-	TypeMessageEdited    = 0x8B
-	TypeMessageDeleted   = 0x8C
-	TypeNewMessage       = 0x8D
-	TypePong             = 0x90
-	TypeError            = 0x91
-	TypeServerConfig     = 0x98
-	TypeSubscribeOk      = 0x99
+	TypeAuthResponse      = 0x81
+	TypeNicknameResponse  = 0x82
+	TypeRegisterResponse  = 0x83
+	TypeChannelList       = 0x84
+	TypeJoinResponse      = 0x85
+	TypeLeaveResponse     = 0x86
+	TypeChannelCreated    = 0x87
+	TypeSubchannelCreated = 0x88
+	TypeMessageList       = 0x89
+	TypeMessagePosted     = 0x8A
+	TypeMessageEdited     = 0x8B
+	TypeMessageDeleted    = 0x8C
+	TypeNewMessage        = 0x8D
+	TypePong              = 0x90
+	TypeError             = 0x91
+	TypeServerConfig      = 0x98
+	TypeSubscribeOk       = 0x99
 )
 
 // Error codes
@@ -84,6 +91,96 @@ var (
 	ErrMessageTooLong   = errors.New("message content exceeds maximum length (4096 bytes)")
 	ErrEmptyContent     = errors.New("message content cannot be empty")
 )
+
+// AuthRequestMessage (0x01) - Authenticate with password
+type AuthRequestMessage struct {
+	Nickname string
+	Password string
+}
+
+func (m *AuthRequestMessage) EncodeTo(w io.Writer) error {
+	if err := WriteString(w, m.Nickname); err != nil {
+		return err
+	}
+	return WriteString(w, m.Password)
+}
+
+func (m *AuthRequestMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *AuthRequestMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	nickname, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	password, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Nickname = nickname
+	m.Password = password
+	return nil
+}
+
+// AuthResponseMessage (0x81) - Authentication result
+type AuthResponseMessage struct {
+	Success bool
+	UserID  uint64 // Only present if success=true
+	Message string
+}
+
+func (m *AuthResponseMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if m.Success {
+		if err := WriteUint64(w, m.UserID); err != nil {
+			return err
+		}
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *AuthResponseMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *AuthResponseMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+
+	if success {
+		userID, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		m.UserID = userID
+	}
+
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Message = message
+
+	return nil
+}
 
 // SetNicknameMessage (0x02) - Set/change nickname
 type SetNicknameMessage struct {
@@ -163,6 +260,87 @@ func (m *NicknameResponseMessage) Decode(payload []byte) error {
 
 	m.Success = success
 	m.Message = message
+	return nil
+}
+
+// RegisterUserMessage (0x03) - Register current nickname with password
+type RegisterUserMessage struct {
+	Password string
+}
+
+func (m *RegisterUserMessage) EncodeTo(w io.Writer) error {
+	return WriteString(w, m.Password)
+}
+
+func (m *RegisterUserMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *RegisterUserMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	password, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Password = password
+	return nil
+}
+
+// RegisterResponseMessage (0x83) - Registration result
+type RegisterResponseMessage struct {
+	Success bool
+	UserID  uint64 // Only present if success=true
+	Message string
+}
+
+func (m *RegisterResponseMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if m.Success {
+		if err := WriteUint64(w, m.UserID); err != nil {
+			return err
+		}
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *RegisterResponseMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *RegisterResponseMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+
+	if success {
+		userID, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		m.UserID = userID
+	}
+
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Message = message
+
 	return nil
 }
 
@@ -408,6 +586,165 @@ func (m *JoinResponseMessage) Decode(payload []byte) error {
 	return nil
 }
 
+// CreateChannelMessage (0x07) - Create a new channel (V2+, requires registered user)
+type CreateChannelMessage struct {
+	Name              string // URL-friendly name (e.g., "general", "random")
+	DisplayName       string // Human-readable name (e.g., "#general", "#random")
+	Description       *string
+	ChannelType       uint8  // 1=forum, 2=chat (V2+ only supports forum)
+	RetentionHours    uint32 // Message retention in hours
+}
+
+func (m *CreateChannelMessage) EncodeTo(w io.Writer) error {
+	if err := WriteString(w, m.Name); err != nil {
+		return err
+	}
+	if err := WriteString(w, m.DisplayName); err != nil {
+		return err
+	}
+	if err := WriteOptionalString(w, m.Description); err != nil {
+		return err
+	}
+	if err := WriteUint8(w, m.ChannelType); err != nil {
+		return err
+	}
+	return WriteUint32(w, m.RetentionHours)
+}
+
+func (m *CreateChannelMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *CreateChannelMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	name, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	displayName, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	description, err := ReadOptionalString(buf)
+	if err != nil {
+		return err
+	}
+	channelType, err := ReadUint8(buf)
+	if err != nil {
+		return err
+	}
+	retentionHours, err := ReadUint32(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Name = name
+	m.DisplayName = displayName
+	m.Description = description
+	m.ChannelType = channelType
+	m.RetentionHours = retentionHours
+	return nil
+}
+
+// ChannelCreatedMessage (0x87) - Response to CREATE_CHANNEL + broadcast to all connected clients
+// Hybrid message: sent to creator as confirmation, also broadcast to all others if success=true
+type ChannelCreatedMessage struct {
+	Success        bool
+	ChannelID      uint64 // Only present if Success=true
+	Name           string // Only present if Success=true
+	Description    string // Only present if Success=true
+	Type           uint8  // Only present if Success=true
+	RetentionHours uint32 // Only present if Success=true
+	Message        string // Error if failed, confirmation if success
+}
+
+func (m *ChannelCreatedMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+
+	// Only write channel data if success=true
+	if m.Success {
+		if err := WriteUint64(w, m.ChannelID); err != nil {
+			return err
+		}
+		if err := WriteString(w, m.Name); err != nil {
+			return err
+		}
+		if err := WriteString(w, m.Description); err != nil {
+			return err
+		}
+		if err := WriteUint8(w, m.Type); err != nil {
+			return err
+		}
+		if err := WriteUint32(w, m.RetentionHours); err != nil {
+			return err
+		}
+	}
+
+	return WriteString(w, m.Message)
+}
+
+func (m *ChannelCreatedMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ChannelCreatedMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+
+	// Only read channel data if success=true
+	if success {
+		channelID, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		name, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		description, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		channelType, err := ReadUint8(buf)
+		if err != nil {
+			return err
+		}
+		retentionHours, err := ReadUint32(buf)
+		if err != nil {
+			return err
+		}
+
+		m.ChannelID = channelID
+		m.Name = name
+		m.Description = description
+		m.Type = channelType
+		m.RetentionHours = retentionHours
+	}
+
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Message = message
+
+	return nil
+}
+
 // ListMessagesMessage (0x09) - Request messages
 type ListMessagesMessage struct {
 	ChannelID    uint64
@@ -479,7 +816,7 @@ type Message struct {
 	SubchannelID   *uint64
 	ParentID       *uint64
 	AuthorUserID   *uint64
-	AuthorNickname string
+	AuthorNickname string // Only populated for anonymous users (when AuthorUserID IS NULL)
 	Content        string
 	CreatedAt      time.Time
 	EditedAt       *time.Time

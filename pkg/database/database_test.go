@@ -20,7 +20,7 @@ func newTestDB(t *testing.T) *DB {
 func mustChannelID(t *testing.T, db *DB) int64 {
 	t.Helper()
 	desc := "Test channel"
-	if err := db.CreateChannel("test", "#test", &desc, 1, 168); err != nil {
+	if err := db.CreateChannel("test", "#test", &desc, 1, 168, nil); err != nil {
 		t.Fatalf("failed to create channel: %v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestCleanupExpiredMessages(t *testing.T) {
 
 	// Create a channel with 1-hour retention
 	desc := "Short retention channel"
-	if err := db.CreateChannel("shortretention", "#shortretention", &desc, 1, 1); err != nil {
+	if err := db.CreateChannel("shortretention", "#shortretention", &desc, 1, 1, nil); err != nil {
 		t.Fatalf("failed to create channel: %v", err)
 	}
 
@@ -202,7 +202,7 @@ func TestCleanupExpiredMessagesWithReplies(t *testing.T) {
 
 	// Create a channel with 1-hour retention
 	desc := "Short retention channel"
-	if err := db.CreateChannel("shortretention", "#shortretention", &desc, 1, 1); err != nil {
+	if err := db.CreateChannel("shortretention", "#shortretention", &desc, 1, 1, nil); err != nil {
 		t.Fatalf("failed to create channel: %v", err)
 	}
 

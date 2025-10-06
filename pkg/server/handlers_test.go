@@ -54,7 +54,7 @@ func testServer(t *testing.T) (*Server, *database.DB) {
 
 // createTestChannel helper - creates a channel via database
 func createTestChannel(t *testing.T, db *database.DB, name, displayName string) int64 {
-	err := db.CreateChannel(name, displayName, nil, 1, 168)
+	err := db.CreateChannel(name, displayName, nil, 1, 168, nil)
 	if err != nil {
 		t.Fatalf("Failed to create test channel: %v", err)
 	}
@@ -640,8 +640,8 @@ func TestConvertDBMessageToProtocol(t *testing.T) {
 	if protoMsg.ID != 1 {
 		t.Errorf("Expected ID 1, got %d", protoMsg.ID)
 	}
-	if protoMsg.AuthorNickname != "testuser" {
-		t.Errorf("Expected AuthorNickname 'testuser', got '%s'", protoMsg.AuthorNickname)
+	if protoMsg.AuthorNickname != "~testuser" {
+		t.Errorf("Expected AuthorNickname '~testuser', got '%s'", protoMsg.AuthorNickname)
 	}
 	if protoMsg.Content != "Test message" {
 		t.Errorf("Expected Content 'Test message', got '%s'", protoMsg.Content)
@@ -1180,7 +1180,7 @@ func TestBroadcastToChannel(t *testing.T) {
 			SubchannelID:   nil,
 			ParentID:       nil,
 			AuthorUserID:   nil,
-			AuthorNickname: "testuser",
+			AuthorNickname: "~testuser",
 			Content:        "Test broadcast",
 			CreatedAt:      now,
 			EditedAt:       nil,
@@ -1222,7 +1222,7 @@ func TestBroadcastToChannel(t *testing.T) {
 			SubchannelID:   nil,
 			ParentID:       nil,
 			AuthorUserID:   nil,
-			AuthorNickname: "testuser",
+			AuthorNickname: "~testuser",
 			Content:        "Test broadcast to subscribers",
 			CreatedAt:      now,
 			EditedAt:       nil,
@@ -1281,7 +1281,7 @@ func TestBroadcastNewMessage(t *testing.T) {
 			SubchannelID:   nil,
 			ParentID:       func() *uint64 { id := uint64(threadID); return &id }(),
 			AuthorUserID:   nil,
-			AuthorNickname: "testuser",
+			AuthorNickname: "~testuser",
 			Content:        dbMsg.Content,
 			CreatedAt:      time.Unix(dbMsg.CreatedAt, 0),
 			EditedAt:       nil,
@@ -1330,7 +1330,7 @@ func TestBroadcastNewMessage(t *testing.T) {
 			SubchannelID:   nil,
 			ParentID:       nil,
 			AuthorUserID:   nil,
-			AuthorNickname: "testuser",
+			AuthorNickname: "~testuser",
 			Content:        msg.Content,
 			CreatedAt:      time.Unix(msg.CreatedAt, 0),
 			EditedAt:       nil,

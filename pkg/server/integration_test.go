@@ -481,8 +481,8 @@ func TestServerIntegration(t *testing.T) {
 		if err := msg.Decode(frame.Payload); err != nil {
 			t.Fatalf("Failed to decode NEW_MESSAGE: %v", err)
 		}
-		if msg.AuthorNickname != "bcuser1" {
-			t.Errorf("Expected author 'bcuser1', got '%s'", msg.AuthorNickname)
+		if msg.AuthorNickname != "~bcuser1" {
+			t.Errorf("Expected author '~bcuser1', got '%s'", msg.AuthorNickname)
 		}
 		if msg.Content != "Hello from bcuser1" {
 			t.Errorf("Expected content 'Hello from bcuser1', got '%s'", msg.Content)

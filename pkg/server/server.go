@@ -375,14 +375,20 @@ func (s *Server) messageLoop(sess *Session, conn net.Conn) {
 // handleMessage dispatches a frame to the appropriate handler
 func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 	switch frame.Type {
+	case protocol.TypeAuthRequest:
+		return s.handleAuthRequest(sess, frame)
 	case protocol.TypeSetNickname:
 		return s.handleSetNickname(sess, frame)
+	case protocol.TypeRegisterUser:
+		return s.handleRegisterUser(sess, frame)
 	case protocol.TypeListChannels:
 		return s.handleListChannels(sess, frame)
 	case protocol.TypeJoinChannel:
 		return s.handleJoinChannel(sess, frame)
 	case protocol.TypeLeaveChannel:
 		return s.handleLeaveChannel(sess, frame)
+	case protocol.TypeCreateChannel:
+		return s.handleCreateChannel(sess, frame)
 	case protocol.TypeListMessages:
 		return s.handleListMessages(sess, frame)
 	case protocol.TypePostMessage:

@@ -18,9 +18,10 @@ var migrationFiles embed.FS
 
 // Migration represents a database migration
 type Migration struct {
-	Version int
-	Name    string
-	SQL     string
+	Version        int
+	Name           string
+	SQL            string
+	ForeignKeysOff bool // If true, disable foreign keys before applying migration
 }
 
 // initMigrations ensures the schema_migrations table exists
@@ -80,10 +81,24 @@ func loadMigrations() ([]Migration, error) {
 			return nil, fmt.Errorf("failed to read migration %s: %w", name, err)
 		}
 
+		sqlContent := string(content)
+		foreignKeysOff := false
+
+		// Check for metadata header in first line
+		// Format: -- @foreign_keys=off
+		lines := strings.Split(sqlContent, "\n")
+		if len(lines) > 0 && strings.HasPrefix(lines[0], "-- @") {
+			header := strings.TrimPrefix(lines[0], "-- @")
+			if strings.Contains(header, "foreign_keys=off") {
+				foreignKeysOff = true
+			}
+		}
+
 		migrations = append(migrations, Migration{
-			Version: version,
-			Name:    migrationName,
-			SQL:     string(content),
+			Version:        version,
+			Name:           migrationName,
+			SQL:            sqlContent,
+			ForeignKeysOff: foreignKeysOff,
 		})
 	}
 
@@ -179,6 +194,20 @@ func runMigrations(db *sql.DB, dbPath string) error {
 
 // applyMigration applies a single migration in a transaction
 func applyMigration(db *sql.DB, m Migration) error {
+	// If migration requires foreign keys off, disable them OUTSIDE transaction
+	// (PRAGMA foreign_keys is a no-op inside transactions in SQLite)
+	if m.ForeignKeysOff {
+		if _, err := db.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+			return fmt.Errorf("failed to disable foreign keys: %w", err)
+		}
+		defer func() {
+			// Re-enable foreign keys after migration
+			if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+				log.Printf("Warning: failed to re-enable foreign keys: %v", err)
+			}
+		}()
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return err

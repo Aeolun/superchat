@@ -81,29 +81,36 @@ func TestMigrationPath(t *testing.T) {
 			},
 		},
 
-		// WHEN ADDING MIGRATION 002:
-		// Uncomment and modify this template:
-		/*
 		{
-			name:        "v1 → v2: Add user registration",
+			name:        "v1 → v2/v3: Add user registration and user-created channels",
 			fromVersion: 1,
-			toVersion:   2,
+			toVersion:   3,
 			setupData: func(db *sql.DB) error {
 				// Create sample data in v1 schema
-				// Example: Insert channels, messages with anonymous users
+				now := time.Now().UnixMilli()
+
+				// Insert channels
 				_, err := db.Exec(`
 					INSERT INTO Channel (id, name, display_name, created_at, is_private)
 					VALUES (1, 'general', 'General', ?, 0)
-				`, time.Now().UnixMilli())
+				`, now)
 				if err != nil {
 					return err
 				}
 
-				// Insert anonymous messages (no user_id)
+				// Insert anonymous messages (no author_user_id - this is v1)
 				_, err = db.Exec(`
 					INSERT INTO Message (id, channel_id, author_nickname, content, created_at)
-					VALUES (1, 1, 'anonymous', 'Test message', ?)
-				`, time.Now().UnixMilli())
+					VALUES (1, 1, 'anonymous1', 'First anonymous message', ?)
+				`, now)
+				if err != nil {
+					return err
+				}
+
+				_, err = db.Exec(`
+					INSERT INTO Message (id, channel_id, author_nickname, content, created_at)
+					VALUES (2, 1, 'anonymous2', 'Second anonymous message', ?)
+				`, now)
 				return err
 			},
 			validateData: func(db *sql.DB, t *testing.T) {
@@ -111,14 +118,34 @@ func TestMigrationPath(t *testing.T) {
 				var count int
 				err := db.QueryRow(`
 					SELECT COUNT(*) FROM Message
-					WHERE author_nickname = 'anonymous'
-					AND author_user_id IS NULL
+					WHERE author_user_id IS NULL
 				`).Scan(&count)
 				if err != nil {
 					t.Fatalf("Failed to query messages: %v", err)
 				}
-				if count != 1 {
-					t.Errorf("Expected 1 anonymous message, got %d", count)
+				if count != 2 {
+					t.Errorf("Expected 2 anonymous messages with NULL author_user_id, got %d", count)
+				}
+
+				// Verify both specific messages survived migration
+				var nickname string
+				err = db.QueryRow(`
+					SELECT author_nickname FROM Message WHERE id = 1
+				`).Scan(&nickname)
+				if err != nil {
+					t.Fatalf("Failed to query message 1: %v", err)
+				}
+				if nickname != "anonymous1" {
+					t.Errorf("Expected nickname 'anonymous1', got %q", nickname)
+				}
+
+				// Test that we can insert a registered user (v2 feature)
+				_, err = db.Exec(`
+					INSERT INTO User (nickname, user_flags, password_hash, created_at, last_seen)
+					VALUES ('testuser', 0, 'hash123', ?, ?)
+				`, time.Now().UnixMilli(), time.Now().UnixMilli())
+				if err != nil {
+					t.Fatalf("Failed to insert user in v2: %v", err)
 				}
 			},
 			validateSchema: func(db *sql.DB, t *testing.T) {
@@ -131,9 +158,34 @@ func TestMigrationPath(t *testing.T) {
 				if count != 1 {
 					t.Errorf("User table not found after migration to v2")
 				}
+
+				// Verify User table has correct columns
+				columns := []string{"id", "nickname", "user_flags", "password_hash", "created_at", "last_seen"}
+				for _, col := range columns {
+					var colCount int
+					err := db.QueryRow(`
+						SELECT COUNT(*) FROM pragma_table_info('User')
+						WHERE name = ?
+					`, col).Scan(&colCount)
+					if err != nil {
+						t.Fatalf("Failed to check column %s: %v", col, err)
+					}
+					if colCount != 1 {
+						t.Errorf("Column %s not found in User table", col)
+					}
+				}
+
+				// Verify nickname index exists
+				var idxCount int
+				err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_users_nickname'").Scan(&idxCount)
+				if err != nil {
+					t.Fatalf("Failed to check index: %v", err)
+				}
+				if idxCount != 1 {
+					t.Errorf("idx_users_nickname index not found after migration to v2")
+				}
 			},
 		},
-		*/
 
 		// WHEN ADDING MIGRATION 003:
 		/*
@@ -312,11 +364,18 @@ func TestFullMigrationPath(t *testing.T) {
 	}
 	t.Logf("Database migrated successfully to version %d", version)
 
-	// WHEN ADDING NEW MIGRATIONS:
-	// Add validation here to ensure this data survives the migration
-	// Example for v2 (user registration):
-	/*
+	// Validate v2+ features if present
 	if version >= 2 {
+		// Verify User table exists
+		var tableCount int
+		err = db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='User'").Scan(&tableCount)
+		if err != nil {
+			t.Fatalf("Failed to check User table: %v", err)
+		}
+		if tableCount != 1 {
+			t.Errorf("User table not found in v2+")
+		}
+
 		// Verify anonymous messages still have NULL author_user_id
 		var nullUserCount int
 		err = db.conn.QueryRow(`
@@ -329,5 +388,4 @@ func TestFullMigrationPath(t *testing.T) {
 			t.Errorf("Expected 2 messages with NULL author_user_id, got %d", nullUserCount)
 		}
 	}
-	*/
 }

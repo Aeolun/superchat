@@ -2,11 +2,15 @@ package server
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
 	"regexp"
+	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/aeolun/superchat/pkg/database"
 	"github.com/aeolun/superchat/pkg/protocol"
@@ -23,6 +27,134 @@ var (
 func (s *Server) dbError(sess *Session, operation string, err error) error {
 	errorLog.Printf("Session %d: %s failed: %v", sess.ID, operation, err)
 	return s.sendError(sess, 9001, "Database error")
+}
+
+// handleAuthRequest handles AUTH_REQUEST message (login)
+func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
+	// Decode message
+	msg := &protocol.AuthRequestMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, 1000, "Invalid message format")
+	}
+
+	// Get user from database
+	user, err := s.db.GetUserByNickname(msg.Nickname)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			resp := &protocol.AuthResponseMessage{
+				Success: false,
+				Message: "Invalid credentials",
+			}
+			return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
+		}
+		return s.dbError(sess, "GetUserByNickname", err)
+	}
+
+	// Verify password
+	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(msg.Password))
+	if err != nil {
+		resp := &protocol.AuthResponseMessage{
+			Success: false,
+			Message: "Invalid credentials",
+		}
+		return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
+	}
+
+	// Update session with user ID and flags
+	sess.mu.Lock()
+	sess.UserID = &user.ID
+	sess.Nickname = user.Nickname
+	sess.UserFlags = user.UserFlags
+	sess.mu.Unlock()
+
+	// Update database session
+	if err := s.db.UpdateSessionUserID(sess.DBSessionID, user.ID); err != nil {
+		log.Printf("Session %d: failed to update session user_id: %v", sess.ID, err)
+	}
+
+	// Update last_seen
+	if err := s.db.UpdateUserLastSeen(user.ID); err != nil {
+		log.Printf("Session %d: failed to update user last_seen: %v", sess.ID, err)
+	}
+
+	// Send success response
+	resp := &protocol.AuthResponseMessage{
+		Success: true,
+		UserID:  uint64(user.ID),
+		Message: fmt.Sprintf("Welcome back, %s!", user.Nickname),
+	}
+	return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
+}
+
+// handleRegisterUser handles REGISTER_USER message
+func (s *Server) handleRegisterUser(sess *Session, frame *protocol.Frame) error {
+	// Decode message
+	msg := &protocol.RegisterUserMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, 1000, "Invalid message format")
+	}
+
+	// Check if session has a nickname set
+	sess.mu.RLock()
+	nickname := sess.Nickname
+	sess.mu.RUnlock()
+
+	if nickname == "" {
+		resp := &protocol.RegisterResponseMessage{
+			Success: false,
+			Message: "Must set nickname before registering",
+		}
+		return s.sendMessage(sess, protocol.TypeRegisterResponse, resp)
+	}
+
+	// Validate password (minimum 6 characters)
+	if len(msg.Password) < 6 {
+		resp := &protocol.RegisterResponseMessage{
+			Success: false,
+			Message: "Password must be at least 6 characters",
+		}
+		return s.sendMessage(sess, protocol.TypeRegisterResponse, resp)
+	}
+
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(msg.Password), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("Session %d: bcrypt.GenerateFromPassword failed: %v", sess.ID, err)
+		return s.sendError(sess, 9000, "Failed to hash password")
+	}
+
+	// Create user in database
+	userID, err := s.db.CreateUser(nickname, string(hashedPassword), 0) // 0 = no special flags
+	if err != nil {
+		// Check for unique constraint violation
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			resp := &protocol.RegisterResponseMessage{
+				Success: false,
+				Message: "Nickname already registered",
+			}
+			return s.sendMessage(sess, protocol.TypeRegisterResponse, resp)
+		}
+		return s.dbError(sess, "CreateUser", err)
+	}
+
+	// Update session with user ID
+	sess.mu.Lock()
+	sess.UserID = &userID
+	sess.UserFlags = 0 // Regular user
+	sess.mu.Unlock()
+
+	// Update database session
+	if err := s.db.UpdateSessionUserID(sess.DBSessionID, userID); err != nil {
+		log.Printf("Session %d: failed to update session user_id: %v", sess.ID, err)
+	}
+
+	// Send success response
+	resp := &protocol.RegisterResponseMessage{
+		Success: true,
+		UserID:  uint64(userID),
+		Message: fmt.Sprintf("Successfully registered %s!", nickname),
+	}
+	return s.sendMessage(sess, protocol.TypeRegisterResponse, resp)
 }
 
 // handleSetNickname handles SET_NICKNAME message
@@ -151,6 +283,122 @@ func (s *Server) handleLeaveChannel(sess *Session, frame *protocol.Frame) error 
 	// Note: LeaveResponseMessage doesn't exist yet in protocol, so we'll just send success via error code 0
 	// For now, we'll create a simple response
 	return s.sendError(sess, 0, "Left channel")
+}
+
+// handleCreateChannel handles CREATE_CHANNEL message (V2+)
+func (s *Server) handleCreateChannel(sess *Session, frame *protocol.Frame) error {
+	msg := &protocol.CreateChannelMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
+			Success: false,
+			Message: "Invalid request format",
+		})
+	}
+
+	// V2 feature: Only registered users can create channels
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	if userID == nil {
+		return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
+			Success: false,
+			Message: "Only registered users can create channels. Please register or log in.",
+		})
+	}
+
+	// Validate channel name (must be URL-friendly)
+	if len(msg.Name) < 3 || len(msg.Name) > 50 {
+		return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
+			Success: false,
+			Message: "Channel name must be 3-50 characters",
+		})
+	}
+
+	// Validate display name
+	if len(msg.DisplayName) < 1 || len(msg.DisplayName) > 100 {
+		return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
+			Success: false,
+			Message: "Display name must be 1-100 characters",
+		})
+	}
+
+	// Validate description (optional, max 500 chars)
+	if msg.Description != nil && len(*msg.Description) > 500 {
+		return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
+			Success: false,
+			Message: "Description must be at most 500 characters",
+		})
+	}
+
+	// V2 only supports forum channels (type 1)
+	if msg.ChannelType != 1 {
+		return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
+			Success: false,
+			Message: "Only forum channels are supported in V2",
+		})
+	}
+
+	// Validate retention hours (1 hour to 1 year)
+	if msg.RetentionHours < 1 || msg.RetentionHours > 8760 {
+		return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
+			Success: false,
+			Message: "Retention hours must be between 1 and 8760 (1 year)",
+		})
+	}
+
+	// Create channel in database
+	err := s.db.CreateChannel(msg.Name, msg.DisplayName, msg.Description, msg.ChannelType, msg.RetentionHours, userID)
+	if err != nil {
+		// Check if it's a duplicate name error
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "already exists") {
+			return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
+				Success: false,
+				Message: "Channel name already exists",
+			})
+		}
+		return s.dbError(sess, "CreateChannel", err)
+	}
+
+	// Get the created channel to get its ID
+	channels, err := s.db.ListChannels()
+	if err != nil {
+		return s.dbError(sess, "ListChannels", err)
+	}
+
+	// Find the newly created channel
+	var createdChannel *database.Channel
+	for _, ch := range channels {
+		if ch.Name == msg.Name {
+			createdChannel = ch
+			break
+		}
+	}
+
+	if createdChannel == nil {
+		return s.dbError(sess, "GetCreatedChannel", fmt.Errorf("channel created but not found in list"))
+	}
+
+	// Build CHANNEL_CREATED message (hybrid response + broadcast)
+	channelCreatedMsg := &protocol.ChannelCreatedMessage{
+		Success:        true,
+		ChannelID:      uint64(createdChannel.ID),
+		Name:           createdChannel.Name,
+		Description:    safeDeref(createdChannel.Description, ""),
+		Type:           createdChannel.ChannelType,
+		RetentionHours: createdChannel.MessageRetentionHours,
+		Message:        fmt.Sprintf("Channel '%s' created successfully", createdChannel.DisplayName),
+	}
+
+	// Send to creator as confirmation
+	if err := s.sendMessage(sess, protocol.TypeChannelCreated, channelCreatedMsg); err != nil {
+		return err
+	}
+
+	// Broadcast to all OTHER connected users (not the creator again)
+	s.broadcastChannelCreated(createdChannel, sess.ID)
+
+	return nil
 }
 
 // handleListMessages handles LIST_MESSAGES message
@@ -582,6 +830,23 @@ func convertDBMessageToProtocol(dbMsg *database.Message, db *database.MemDB) *pr
 		editedAt = &t
 	}
 
+	// Determine display nickname (with prefix)
+	nickname := dbMsg.AuthorNickname
+	if dbMsg.AuthorUserID != nil {
+		// Registered user - lookup and apply prefix based on flags
+		user, err := db.GetUserByID(*dbMsg.AuthorUserID)
+		if err == nil {
+			prefix := protocol.UserFlags(user.UserFlags).DisplayPrefix()
+			nickname = prefix + user.Nickname
+		} else {
+			// Fallback if user lookup fails (shouldn't happen)
+			nickname = "<user:" + fmt.Sprint(*dbMsg.AuthorUserID) + ">"
+		}
+	} else {
+		// Anonymous user - prefix with tilde
+		nickname = "~" + dbMsg.AuthorNickname
+	}
+
 	// Count replies (only for root messages)
 	replyCount := uint32(0)
 	if dbMsg.ParentID == nil {
@@ -597,7 +862,7 @@ func convertDBMessageToProtocol(dbMsg *database.Message, db *database.MemDB) *pr
 		SubchannelID:   subchannelID,
 		ParentID:       parentID,
 		AuthorUserID:   authorUserID,
-		AuthorNickname: dbMsg.AuthorNickname,
+		AuthorNickname: nickname, // Prefixed for registered users, as-is for anonymous
 		Content:        dbMsg.Content,
 		CreatedAt:      time.UnixMilli(dbMsg.CreatedAt),
 		EditedAt:       editedAt,
@@ -739,4 +1004,28 @@ func (s *Server) handleUnsubscribeChannel(sess *Session, frame *protocol.Frame) 
 		SubchannelID: msg.SubchannelID,
 	}
 	return s.sendMessage(sess, protocol.TypeSubscribeOk, resp)
+}
+
+// broadcastChannelCreated broadcasts a CHANNEL_CREATED message to all connected users (except creator)
+func (s *Server) broadcastChannelCreated(ch *database.Channel, creatorSessionID uint64) {
+	msg := &protocol.ChannelCreatedMessage{
+		Success:        true,
+		ChannelID:      uint64(ch.ID),
+		Name:           ch.Name,
+		Description:    safeDeref(ch.Description, ""),
+		Type:           ch.ChannelType,
+		RetentionHours: ch.MessageRetentionHours,
+		Message:        fmt.Sprintf("New channel '%s' created", ch.DisplayName),
+	}
+
+	// Broadcast to all connected sessions EXCEPT the creator (they already got the response)
+	allSessions := s.sessions.GetAllSessions()
+	for _, sess := range allSessions {
+		if sess.ID == creatorSessionID {
+			continue // Skip creator - they already received the response
+		}
+		if err := s.sendMessage(sess, protocol.TypeChannelCreated, msg); err != nil {
+			log.Printf("Failed to broadcast CHANNEL_CREATED to session %d: %v", sess.ID, err)
+		}
+	}
 }

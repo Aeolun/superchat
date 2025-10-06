@@ -871,3 +871,35 @@ func (m *MemDB) CleanupIdleSessions(timeoutSeconds int64) (int64, error) {
 	// No need for batch cleanup in MemDB
 	return 0, nil
 }
+
+// User management methods (V2 features)
+
+// CreateUser creates a new registered user
+func (m *MemDB) CreateUser(nickname, passwordHash string, userFlags uint8) (int64, error) {
+	return m.sqliteDB.CreateUser(nickname, passwordHash, userFlags)
+}
+
+// GetUserByNickname retrieves a user by nickname
+func (m *MemDB) GetUserByNickname(nickname string) (*User, error) {
+	return m.sqliteDB.GetUserByNickname(nickname)
+}
+
+// GetUserByID retrieves a user by ID
+func (m *MemDB) GetUserByID(userID int64) (*User, error) {
+	return m.sqliteDB.GetUserByID(userID)
+}
+
+// UpdateUserLastSeen updates the last_seen timestamp for a user
+func (m *MemDB) UpdateUserLastSeen(userID int64) error {
+	return m.sqliteDB.UpdateUserLastSeen(userID)
+}
+
+// UpdateSessionUserID links a session to a registered user
+func (m *MemDB) UpdateSessionUserID(sessionID, userID int64) error {
+	return m.sqliteDB.UpdateSessionUserID(sessionID, userID)
+}
+
+// CreateChannel creates a new channel (wrapper for sqliteDB.CreateChannel)
+func (m *MemDB) CreateChannel(name, displayName string, description *string, channelType uint8, retentionHours uint32, createdBy *int64) error {
+	return m.sqliteDB.CreateChannel(name, displayName, description, channelType, retentionHours, createdBy)
+}

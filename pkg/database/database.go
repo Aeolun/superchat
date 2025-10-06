@@ -236,6 +236,16 @@ type Session struct {
 	LastActivity   int64  // Unix timestamp in milliseconds
 }
 
+// User represents a registered user account (V2 feature)
+type User struct {
+	ID           int64
+	Nickname     string
+	UserFlags    uint8  // Bit flags: 0x01=admin, 0x02=moderator
+	PasswordHash string // bcrypt hash
+	CreatedAt    int64  // Unix timestamp in milliseconds
+	LastSeen     int64  // Unix timestamp in milliseconds
+}
+
 // Message represents a message record
 type Message struct {
 	ID             int64
@@ -244,7 +254,7 @@ type Message struct {
 	ParentID       *int64
 	ThreadRootID   *int64 // Root message ID of thread (denormalized for fast broadcast)
 	AuthorUserID   *int64
-	AuthorNickname string
+	AuthorNickname string // Only populated for anonymous users (when AuthorUserID IS NULL)
 	Content        string
 	CreatedAt      int64 // Unix timestamp in milliseconds
 	EditedAt       *int64
@@ -281,7 +291,7 @@ func (db *DB) SeedDefaultChannels() error {
 	}
 
 	for _, ch := range defaultChannels {
-		if err := db.CreateChannel(ch.name, ch.displayName, &ch.description, 1, 168); err != nil {
+		if err := db.CreateChannel(ch.name, ch.displayName, &ch.description, 1, 168, nil); err != nil {
 			return fmt.Errorf("failed to seed channel %s: %w", ch.name, err)
 		}
 	}
@@ -290,7 +300,8 @@ func (db *DB) SeedDefaultChannels() error {
 }
 
 // CreateChannel creates a new channel (returns nil if already exists)
-func (db *DB) CreateChannel(name, displayName string, description *string, channelType uint8, retentionHours uint32) error {
+// createdBy is optional - NULL for admin-created channels (V1), populated for user-created channels (V2+)
+func (db *DB) CreateChannel(name, displayName string, description *string, channelType uint8, retentionHours uint32, createdBy *int64) error {
 	start := time.Now()
 	descStr := sql.NullString{}
 	if description != nil {
@@ -298,10 +309,16 @@ func (db *DB) CreateChannel(name, displayName string, description *string, chann
 		descStr.String = *description
 	}
 
+	createdByVal := sql.NullInt64{}
+	if createdBy != nil {
+		createdByVal.Valid = true
+		createdByVal.Int64 = *createdBy
+	}
+
 	_, err := db.writeConn.Exec(`
-		INSERT OR IGNORE INTO Channel (name, display_name, description, channel_type, message_retention_hours, created_at, is_private)
-		VALUES (?, ?, ?, ?, ?, ?, 0)
-	`, name, displayName, descStr, channelType, retentionHours, nowMillis())
+		INSERT OR IGNORE INTO Channel (name, display_name, description, channel_type, message_retention_hours, created_by, created_at, is_private)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+	`, name, displayName, descStr, channelType, retentionHours, createdByVal, nowMillis())
 
 	elapsed := time.Since(start)
 	log.Printf("DB: CreateChannel took %v", elapsed)
@@ -871,4 +888,72 @@ func (db *DB) MessageExists(messageID int64) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM Message WHERE id = ? AND deleted_at IS NULL)`, messageID).Scan(&exists)
 	return exists, err
+}
+
+// CreateUser inserts a new registered user and returns the user ID
+func (db *DB) CreateUser(nickname, passwordHash string, userFlags uint8) (int64, error) {
+	now := nowMillis()
+	result, err := db.writeConn.Exec(`
+		INSERT INTO User (nickname, user_flags, password_hash, created_at, last_seen)
+		VALUES (?, ?, ?, ?, ?)
+	`, nickname, userFlags, passwordHash, now, now)
+
+	if err != nil {
+		return 0, err // UNIQUE constraint violation if nickname taken
+	}
+
+	userID, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	return userID, nil
+}
+
+// GetUserByNickname retrieves a user by nickname for login validation
+func (db *DB) GetUserByNickname(nickname string) (*User, error) {
+	var user User
+	err := db.conn.QueryRow(`
+		SELECT id, nickname, user_flags, password_hash, created_at, last_seen
+		FROM User
+		WHERE nickname = ?
+	`, nickname).Scan(&user.ID, &user.Nickname, &user.UserFlags, &user.PasswordHash, &user.CreatedAt, &user.LastSeen)
+
+	if err != nil {
+		return nil, err // sql.ErrNoRows if not found
+	}
+
+	return &user, nil
+}
+
+// GetUserByID retrieves a user by ID
+func (db *DB) GetUserByID(userID int64) (*User, error) {
+	var user User
+	err := db.conn.QueryRow(`
+		SELECT id, nickname, user_flags, password_hash, created_at, last_seen
+		FROM User
+		WHERE id = ?
+	`, userID).Scan(&user.ID, &user.Nickname, &user.UserFlags, &user.PasswordHash, &user.CreatedAt, &user.LastSeen)
+
+	if err != nil {
+		return nil, err // sql.ErrNoRows if not found
+	}
+
+	return &user, nil
+}
+
+// UpdateUserLastSeen updates the last_seen timestamp for a user
+func (db *DB) UpdateUserLastSeen(userID int64) error {
+	_, err := db.writeConn.Exec(`
+		UPDATE User SET last_seen = ? WHERE id = ?
+	`, nowMillis(), userID)
+	return err
+}
+
+// UpdateSessionUserID links a session to a registered user
+func (db *DB) UpdateSessionUserID(sessionID, userID int64) error {
+	_, err := db.writeConn.Exec(`
+		UPDATE Session SET user_id = ? WHERE id = ?
+	`, userID, sessionID)
+	return err
 }

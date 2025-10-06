@@ -21,9 +21,10 @@ type Session struct {
 	DBSessionID            int64        // Database session record ID
 	UserID                 *int64       // Registered user ID (nil for anonymous)
 	Nickname               string       // Current nickname
+	UserFlags              uint8        // Cached user flags (0 for anonymous, updated on login/register)
 	Conn                   *SafeConn    // TCP connection with automatic write synchronization
 	JoinedChannel          *int64       // Currently joined channel ID
-	mu                     sync.RWMutex // Protects Nickname and JoinedChannel
+	mu                     sync.RWMutex // Protects Nickname, UserFlags, and JoinedChannel
 	lastActivityUpdateTime int64        // Last time we wrote activity to DB (milliseconds, atomic)
 
 	// Subscriptions for selective message broadcasting

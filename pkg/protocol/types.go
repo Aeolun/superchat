@@ -190,6 +190,37 @@ func ReadOptionalUint64(r io.Reader) (*uint64, error) {
 	return &value, nil
 }
 
+// WriteOptionalString writes an optional string
+// Format: [Present (bool)][String if present]
+func WriteOptionalString(w io.Writer, s *string) error {
+	if s == nil {
+		return WriteBool(w, false)
+	}
+
+	if err := WriteBool(w, true); err != nil {
+		return err
+	}
+	return WriteString(w, *s)
+}
+
+// ReadOptionalString reads an optional string
+func ReadOptionalString(r io.Reader) (*string, error) {
+	present, err := ReadBool(r)
+	if err != nil {
+		return nil, err
+	}
+
+	if !present {
+		return nil, nil
+	}
+
+	value, err := ReadString(r)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
 // WriteOptionalTimestamp writes an optional timestamp
 // Format: [Present (bool)][Timestamp (int64) if present]
 func WriteOptionalTimestamp(w io.Writer, t *time.Time) error {
