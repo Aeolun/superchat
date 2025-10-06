@@ -63,7 +63,7 @@ type pendingMessage struct {
 	subchannelID   *int64
 	parentID       *int64
 	authorUserID   *int64
-	authorNickname string
+	authorNickname string // Only populated for anonymous users (when authorUserID IS NULL)
 	content        string
 	timestamp      int64
 	resultIndex    int
