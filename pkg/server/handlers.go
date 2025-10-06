@@ -82,7 +82,7 @@ func (s *Server) handleListChannels(sess *Session, frame *protocol.Frame) error 
 		ch := protocol.Channel{
 			ID:          uint64(dbCh.ID),
 			Name:        dbCh.Name,
-			Description: *dbCh.Description,
+			Description: safeDeref(dbCh.Description, ""),
 			UserCount:   0, // TODO: Track active user count
 			IsOperator:   false,
 		}
@@ -303,7 +303,9 @@ func (s *Server) handleDeleteMessage(sess *Session, frame *protocol.Frame) error
 		}
 	}
 
-	deletedAt := time.UnixMilli(*dbMsg.DeletedAt)
+	// DeletedAt should always be set by SoftDeleteMessage, but add defensive check
+	deletedAtMs := safeDeref(dbMsg.DeletedAt, time.Now().UnixMilli())
+	deletedAt := time.UnixMilli(deletedAtMs)
 	resp := &protocol.MessageDeletedMessage{
 		Success:   true,
 		MessageID: msg.MessageID,
@@ -402,7 +404,7 @@ func (s *Server) broadcastToChannel(channelID int64, msgType uint8, msg interfac
 		return err
 	}
 
-	// Create frame
+	// Create and encode frame once
 	frame := &protocol.Frame{
 		Version: protocol.ProtocolVersion,
 		Type:    msgType,
@@ -410,8 +412,58 @@ func (s *Server) broadcastToChannel(channelID int64, msgType uint8, msg interfac
 		Payload: payload,
 	}
 
-	// Broadcast to all sessions in channel
-	s.sessions.BroadcastToChannel(channelID, frame)
+	var buf bytes.Buffer
+	if err := protocol.EncodeFrame(&buf, frame); err != nil {
+		return fmt.Errorf("failed to encode frame: %w", err)
+	}
+	frameBytes := buf.Bytes()
+
+	// Collect target sessions: both joined sessions AND channel subscribers
+	targetSessionsMap := make(map[uint64]*Session)
+
+	// 1. Get sessions that have joined this channel
+	s.sessions.mu.RLock()
+	for _, sess := range s.sessions.sessions {
+		sess.mu.RLock()
+		joined := sess.JoinedChannel
+		sess.mu.RUnlock()
+
+		if joined != nil && *joined == channelID {
+			targetSessionsMap[sess.ID] = sess
+		}
+	}
+	s.sessions.mu.RUnlock()
+
+	// 2. Get sessions subscribed to this channel (using subscription index)
+	channelSub := ChannelSubscription{
+		ChannelID:    uint64(channelID),
+		SubchannelID: nil,
+	}
+	subscribedSessions := s.sessions.GetChannelSubscribers(channelSub)
+	for _, sess := range subscribedSessions {
+		targetSessionsMap[sess.ID] = sess
+	}
+
+	// Convert map to slice
+	targetSessions := make([]*Session, 0, len(targetSessionsMap))
+	for _, sess := range targetSessionsMap {
+		targetSessions = append(targetSessions, sess)
+	}
+
+	// Broadcast to target sessions
+	deadSessions := make([]uint64, 0)
+	for _, sess := range targetSessions {
+		if writeErr := sess.Conn.WriteBytes(frameBytes); writeErr != nil {
+			debugLog.Printf("Session %d: Broadcast write failed: %v", sess.ID, writeErr)
+			deadSessions = append(deadSessions, sess.ID)
+		}
+	}
+
+	// Remove dead sessions
+	for _, sessID := range deadSessions {
+		s.sessions.RemoveSession(sessID)
+	}
+
 	return nil
 }
 
@@ -456,7 +508,9 @@ func (s *Server) broadcastNewMessage(msg *protocol.NewMessageMessage, threadRoot
 	isTopLevel := msg.ParentID == nil || (msg.ParentID != nil && *msg.ParentID == 0)
 
 	// Metrics: track broadcast
-	s.metrics.RecordMessageBroadcast()
+	if s.metrics != nil {
+		s.metrics.RecordMessageBroadcast()
+	}
 	recipientCount := 0
 	broadcastType := "thread"
 	if isTopLevel {
@@ -489,8 +543,10 @@ func (s *Server) broadcastNewMessage(msg *protocol.NewMessageMessage, threadRoot
 	}
 
 	// Metrics: record fan-out and duration
-	s.metrics.RecordBroadcastFanout(broadcastType, recipientCount)
-	s.metrics.RecordBroadcastDuration(broadcastType, time.Since(startTime).Seconds())
+	if s.metrics != nil {
+		s.metrics.RecordBroadcastFanout(broadcastType, recipientCount)
+		s.metrics.RecordBroadcastDuration(broadcastType, time.Since(startTime).Seconds())
+	}
 
 	return nil
 }
@@ -526,9 +582,9 @@ func convertDBMessageToProtocol(dbMsg *database.Message, db *database.MemDB) *pr
 		editedAt = &t
 	}
 
-	// Count replies
+	// Count replies (only for root messages)
 	replyCount := uint32(0)
-	if dbMsg.ParentID == nil { // Only count for root messages
+	if dbMsg.ParentID == nil {
 		count, err := db.CountReplies(dbMsg.ID)
 		if err == nil {
 			replyCount = count

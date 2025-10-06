@@ -353,7 +353,9 @@ func (s *Server) messageLoop(sess *Session, conn net.Conn) {
 		s.sessions.UpdateSessionActivity(sess, time.Now().UnixMilli())
 
 		// Track message received
-		s.metrics.RecordMessageReceived(messageTypeToString(frame.Type))
+		if s.metrics != nil {
+			s.metrics.RecordMessageReceived(messageTypeToString(frame.Type))
+		}
 
 		// Handle message
 		if err := s.handleMessage(sess, frame); err != nil {
@@ -431,7 +433,9 @@ func (s *Server) sendServerConfig(sess *Session) error {
 	}
 
 	debugLog.Printf("Session %d → SEND: Type=0x%02X (SERVER_CONFIG) Flags=0x%02X PayloadLen=%d", sess.ID, protocol.TypeServerConfig, 0, len(payload))
-	s.metrics.RecordMessageSent(messageTypeToString(protocol.TypeServerConfig))
+	if s.metrics != nil {
+		s.metrics.RecordMessageSent(messageTypeToString(protocol.TypeServerConfig))
+	}
 	return sess.Conn.EncodeFrame(frame)
 }
 
@@ -454,7 +458,9 @@ func (s *Server) sendError(sess *Session, code uint16, message string) error {
 		Payload: payload,
 	}
 
-	s.metrics.RecordMessageSent(messageTypeToString(protocol.TypeError))
+	if s.metrics != nil {
+		s.metrics.RecordMessageSent(messageTypeToString(protocol.TypeError))
+	}
 	return sess.Conn.EncodeFrame(frame)
 }
 

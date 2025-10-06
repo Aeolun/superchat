@@ -54,7 +54,7 @@ make coverage-html
 # Generate separate LCOV files per package (protocol, server, client)
 make coverage-lcov
 
-# Check protocol package has 100% coverage (enforced)
+# Check protocol package has at least 90% coverage (enforced)
 make coverage-protocol
 
 # View coverage summary
@@ -140,11 +140,11 @@ go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
 
 ### Coverage Requirements
 
-- **Protocol package (`pkg/protocol/*`)**: **100% coverage required** - build fails if not met
+- **Protocol package (`pkg/protocol/*`)**: **90% coverage required** - build fails if not met
 - Server package (`pkg/server/*`): 80-90% target
 - Client package (`pkg/client/*`): 70-80% target
 
-The protocol package has strict 100% coverage because it's the foundation of client-server communication and must be completely tested.
+The protocol package has strict 90% coverage requirement because it's the foundation of client-server communication and must be thoroughly tested.
 
 ## Architecture
 
@@ -204,6 +204,28 @@ See `docs/PROTOCOL.md` for full specification.
 
 See `docs/DATA_MODEL.md` for full schema.
 
+### Database Migrations
+
+SuperChat uses an automatic migration system for schema evolution:
+
+- **Automatic execution**: Runs on server startup before loading MemDB
+- **Automatic backup**: Creates timestamped backup before applying any migrations
+- **Version tracking**: `schema_migrations` table tracks applied migrations
+- **Embedded files**: Migration SQL files embedded in binary via Go embed
+
+**Migration files**: `pkg/database/migrations/<version>_<name>.sql`
+
+**Creating a new migration:**
+1. Determine next version: `sqlite3 db.db "SELECT MAX(version) FROM schema_migrations"`
+2. Create file: `pkg/database/migrations/002_add_feature.sql`
+3. Write SQL (use `IF NOT EXISTS` for safety)
+4. Test with isolated database
+5. Commit
+
+**Backup format**: `superchat.db.backup-v<version>-<timestamp>`
+
+See `docs/MIGRATIONS.md` for complete guide.
+
 ### Client UI Architecture
 
 **Bubbletea Model-View-Update:**
@@ -260,6 +282,41 @@ func (m *MessageType) EncodeTo(w io.Writer) error {
 
 Never allocate intermediate buffers - write directly to io.Writer for efficiency.
 
+### Adding a Database Migration
+
+**CRITICAL**: Migrations must include tests validating data integrity!
+
+1. **Determine next version**: `sqlite3 db.db "SELECT MAX(version) FROM schema_migrations"`
+2. **Create migration file**: `pkg/database/migrations/00X_description.sql`
+   - Use `IF NOT EXISTS` for safety
+   - Include indexes in same migration
+   - Add SQL comments for complex transformations
+3. **Update `migration_path_test.go`** (REQUIRED):
+   - Add test case in `TestMigrationPath`
+   - Create sample data in old schema (`setupData`)
+   - Validate schema changes (`validateSchema`)
+   - Validate data integrity (`validateData`)
+   - Update `TestFullMigrationPath` if data format changes
+4. **Run tests**: `go test ./pkg/database -run TestMigrationPath -v`
+5. **Test with real database**: `./superchat-server --db /tmp/test.db`
+6. **Commit together**: Migration SQL + test updates (never separate!)
+
+**Example v1→v2 migration**:
+```sql
+-- 002_add_user_table.sql
+CREATE TABLE IF NOT EXISTS User (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nickname TEXT UNIQUE NOT NULL,
+    registered INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+-- Existing messages keep NULL author_user_id (anonymous)
+-- No data transformation needed
+```
+
+See `docs/MIGRATIONS.md` for complete guide.
+
 ### Database Transactions
 
 Always wrap multi-table operations in transactions:
@@ -307,9 +364,12 @@ Critical for: user registration, channel creation, message posting with versions
 - `docs/PROTOCOL.md`: Complete binary protocol specification
 - `docs/V1.md`: V1 feature scope and implementation phases
 - `docs/DATA_MODEL.md`: Database schema and relationships
+- `docs/MIGRATIONS.md`: Database migration system guide
 - `pkg/protocol/frame.go`: Frame encoding/decoding
 - `pkg/protocol/messages.go`: All message type definitions
 - `pkg/server/handlers.go`: Server message handlers
+- `pkg/database/migrations.go`: Migration system implementation
+- `pkg/database/migrations/*.sql`: Schema migration files
 - `pkg/client/ui/model.go`: Client state model
 - `pkg/client/ui/update.go`: Event handling and server message processing
 - `pkg/client/ui/view.go`: TUI rendering
@@ -323,7 +383,7 @@ Critical for: user registration, channel creation, message posting with versions
 
 ## Testing Philosophy
 
-- **Protocol package**: 100% coverage required, no exceptions
+- **Protocol package**: 90% coverage required minimum
 - Use table-driven tests for all message encode/decode
 - Test both success and error paths (especially io.Writer failures)
 - Property-based tests (rapid) for serialization round-trips

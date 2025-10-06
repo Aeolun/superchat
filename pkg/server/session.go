@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 
 	"github.com/aeolun/superchat/pkg/database"
-	"github.com/aeolun/superchat/pkg/protocol"
 )
 
 // ChannelSubscription represents a channel/subchannel subscription
@@ -33,12 +32,6 @@ type Session struct {
 	subMu              sync.RWMutex                   // Protects subscription maps
 }
 
-// BroadcastJob represents a broadcast task for workers
-type BroadcastJob struct {
-	frame    *protocol.Frame
-	sessions []*Session
-}
-
 // SessionManager manages all active sessions
 type SessionManager struct {
 	db                       *database.MemDB
@@ -52,11 +45,6 @@ type SessionManager struct {
 	threadSubscribers  map[uint64]map[uint64]*Session              // threadID -> sessionID -> session
 	channelSubscribers map[ChannelSubscription]map[uint64]*Session // channelSub -> sessionID -> session
 	subIndexMu         sync.RWMutex                                // Protects subscription indices
-
-	// Broadcast worker pool
-	broadcastJobs chan BroadcastJob
-	broadcastWG   sync.WaitGroup
-	shutdown      chan struct{}
 }
 
 // NewSessionManager creates a new session manager
@@ -71,15 +59,6 @@ func NewSessionManager(db *database.MemDB, sessionTimeoutSeconds int) *SessionMa
 		nextID:                   1,
 		threadSubscribers:        make(map[uint64]map[uint64]*Session),
 		channelSubscribers:       make(map[ChannelSubscription]map[uint64]*Session),
-		broadcastJobs:            make(chan BroadcastJob, 1000),
-		shutdown:                 make(chan struct{}),
-	}
-
-	// Start broadcast worker pool (10 workers to handle broadcasts in parallel)
-	workerCount := 10
-	for i := 0; i < workerCount; i++ {
-		sm.broadcastWG.Add(1)
-		go sm.broadcastWorker()
 	}
 
 	return sm
@@ -251,87 +230,6 @@ func (sm *SessionManager) SetJoinedChannel(sessionID uint64, channelID *int64) e
 	return nil
 }
 
-// broadcastWorker processes broadcast jobs from the queue
-func (sm *SessionManager) broadcastWorker() {
-	defer sm.broadcastWG.Done()
-
-	for {
-		select {
-		case <-sm.shutdown:
-			return
-		case job := <-sm.broadcastJobs:
-			// Process batch of sessions
-			deadSessions := make([]uint64, 0)
-			for _, sess := range job.sessions {
-				if err := sess.Conn.EncodeFrame(job.frame); err != nil {
-					debugLog.Printf("Session %d: Broadcast encode failed (Type=0x%02X): %v", sess.ID, job.frame.Type, err)
-					deadSessions = append(deadSessions, sess.ID)
-				}
-			}
-			// Clean up dead sessions
-			for _, sessID := range deadSessions {
-				sm.RemoveSession(sessID)
-			}
-		}
-	}
-}
-
-// BroadcastToChannel sends a frame to all sessions in a channel
-func (sm *SessionManager) BroadcastToChannel(channelID int64, frame *protocol.Frame) {
-	// Quickly collect target sessions (minimize lock hold time)
-	sm.mu.RLock()
-	targetSessions := make([]*Session, 0, len(sm.sessions)/4)
-	for _, sess := range sm.sessions {
-		sess.mu.RLock()
-		joined := sess.JoinedChannel
-		sess.mu.RUnlock()
-
-		if joined != nil && *joined == channelID {
-			targetSessions = append(targetSessions, sess)
-		}
-	}
-	sm.mu.RUnlock()
-
-	// Queue work in batches to spread load across workers
-	batchSize := 100
-	for i := 0; i < len(targetSessions); i += batchSize {
-		end := i + batchSize
-		if end > len(targetSessions) {
-			end = len(targetSessions)
-		}
-
-		sm.broadcastJobs <- BroadcastJob{
-			frame:    frame,
-			sessions: targetSessions[i:end],
-		}
-	}
-}
-
-// BroadcastToAll sends a frame to all connected sessions
-func (sm *SessionManager) BroadcastToAll(frame *protocol.Frame) {
-	// Quickly collect all sessions (minimize lock hold time)
-	sm.mu.RLock()
-	targetSessions := make([]*Session, 0, len(sm.sessions))
-	for _, sess := range sm.sessions {
-		targetSessions = append(targetSessions, sess)
-	}
-	sm.mu.RUnlock()
-
-	// Queue work in batches to spread load across workers
-	batchSize := 100
-	for i := 0; i < len(targetSessions); i += batchSize {
-		end := i + batchSize
-		if end > len(targetSessions) {
-			end = len(targetSessions)
-		}
-
-		sm.broadcastJobs <- BroadcastJob{
-			frame:    frame,
-			sessions: targetSessions[i:end],
-		}
-	}
-}
-
 // CountOnlineUsers returns the number of currently connected users
 func (sm *SessionManager) CountOnlineUsers() uint32 {
 	sm.mu.RLock()
@@ -340,17 +238,8 @@ func (sm *SessionManager) CountOnlineUsers() uint32 {
 	return uint32(len(sm.sessions))
 }
 
-// Shutdown cleanly shuts down the session manager and broadcast workers
-func (sm *SessionManager) Shutdown() {
-	close(sm.shutdown)
-	sm.broadcastWG.Wait()
-}
-
 // CloseAll closes all sessions
 func (sm *SessionManager) CloseAll() {
-	// Shutdown broadcast workers first
-	sm.Shutdown()
-
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 

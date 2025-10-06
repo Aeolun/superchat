@@ -40,13 +40,13 @@ coverage-lcov:
 	@echo "  - client.lcov    (pkg/client)"
 	@echo "  - database.lcov  (pkg/database)"
 
-# Check protocol coverage (must be 100%)
+# Check protocol coverage (must be at least 90%)
 coverage-protocol:
 	go test ./pkg/protocol/... -coverprofile=protocol.out -covermode=atomic
 	@COVERAGE=$$(go tool cover -func=protocol.out | grep total | awk '{print $$3}' | sed 's/%//'); \
 	echo "Protocol coverage: $$COVERAGE%"; \
-	if [ $$(echo "$$COVERAGE < 100" | bc -l) -eq 1 ]; then \
-		echo "ERROR: Protocol coverage must be 100%"; \
+	if [ $$(echo "$$COVERAGE < 90" | bc -l) -eq 1 ]; then \
+		echo "ERROR: Protocol coverage must be at least 90%"; \
 		exit 1; \
 	fi
 

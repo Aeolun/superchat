@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -118,9 +119,18 @@ func Open(path string) (*DB, error) {
 		snowflake: snowflake,
 	}
 
-	// Initialize schema
+	// Run migrations first (before schema init)
+	// This will backup the database if migrations are pending
+	if err := runMigrations(conn, path); err != nil {
+		conn.Close()
+		writeConn.Close()
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	// Initialize schema (fallback for dev, migrations should handle this)
 	if err := db.initSchema(); err != nil {
 		conn.Close()
+		writeConn.Close()
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
@@ -239,7 +249,7 @@ type Message struct {
 	CreatedAt      int64 // Unix timestamp in milliseconds
 	EditedAt       *int64
 	DeletedAt      *int64
-	ReplyCount     uint32 // Cached reply count (in-memory only, not persisted to SQLite)
+	ReplyCount     atomic.Uint32 // Cached reply count (in-memory only, not persisted to SQLite)
 }
 
 // MessageVersion represents a version history entry

@@ -155,8 +155,8 @@ func TestCleanupExpiredMessages(t *testing.T) {
 	// Create an old message (2 hours ago)
 	twoHoursAgo := nowMillis() - (2 * 3600 * 1000)
 	_, err = db.conn.Exec(`
-		INSERT INTO Message (channel_id, parent_id, author_nickname, content, created_at, thread_depth)
-		VALUES (?, NULL, 'alice', 'old message', ?, 0)
+		INSERT INTO Message (channel_id, parent_id, author_nickname, content, created_at)
+		VALUES (?, NULL, 'alice', 'old message', ?)
 	`, shortChannelID, twoHoursAgo)
 	if err != nil {
 		t.Fatalf("failed to create old message: %v", err)
@@ -222,8 +222,8 @@ func TestCleanupExpiredMessagesWithReplies(t *testing.T) {
 	// Create old root message with replies
 	twoHoursAgo := nowMillis() - (2 * 3600 * 1000)
 	result, err := db.conn.Exec(`
-		INSERT INTO Message (channel_id, parent_id, author_nickname, content, created_at, thread_depth)
-		VALUES (?, NULL, 'alice', 'old root', ?, 0)
+		INSERT INTO Message (channel_id, parent_id, author_nickname, content, created_at)
+		VALUES (?, NULL, 'alice', 'old root', ?)
 	`, channelID, twoHoursAgo)
 	if err != nil {
 		t.Fatalf("failed to create old root: %v", err)
@@ -232,8 +232,8 @@ func TestCleanupExpiredMessagesWithReplies(t *testing.T) {
 
 	// Add reply to old root
 	_, err = db.conn.Exec(`
-		INSERT INTO Message (channel_id, parent_id, author_nickname, content, created_at, thread_depth)
-		VALUES (?, ?, 'bob', 'reply to old', ?, 1)
+		INSERT INTO Message (channel_id, parent_id, author_nickname, content, created_at)
+		VALUES (?, ?, 'bob', 'reply to old', ?)
 	`, channelID, rootID, twoHoursAgo)
 	if err != nil {
 		t.Fatalf("failed to create reply: %v", err)

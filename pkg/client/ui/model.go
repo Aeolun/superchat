@@ -35,8 +35,8 @@ const (
 // Model represents the application state
 type Model struct {
 	// Connection and state
-	conn             *client.Connection
-	state            *client.State
+	conn             client.ConnectionInterface
+	state            client.StateInterface
 	connectionState  ConnectionState
 	reconnectAttempt int
 
@@ -102,7 +102,7 @@ const (
 )
 
 // NewModel creates a new application model
-func NewModel(conn *client.Connection, state *client.State, currentVersion string) Model {
+func NewModel(conn client.ConnectionInterface, state client.StateInterface, currentVersion string) Model {
 	firstRun := state.GetFirstRun()
 	initialView := ViewChannelList
 	if firstRun {
@@ -190,7 +190,7 @@ func (m Model) Init() tea.Cmd {
 }
 
 // listenForServerFrames listens for incoming server frames and connection state changes
-func listenForServerFrames(conn *client.Connection) tea.Cmd {
+func listenForServerFrames(conn client.ConnectionInterface) tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case frame := <-conn.Incoming():
