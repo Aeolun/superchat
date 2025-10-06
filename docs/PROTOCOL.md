@@ -221,11 +221,27 @@ If failed:
 
 ### 0x02 - SET_NICKNAME (Client → Server)
 
+Used to set or change nickname.
+
 ```
 +--------------------+
 | nickname (String)  |
 +--------------------+
 ```
+
+**Behavior:**
+
+**Anonymous users:**
+- Can change nickname freely to any available nickname
+- Nickname change only affects current session
+- Previous messages keep old nickname
+
+**Registered users:**
+- Can change nickname to any available (unregistered) nickname
+- Nickname change updates all existing messages to show new nickname automatically
+- Database UPDATE on User.nickname only (messages link via author_user_id FK)
+- Message.author_nickname is only used for anonymous users (where author_user_id is NULL)
+- Cannot change to a nickname already registered by another user
 
 ### 0x82 - NICKNAME_RESPONSE (Server → Client)
 
@@ -235,9 +251,11 @@ If failed:
 +-------------------+-------------------+
 ```
 
-- If nickname is registered and client is not authenticated: `success = false`, `message = "Nickname registered, password required"`
-- If nickname is available: `success = true`
-- If nickname is invalid: `success = false`, `message = "Invalid nickname"`
+**Response cases:**
+- Nickname is registered and client is not authenticated: `success = false`, `message = "Nickname registered, password required"`
+- Nickname is available: `success = true`, `message = "Nickname changed to <nickname>"` (or "Nickname set to <nickname>")
+- Nickname is invalid (format): `success = false`, `message = "Invalid nickname"`
+- Nickname already taken (registered user trying to change): `success = false`, `message = "Nickname already in use"`
 
 ### 0x03 - REGISTER_USER (Client → Server)
 

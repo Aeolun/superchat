@@ -38,6 +38,10 @@ type StateInterface interface {
 	GetLastNickname() string
 	SetLastNickname(nickname string) error
 
+	// Authentication (V2)
+	GetUserID() *uint64
+	SetUserID(userID *uint64) error
+
 	// Read state tracking
 	GetReadState(channelID uint64) (lastReadAt int64, lastReadMessageID *uint64, err error)
 	UpdateReadState(channelID uint64, timestamp int64, messageID *uint64) error

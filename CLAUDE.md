@@ -10,16 +10,27 @@ SuperChat is a terminal-based threaded chat application with a custom binary pro
 - See `docs/V2.md` for detailed V2 feature status and implementation plan
 - See `docs/V1.md` for V1 specification and rationale
 
+## UI Terminology (Important!)
+
+**User often confuses these two screens - always clarify which one they mean:**
+
+- **Splash Screen** (`ViewSplash`): First-run only welcome screen shown once. Most users never see this again.
+- **Channel List Welcome Message** (`renderChannelList`): The actual "welcome" users see every time - shown on the channel list view when no channel is selected. **This is what users usually mean when they say "splash screen" or "welcome screen".**
+
+When user asks to update the "splash" or "welcome" screen, confirm which one they mean!
+
 ## Build Commands
 
+**IMPORTANT: Always use `make build` to build both client and server together.**
+
 ```bash
-# Build both server and client
+# Build both server and client (PREFERRED)
 make build
 
-# Build server only
+# Build server only (if needed)
 go build -o superchat-server ./cmd/server
 
-# Build client only
+# Build client only (if needed)
 go build -o superchat ./cmd/client
 
 # Run server
@@ -28,6 +39,8 @@ go run ./cmd/server
 # Run client
 go run ./cmd/client
 ```
+
+**Note:** When implementing features that touch both client and server, always use `make build` to ensure both compile successfully.
 
 ## Logging
 

@@ -553,6 +553,11 @@ func (m *MemDB) ListChannels() ([]*Channel, error) {
 		channels = append(channels, &chCopy)
 	}
 
+	// Sort channels alphabetically by name
+	sort.Slice(channels, func(i, j int) bool {
+		return channels[i].Name < channels[j].Name
+	})
+
 	return channels, nil
 }
 
@@ -923,6 +928,11 @@ func (m *MemDB) GetUserByID(userID int64) (*User, error) {
 // UpdateUserLastSeen updates the last_seen timestamp for a user
 func (m *MemDB) UpdateUserLastSeen(userID int64) error {
 	return m.sqliteDB.UpdateUserLastSeen(userID)
+}
+
+// UpdateUserNickname updates a user's nickname
+func (m *MemDB) UpdateUserNickname(userID int64, newNickname string) error {
+	return m.sqliteDB.UpdateUserNickname(userID, newNickname)
 }
 
 // UpdateSessionUserID links a session to a registered user

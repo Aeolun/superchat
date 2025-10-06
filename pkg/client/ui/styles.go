@@ -116,6 +116,12 @@ var (
 				BorderForeground(primaryColor).
 				Padding(0, 1)
 
+	inputBlurredStyle = baseStyle.Copy().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(borderColor).
+				Foreground(mutedColor).
+				Padding(0, 1)
+
 	// Error/success styles
 	errorStyle = baseStyle.Copy().
 			Foreground(errorColor).

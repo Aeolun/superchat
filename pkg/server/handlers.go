@@ -174,6 +174,35 @@ func (s *Server) handleSetNickname(sess *Session, frame *protocol.Frame) error {
 		return s.sendMessage(sess, protocol.TypeNicknameResponse, resp)
 	}
 
+	// Check if nickname is registered
+	existingUser, err := s.db.GetUserByNickname(msg.Nickname)
+	isRegistered := (err == nil)
+
+	// If nickname is registered and session is not authenticated as that user
+	if isRegistered && (sess.UserID == nil || *sess.UserID != existingUser.ID) {
+		resp := &protocol.NicknameResponseMessage{
+			Success: false,
+			Message: "Nickname registered, password required",
+		}
+		return s.sendMessage(sess, protocol.TypeNicknameResponse, resp)
+	}
+
+	// Determine if this is a change or initial set
+	oldNickname := sess.Nickname
+	isChange := oldNickname != ""
+
+	// For registered users changing nickname, update database
+	if sess.UserID != nil && isChange {
+		if err := s.db.UpdateUserNickname(*sess.UserID, msg.Nickname); err != nil {
+			log.Printf("Session %d: UpdateUserNickname failed: %v", sess.ID, err)
+			resp := &protocol.NicknameResponseMessage{
+				Success: false,
+				Message: "Nickname already in use",
+			}
+			return s.sendMessage(sess, protocol.TypeNicknameResponse, resp)
+		}
+	}
+
 	// Update session nickname
 	if err := s.sessions.UpdateNickname(sess.ID, msg.Nickname); err != nil {
 		log.Printf("Session %d: UpdateNickname failed: %v", sess.ID, err)
@@ -181,9 +210,16 @@ func (s *Server) handleSetNickname(sess *Session, frame *protocol.Frame) error {
 	}
 
 	// Send success response
+	var message string
+	if isChange {
+		message = fmt.Sprintf("Nickname changed to %s", msg.Nickname)
+	} else {
+		message = fmt.Sprintf("Nickname set to %s", msg.Nickname)
+	}
+
 	resp := &protocol.NicknameResponseMessage{
 		Success: true,
-		Message: fmt.Sprintf("Nickname set to %s", msg.Nickname),
+		Message: message,
 	}
 	return s.sendMessage(sess, protocol.TypeNicknameResponse, resp)
 }

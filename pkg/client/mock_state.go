@@ -72,6 +72,16 @@ func (s *MockState) SetLastNickname(nickname string) error {
 	return s.SetConfig("last_nickname", nickname)
 }
 
+// GetUserID returns the authenticated user ID (V2)
+func (s *MockState) GetUserID() *uint64 {
+	return nil // Mock always returns nil for now
+}
+
+// SetUserID stores the authenticated user ID (V2)
+func (s *MockState) SetUserID(userID *uint64) error {
+	return nil // Mock does nothing for now
+}
+
 // GetReadState returns the read state for a channel
 func (s *MockState) GetReadState(channelID uint64) (lastReadAt int64, lastReadMessageID *uint64, err error) {
 	s.mu.RLock()

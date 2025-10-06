@@ -332,7 +332,7 @@ func (db *DB) ListChannels() ([]*Channel, error) {
 		SELECT id, name, display_name, description, channel_type, message_retention_hours, created_by, created_at, is_private
 		FROM Channel
 		WHERE is_private = 0
-		ORDER BY id ASC
+		ORDER BY name ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -1034,6 +1034,34 @@ func (db *DB) GetUserByID(userID int64) (*User, error) {
 	}
 
 	return &user, nil
+}
+
+// UpdateUserNickname updates a user's nickname
+// Returns error if nickname is already taken by another user
+func (db *DB) UpdateUserNickname(userID int64, newNickname string) error {
+	// Check if nickname is already taken by another user
+	existingUser, err := db.GetUserByNickname(newNickname)
+	if err == nil && existingUser.ID != userID {
+		// Nickname exists and belongs to a different user
+		return fmt.Errorf("nickname already in use")
+	}
+	if err != nil && err != sql.ErrNoRows {
+		// Database error (not just "not found")
+		return fmt.Errorf("failed to check nickname availability: %w", err)
+	}
+
+	// Update the user's nickname
+	_, err = db.conn.Exec(`
+		UPDATE User
+		SET nickname = ?
+		WHERE id = ?
+	`, newNickname, userID)
+
+	if err != nil {
+		return fmt.Errorf("failed to update nickname: %w", err)
+	}
+
+	return nil
 }
 
 // UpdateUserLastSeen updates the last_seen timestamp for a user

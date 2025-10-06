@@ -60,7 +60,7 @@ func TestView_HelpOverlay(t *testing.T) {
 	if !strings.Contains(output, "Keyboard Shortcuts") {
 		t.Error("Help overlay should contain 'Keyboard Shortcuts' title")
 	}
-	if !strings.Contains(output, "Move up") {
+	if !strings.Contains(output, "Move selection up") {
 		t.Error("Help overlay should show shortcuts")
 	}
 }

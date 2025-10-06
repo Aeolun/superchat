@@ -110,6 +110,27 @@ func (s *State) SetLastNickname(nickname string) error {
 	return s.SetConfig("last_nickname", nickname)
 }
 
+// GetUserID returns the authenticated user ID (V2)
+func (s *State) GetUserID() *uint64 {
+	userIDStr, _ := s.GetConfig("user_id")
+	if userIDStr == "" {
+		return nil
+	}
+	var userID uint64
+	if _, err := fmt.Sscanf(userIDStr, "%d", &userID); err != nil {
+		return nil
+	}
+	return &userID
+}
+
+// SetUserID stores the authenticated user ID (V2)
+func (s *State) SetUserID(userID *uint64) error {
+	if userID == nil {
+		return s.SetConfig("user_id", "")
+	}
+	return s.SetConfig("user_id", fmt.Sprintf("%d", *userID))
+}
+
 // GetReadState returns the read state for a channel
 func (s *State) GetReadState(channelID uint64) (lastReadAt int64, lastReadMessageID *uint64, err error) {
 	var messageID sql.NullInt64
