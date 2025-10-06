@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -853,6 +854,36 @@ func (m *MemDB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, 
 			parent.ReplyCount.Add(^uint32(0)) // Atomic decrement (two's complement of 0 = -1)
 		}
 	}
+
+	return msg, nil
+}
+
+// UpdateMessage updates a message's content (for registered users only)
+func (m *MemDB) UpdateMessage(messageID uint64, userID uint64, newContent string) (*Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	msg, exists := m.messages[int64(messageID)]
+	if !exists {
+		return nil, ErrMessageNotFound
+	}
+
+	// Validate message is editable
+	if msg.AuthorUserID == nil {
+		return nil, errors.New("cannot edit anonymous messages")
+	}
+	if *msg.AuthorUserID != int64(userID) {
+		return nil, ErrMessageNotOwned
+	}
+	if msg.DeletedAt != nil {
+		return nil, errors.New("cannot edit deleted message")
+	}
+
+	// Update content and edited_at timestamp
+	now := nowMillis()
+	msg.Content = newContent
+	msg.EditedAt = &now
+	m.dirtyMessages[int64(messageID)] = true // Mark as dirty for next snapshot
 
 	return msg, nil
 }

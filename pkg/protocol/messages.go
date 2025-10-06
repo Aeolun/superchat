@@ -18,6 +18,7 @@ const (
 	TypeCreateChannel      = 0x07
 	TypeListMessages       = 0x09
 	TypePostMessage        = 0x0A
+	TypeEditMessage        = 0x0B
 	TypeDeleteMessage      = 0x0C
 	TypePing               = 0x10
 	TypeDisconnect         = 0x11
@@ -1087,6 +1088,130 @@ func (m *MessagePostedMessage) Decode(payload []byte) error {
 	m.Success = success
 	m.MessageID = messageID
 	m.Message = message
+	return nil
+}
+
+// EditMessageMessage (0x0B) - Edit an existing message
+type EditMessageMessage struct {
+	MessageID  uint64
+	NewContent string
+}
+
+func (m *EditMessageMessage) EncodeTo(w io.Writer) error {
+	// Validate content
+	if len(m.NewContent) == 0 {
+		return ErrEmptyContent
+	}
+	if len(m.NewContent) > 4096 {
+		return ErrMessageTooLong
+	}
+
+	if err := WriteUint64(w, m.MessageID); err != nil {
+		return err
+	}
+	return WriteString(w, m.NewContent)
+}
+
+func (m *EditMessageMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *EditMessageMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	messageID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	content, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	// Validate content
+	if len(content) == 0 {
+		return ErrEmptyContent
+	}
+	if len(content) > 4096 {
+		return ErrMessageTooLong
+	}
+
+	m.MessageID = messageID
+	m.NewContent = content
+	return nil
+}
+
+// MessageEditedMessage (0x8B) - Edit confirmation + real-time broadcast
+type MessageEditedMessage struct {
+	Success    bool
+	MessageID  uint64
+	EditedAt   time.Time
+	NewContent string
+	Message    string // Error message if failed
+}
+
+func (m *MessageEditedMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if err := WriteUint64(w, m.MessageID); err != nil {
+		return err
+	}
+	if m.Success {
+		if err := WriteTimestamp(w, m.EditedAt); err != nil {
+			return err
+		}
+		if err := WriteString(w, m.NewContent); err != nil {
+			return err
+		}
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *MessageEditedMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *MessageEditedMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	messageID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+	m.MessageID = messageID
+
+	if success {
+		editedAt, err := ReadTimestamp(buf)
+		if err != nil {
+			return err
+		}
+		newContent, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		m.EditedAt = editedAt
+		m.NewContent = newContent
+	}
+
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Message = message
+
 	return nil
 }
 

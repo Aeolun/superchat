@@ -522,6 +522,70 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 	return nil
 }
 
+// handleEditMessage handles EDIT_MESSAGE message (V2, registered users only)
+func (s *Server) handleEditMessage(sess *Session, frame *protocol.Frame) error {
+	msg := &protocol.EditMessageMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Check if user is registered (anonymous users cannot edit)
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	if userID == nil {
+		log.Printf("Session %d (anonymous) tried to EDIT_MESSAGE", sess.ID)
+		return s.sendError(sess, protocol.ErrCodeAuthRequired, "Authentication required. Register to edit messages.")
+	}
+
+	// Validate message length
+	if uint32(len(msg.NewContent)) > s.config.MaxMessageLength {
+		return s.sendError(sess, protocol.ErrCodeMessageTooLong, fmt.Sprintf("Message too long (max %d bytes)", s.config.MaxMessageLength))
+	}
+
+	// Update message in database
+	dbMsg, err := s.db.UpdateMessage(msg.MessageID, uint64(*userID), msg.NewContent)
+	if err != nil {
+		switch {
+		case errors.Is(err, database.ErrMessageNotFound):
+			return s.sendError(sess, protocol.ErrCodeMessageNotFound, "Message not found")
+		case errors.Is(err, database.ErrMessageNotOwned):
+			return s.sendError(sess, protocol.ErrCodePermissionDenied, "You can only edit your own messages")
+		case err.Error() == "cannot edit anonymous messages":
+			return s.sendError(sess, protocol.ErrCodePermissionDenied, "Cannot edit anonymous messages")
+		case err.Error() == "cannot edit deleted message":
+			return s.sendError(sess, protocol.ErrCodeInvalidInput, "Cannot edit deleted message")
+		default:
+			return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to edit message")
+		}
+	}
+
+	// EditedAt should always be set by UpdateMessage
+	editedAtMs := safeDeref(dbMsg.EditedAt, time.Now().UnixMilli())
+	editedAt := time.UnixMilli(editedAtMs)
+
+	// Send confirmation to editing user
+	resp := &protocol.MessageEditedMessage{
+		Success:    true,
+		MessageID:  msg.MessageID,
+		EditedAt:   editedAt,
+		NewContent: msg.NewContent,
+		Message:    "",
+	}
+
+	if err := s.sendMessage(sess, protocol.TypeMessageEdited, resp); err != nil {
+		return err
+	}
+
+	// Broadcast MESSAGE_EDITED to all users in the channel
+	if err := s.broadcastToChannel(dbMsg.ChannelID, protocol.TypeMessageEdited, resp); err != nil {
+		log.Printf("Failed to broadcast message edit: %v", err)
+	}
+
+	return nil
+}
+
 // handleDeleteMessage handles DELETE_MESSAGE message
 func (s *Server) handleDeleteMessage(sess *Session, frame *protocol.Frame) error {
 	msg := &protocol.DeleteMessageMessage{}

@@ -585,6 +585,12 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 	timeStr := formatTime(msg.CreatedAt)
 	timestamp := messageTimeStyle.Render(timeStr)
 
+	// Add edited indicator if message was edited
+	editedIndicator := ""
+	if msg.EditedAt != nil {
+		editedIndicator = "  " + messageTimeStyle.Render("(edited)")
+	}
+
 	// Add NEW indicator if message is unread
 	newIndicator := ""
 	if m.newMessageIDs[msg.ID] {
@@ -597,7 +603,7 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 		depthIndicator = "  " + messageDepthStyle.Render(fmt.Sprintf("[%d]", depth))
 	}
 
-	header := author + "  " + timestamp + newIndicator + depthIndicator
+	header := author + "  " + timestamp + editedIndicator + newIndicator + depthIndicator
 
 	// Calculate available width for content (viewport width minus borders, padding, indent, and indicator)
 	// Viewport width = m.width - 2 (border)

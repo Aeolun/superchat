@@ -393,6 +393,8 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleListMessages(sess, frame)
 	case protocol.TypePostMessage:
 		return s.handlePostMessage(sess, frame)
+	case protocol.TypeEditMessage:
+		return s.handleEditMessage(sess, frame)
 	case protocol.TypeDeleteMessage:
 		return s.handleDeleteMessage(sess, frame)
 	case protocol.TypePing:

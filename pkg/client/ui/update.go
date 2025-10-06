@@ -578,6 +578,8 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleMessagePosted(frame)
 	case protocol.TypeNewMessage:
 		return m.handleNewMessage(frame)
+	case protocol.TypeMessageEdited:
+		return m.handleMessageEdited(frame)
 	case protocol.TypeMessageDeleted:
 		return m.handleMessageDeleted(frame)
 	case protocol.TypeSubscribeOk:
@@ -812,6 +814,24 @@ func (m Model) handleMessageDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 	return m, listenForServerFrames(m.conn)
 }
 
+// handleMessageEdited processes MESSAGE_EDITED confirmations and broadcasts.
+func (m Model) handleMessageEdited(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.MessageEditedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode message edit: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	if msg.Success {
+		m.applyMessageEdit(msg.MessageID, msg.NewContent, msg.EditedAt)
+		m.statusMessage = "Message edited"
+	} else {
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn)
+}
+
 // handleSubscribeOk processes SUBSCRIBE_OK confirmations
 func (m Model) handleSubscribeOk(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.SubscribeOkMessage{}
@@ -868,6 +888,37 @@ func (m *Model) applyMessageDeletion(messageID uint64, replacement string) {
 	}
 
 	delete(m.newMessageIDs, messageID)
+
+	if updatedThreadList {
+		m.threadListViewport.SetContent(m.buildThreadListContent())
+	}
+	if m.currentView == ViewThreadView {
+		m.threadViewport.SetContent(m.buildThreadContent())
+	}
+}
+
+// applyMessageEdit updates local state to reflect an edited message.
+func (m *Model) applyMessageEdit(messageID uint64, newContent string, editedAt time.Time) {
+	updatedThreadList := false
+	for i := range m.threads {
+		if m.threads[i].ID == messageID {
+			m.threads[i].Content = newContent
+			m.threads[i].EditedAt = &editedAt
+			updatedThreadList = true
+		}
+	}
+
+	if m.currentThread != nil && m.currentThread.ID == messageID {
+		m.currentThread.Content = newContent
+		m.currentThread.EditedAt = &editedAt
+	}
+
+	for i := range m.threadReplies {
+		if m.threadReplies[i].ID == messageID {
+			m.threadReplies[i].Content = newContent
+			m.threadReplies[i].EditedAt = &editedAt
+		}
+	}
 
 	if updatedThreadList {
 		m.threadListViewport.SetContent(m.buildThreadListContent())

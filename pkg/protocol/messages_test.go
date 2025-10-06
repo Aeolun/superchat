@@ -681,6 +681,121 @@ func TestMessagePostedMessage(t *testing.T) {
 	}
 }
 
+func TestEditMessageMessage(t *testing.T) {
+	tests := []struct {
+		name       string
+		messageID  uint64
+		newContent string
+		wantErr    bool
+		errType    error
+	}{
+		{"valid edit", 123, "Updated message content", false, nil},
+		{"min length content", 1, "Hi", false, nil},
+		{"max length content", 999, string(make([]byte, 4096)), false, nil},
+		{"empty content", 42, "", true, ErrEmptyContent},
+		{"content too long", 55, string(make([]byte, 4097)), true, ErrMessageTooLong},
+		{"zero message id", 0, "Valid content", false, nil},
+		{"large message id", 18446744073709551615, "Content", false, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &EditMessageMessage{
+				MessageID:  tt.messageID,
+				NewContent: tt.newContent,
+			}
+
+			// Test encode
+			payload, err := msg.Encode()
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Equal(t, tt.errType, err)
+				return
+			}
+			require.NoError(t, err)
+
+			// Test decode
+			decoded := &EditMessageMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.messageID, decoded.MessageID)
+			assert.Equal(t, tt.newContent, decoded.NewContent)
+		})
+	}
+}
+
+func TestMessageEditedMessage(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name string
+		msg  MessageEditedMessage
+	}{
+		{
+			name: "successful edit",
+			msg: MessageEditedMessage{
+				Success:    true,
+				MessageID:  123,
+				EditedAt:   now,
+				NewContent: "Updated content",
+				Message:    "",
+			},
+		},
+		{
+			name: "failed edit - not author",
+			msg: MessageEditedMessage{
+				Success:   false,
+				MessageID: 456,
+				Message:   "Not message author",
+			},
+		},
+		{
+			name: "failed edit - message not found",
+			msg: MessageEditedMessage{
+				Success:   false,
+				MessageID: 789,
+				Message:   "Message not found",
+			},
+		},
+		{
+			name: "failed edit - anonymous user",
+			msg: MessageEditedMessage{
+				Success:   false,
+				MessageID: 999,
+				Message:   "Authentication required",
+			},
+		},
+		{
+			name: "successful edit with long content",
+			msg: MessageEditedMessage{
+				Success:    true,
+				MessageID:  100,
+				EditedAt:   now,
+				NewContent: string(make([]byte, 4096)),
+				Message:    "Success",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &MessageEditedMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.msg.Success, decoded.Success)
+			assert.Equal(t, tt.msg.MessageID, decoded.MessageID)
+			if tt.msg.Success {
+				assert.Equal(t, tt.msg.EditedAt.Unix(), decoded.EditedAt.Unix())
+				assert.Equal(t, tt.msg.NewContent, decoded.NewContent)
+			}
+			assert.Equal(t, tt.msg.Message, decoded.Message)
+		})
+	}
+}
+
 func TestDeleteMessageMessage(t *testing.T) {
 	msg := &DeleteMessageMessage{MessageID: 123}
 

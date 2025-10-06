@@ -752,6 +752,100 @@ func (db *DB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, er
 	return msg, nil
 }
 
+// UpdateMessage updates a message's content (for registered users only)
+// Returns the updated message with edited_at timestamp set
+func (db *DB) UpdateMessage(messageID uint64, userID uint64, newContent string) (*Message, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Load message row
+	msg := &Message{}
+	var subchannelID, parentID, authorUserID, editedAt, deletedAt sql.NullInt64
+
+	err = tx.QueryRow(`
+		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+		       content, created_at, edited_at, deleted_at
+		FROM Message
+		WHERE id = ?
+	`, messageID).Scan(
+		&msg.ID,
+		&msg.ChannelID,
+		&subchannelID,
+		&parentID,
+		&authorUserID,
+		&msg.AuthorNickname,
+		&msg.Content,
+		&msg.CreatedAt,
+		&editedAt,
+		&deletedAt,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrMessageNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if subchannelID.Valid {
+		msg.SubchannelID = &subchannelID.Int64
+	}
+	if parentID.Valid {
+		msg.ParentID = &parentID.Int64
+	}
+	if authorUserID.Valid {
+		msg.AuthorUserID = &authorUserID.Int64
+	}
+	if editedAt.Valid {
+		msg.EditedAt = &editedAt.Int64
+	}
+	if deletedAt.Valid {
+		msg.DeletedAt = &deletedAt.Int64
+	}
+
+	// Validate message is editable
+	if msg.AuthorUserID == nil {
+		return nil, errors.New("cannot edit anonymous messages")
+	}
+	if *msg.AuthorUserID != int64(userID) {
+		return nil, ErrMessageNotOwned
+	}
+	if msg.DeletedAt != nil {
+		return nil, errors.New("cannot edit deleted message")
+	}
+
+	editedAtMillis := nowMillis()
+
+	// Record edit version with original content
+	if _, err := tx.Exec(`
+		INSERT INTO MessageVersion (message_id, content, author_nickname, created_at, version_type)
+		VALUES (?, ?, ?, ?, 'edited')
+	`, messageID, msg.Content, msg.AuthorNickname, editedAtMillis); err != nil {
+		return nil, err
+	}
+
+	// Update message content and edited_at
+	if _, err := tx.Exec(`
+		UPDATE Message
+		SET content = ?, edited_at = ?
+		WHERE id = ?
+	`, newContent, editedAtMillis, messageID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	msg.Content = newContent
+	msg.EditedAt = &editedAtMillis
+
+	return msg, nil
+}
+
 // CountReplies returns the total number of descendants for a message
 func (db *DB) CountReplies(messageID int64) (uint32, error) {
 	var count uint32
