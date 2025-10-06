@@ -444,7 +444,6 @@ func TestMessageListMessage(t *testing.T) {
 						Content:        "Hello, world!",
 						CreatedAt:      now,
 						EditedAt:       nil,
-						ThreadDepth:    0,
 						ReplyCount:     5,
 					},
 				},
@@ -467,7 +466,6 @@ func TestMessageListMessage(t *testing.T) {
 						Content:        "Root message",
 						CreatedAt:      now,
 						EditedAt:       nil,
-						ThreadDepth:    0,
 						ReplyCount:     2,
 					},
 					{
@@ -480,7 +478,6 @@ func TestMessageListMessage(t *testing.T) {
 						Content:        "Reply message",
 						CreatedAt:      now.Add(time.Minute),
 						EditedAt:       &editedTime,
-						ThreadDepth:    1,
 						ReplyCount:     0,
 					},
 				},
@@ -506,7 +503,6 @@ func TestMessageListMessage(t *testing.T) {
 				assert.Equal(t, msg.ChannelID, dec.ChannelID)
 				assert.Equal(t, msg.AuthorNickname, dec.AuthorNickname)
 				assert.Equal(t, msg.Content, dec.Content)
-				assert.Equal(t, msg.ThreadDepth, dec.ThreadDepth)
 				assert.Equal(t, msg.ReplyCount, dec.ReplyCount)
 
 				assert.InDelta(t, msg.CreatedAt.UnixMilli(), dec.CreatedAt.UnixMilli(), 1)
@@ -859,7 +855,6 @@ func TestNewMessageMessage(t *testing.T) {
 				Content:        "Hello, world!",
 				CreatedAt:      now,
 				EditedAt:       nil,
-				ThreadDepth:    0,
 				ReplyCount:     0,
 			},
 		},
@@ -875,7 +870,6 @@ func TestNewMessageMessage(t *testing.T) {
 				Content:        "This is a reply",
 				CreatedAt:      now,
 				EditedAt:       &editedTime,
-				ThreadDepth:    1,
 				ReplyCount:     0,
 			},
 		},
@@ -894,7 +888,6 @@ func TestNewMessageMessage(t *testing.T) {
 			assert.Equal(t, tt.msg.ChannelID, decoded.ChannelID)
 			assert.Equal(t, tt.msg.AuthorNickname, decoded.AuthorNickname)
 			assert.Equal(t, tt.msg.Content, decoded.Content)
-			assert.Equal(t, tt.msg.ThreadDepth, decoded.ThreadDepth)
 			assert.Equal(t, tt.msg.ReplyCount, decoded.ReplyCount)
 			assert.InDelta(t, tt.msg.CreatedAt.UnixMilli(), decoded.CreatedAt.UnixMilli(), 1)
 
