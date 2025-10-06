@@ -91,26 +91,121 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKeyPress handles keyboard input
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Special case: ctrl+c always quits immediately
+	if key == "ctrl+c" {
+		return m, tea.Quit
+	}
+
+	// Check if active modal handles this key
+	if activeModal := m.modalStack.Top(); activeModal != nil {
+		// Modal is active - let it handle the key
+		handled, newModal, cmd := activeModal.HandleKey(msg)
+
+		if newModal == nil {
+			// Modal requested to close
+			m.modalStack.Pop()
+		} else if newModal.Type() != activeModal.Type() {
+			// Modal wants to be replaced with a different modal
+			m.modalStack.Pop()
+			m.modalStack.Push(newModal)
+		}
+		// else: modal stays the same
+
+		if handled {
+			return m, cmd
+		}
+
+		// Key not handled by modal - block it if modal is blocking
+		if activeModal.IsBlockingInput() {
+			return m, nil
+		}
+	}
+
+	// Handle password modal text input (LEGACY - will be moved to PasswordPromptModal)
+	if m.authState == AuthStatePrompting {
+		switch msg.Type {
+		case tea.KeyRunes:
+			m.passwordInput = append(m.passwordInput, []byte(string(msg.Runes))...)
+			return m, nil
+		case tea.KeyBackspace:
+			if len(m.passwordInput) > 0 {
+				m.passwordInput = m.passwordInput[:len(m.passwordInput)-1]
+			}
+			return m, nil
+		}
+	}
+
+	// Handle registration modal text input (LEGACY - will be moved to RegistrationModal)
+	if m.registrationMode {
+		switch msg.Type {
+		case tea.KeyRunes:
+			if m.regPasswordCursor == 0 {
+				m.regPasswordInput = append(m.regPasswordInput, []byte(string(msg.Runes))...)
+			} else {
+				m.regConfirmInput = append(m.regConfirmInput, []byte(string(msg.Runes))...)
+			}
+			return m, nil
+		case tea.KeyBackspace:
+			if m.regPasswordCursor == 0 {
+				if len(m.regPasswordInput) > 0 {
+					m.regPasswordInput = m.regPasswordInput[:len(m.regPasswordInput)-1]
+				}
+			} else {
+				if len(m.regConfirmInput) > 0 {
+					m.regConfirmInput = m.regConfirmInput[:len(m.regConfirmInput)-1]
+				}
+			}
+			return m, nil
+		}
+	}
+
+	// Handle nickname change modal text input (LEGACY - will be moved to NicknameChangeModal)
+	if m.nicknameChangeMode {
+		// Let Enter and ESC fall through to command handler
+		if key != "enter" && key != "esc" {
+			switch msg.Type {
+			case tea.KeyRunes:
+				m.nicknameChangeInput += string(msg.Runes)
+				return m, nil
+			case tea.KeyBackspace:
+				if len(m.nicknameChangeInput) > 0 {
+					m.nicknameChangeInput = m.nicknameChangeInput[:len(m.nicknameChangeInput)-1]
+				}
+				return m, nil
+			}
+		}
+	}
+
+	// No modal active or modal didn't handle the key
+	// Route through command registry based on main view and active modal
+	activeModalType := m.modalStack.TopType()
+	if cmd := m.commands.GetCommand(key, int(m.currentView), activeModalType, &m); cmd != nil {
+		newModel, teaCmd := cmd.Execute(&m)
+		if model, ok := newModel.(*Model); ok {
+			return *model, teaCmd
+		}
+		return m, teaCmd
+	}
+
+	// Fall back to existing key handlers (during migration period)
+	return m.handleLegacyKeyPress(msg)
+}
+
+// handleLegacyKeyPress contains existing key handling code
+// This will be gradually emptied as commands are migrated to the new system
+func (m Model) handleLegacyKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global shortcuts
 	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
 	case "q":
 		// Allow quit from anywhere except compose mode
 		if m.currentView != ViewCompose && m.currentView != ViewNicknameSetup {
 			return m, tea.Quit
 		}
-	case "?", "h":
-		if m.currentView != ViewCompose && m.currentView != ViewNicknameSetup {
-			m.showHelp = !m.showHelp
-			return m, nil
-		}
 	}
 
-	if msg.String() == "esc" && m.showHelp {
-		m.showHelp = false
-		return m, nil
-	}
+	// Old help handling removed - now handled by HelpModal
 
 	// View-specific handling
 	switch m.currentView {
@@ -361,31 +456,7 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
-	if m.confirmingDelete {
-		switch msg.String() {
-		case "y", "enter":
-			if m.pendingDeleteID == 0 {
-				m.confirmingDelete = false
-				m.pendingDeleteID = 0
-				return m, nil
-			}
-			id := m.pendingDeleteID
-			m.confirmingDelete = false
-			m.pendingDeleteID = 0
-			m.statusMessage = "Deleting message..."
-			return m, tea.Batch(
-				listenForServerFrames(m.conn),
-				m.sendDeleteMessage(id),
-			)
-		case "n", "esc":
-			m.confirmingDelete = false
-			m.pendingDeleteID = 0
-			m.statusMessage = "Deletion canceled"
-			return m, nil
-		default:
-			return m, nil
-		}
-	}
+	// Old delete confirmation handling removed - now handled by DeleteConfirmModal
 
 	switch msg.String() {
 	case "up", "k":
@@ -449,6 +520,28 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingDeleteID = msgPtr.ID
 		m.confirmingDelete = true
 		m.statusMessage = ""
+		return m, nil
+
+	case "e":
+		// Edit selected message - check for nickname first
+		msgPtr, ok := m.selectedMessage()
+		if !ok {
+			return m, nil
+		}
+		if m.nickname == "" {
+			m.errorMessage = "Set a nickname before editing messages"
+			return m, nil
+		}
+		if isDeletedMessageContent(msgPtr.Content) {
+			m.statusMessage = "Cannot edit deleted message"
+			return m, nil
+		}
+		// Pre-populate compose with existing content
+		m.currentView = ViewCompose
+		m.composeMode = ComposeModeEdit
+		m.composeInput = msgPtr.Content
+		m.composeMessageID = &msgPtr.ID
+		m.composeParentID = nil
 		return m, nil
 
 	case "esc":
@@ -516,21 +609,33 @@ func (m Model) handleComposeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentView = ViewThreadView
 		}
 		m.composeInput = ""
+		m.composeMessageID = nil
 		return m, nil
 
 	case "ctrl+d", "ctrl+enter":
-		// Send message
+		// Send message or edit
 		if len(m.composeInput) == 0 {
 			m.errorMessage = "Message cannot be empty"
 			return m, nil
 		}
 
-		if m.currentChannel == nil {
-			m.errorMessage = "No channel selected"
-			return m, nil
-		}
+		var cmd tea.Cmd
 
-		cmd := m.sendPostMessage(m.currentChannel.ID, m.composeParentID, m.composeInput)
+		if m.composeMode == ComposeModeEdit {
+			// Edit existing message
+			if m.composeMessageID == nil {
+				m.errorMessage = "No message ID for edit"
+				return m, nil
+			}
+			cmd = m.sendEditMessage(*m.composeMessageID, m.composeInput)
+		} else {
+			// Post new message
+			if m.currentChannel == nil {
+				m.errorMessage = "No channel selected"
+				return m, nil
+			}
+			cmd = m.sendPostMessage(m.currentChannel.ID, m.composeParentID, m.composeInput)
+		}
 
 		// Return to previous view
 		if m.composeMode == ComposeModeNewThread {
@@ -539,6 +644,7 @@ func (m Model) handleComposeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentView = ViewThreadView
 		}
 		m.composeInput = ""
+		m.composeMessageID = nil
 
 		return m, cmd
 
@@ -566,6 +672,10 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	switch frame.Type {
 	case protocol.TypeServerConfig:
 		return m.handleServerConfig(frame)
+	case protocol.TypeAuthResponse:
+		return m.handleAuthResponse(frame)
+	case protocol.TypeRegisterResponse:
+		return m.handleRegisterResponse(frame)
 	case protocol.TypeNicknameResponse:
 		return m.handleNicknameResponse(frame)
 	case protocol.TypeChannelList:
@@ -616,8 +726,99 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 
 	if msg.Success {
 		m.statusMessage = fmt.Sprintf("Nickname set to ~%s", m.nickname)
+		m.authState = AuthStateAnonymous // Successfully set as anonymous
 	} else {
-		m.errorMessage = msg.Message
+		// Check if nickname is registered (V2)
+		if strings.Contains(strings.ToLower(msg.Message), "registered") ||
+		   strings.Contains(strings.ToLower(msg.Message), "password") {
+			// Nickname is registered, show password modal
+			m.authState = AuthStatePrompting
+			m.passwordInput = []byte{}
+			m.authErrorMessage = ""
+		} else {
+			// Other error (invalid nickname, etc.)
+			m.errorMessage = msg.Message
+		}
+	}
+
+	return m, listenForServerFrames(m.conn)
+}
+
+// handleAuthResponse processes AUTH_RESPONSE
+func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.AuthResponseMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode AUTH_RESPONSE: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	// Clear password input
+	for i := range m.passwordInput {
+		m.passwordInput[i] = 0
+	}
+	m.passwordInput = []byte{}
+
+	if msg.Success {
+		// Successfully authenticated
+		m.authState = AuthStateAuthenticated
+		m.userID = &msg.UserID
+		m.authAttempts = 0
+		m.authErrorMessage = ""
+		m.statusMessage = fmt.Sprintf("Authenticated as %s", m.nickname)
+
+		// Save user ID to state
+		m.state.SetUserID(&msg.UserID)
+	} else {
+		// Authentication failed
+		m.authState = AuthStatePrompting
+		m.authAttempts++
+		m.authErrorMessage = msg.Message
+
+		// Apply rate limiting with exponential backoff
+		if m.authAttempts >= 5 {
+			m.errorMessage = "Too many failed attempts. Please restart the application."
+			m.authState = AuthStateFailed
+		} else if m.authAttempts >= 2 {
+			// Exponential backoff: 1s, 2s, 4s, 8s
+			cooldownSeconds := 1 << (m.authAttempts - 2) // 2^(attempts-2)
+			m.authCooldownUntil = time.Now().Add(time.Duration(cooldownSeconds) * time.Second)
+		}
+	}
+
+	return m, listenForServerFrames(m.conn)
+}
+
+// handleRegisterResponse processes REGISTER_RESPONSE
+func (m Model) handleRegisterResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.RegisterResponseMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode REGISTER_RESPONSE: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	// Clear password inputs
+	for i := range m.regPasswordInput {
+		m.regPasswordInput[i] = 0
+	}
+	for i := range m.regConfirmInput {
+		m.regConfirmInput[i] = 0
+	}
+	m.regPasswordInput = []byte{}
+	m.regConfirmInput = []byte{}
+
+	if msg.Success {
+		// Successfully registered
+		m.registrationMode = false
+		m.authState = AuthStateAuthenticated
+		m.userID = &msg.UserID
+		m.regErrorMessage = ""
+		m.statusMessage = fmt.Sprintf("Registered as %s", m.nickname)
+
+		// Save user ID to state
+		m.state.SetUserID(&msg.UserID)
+	} else {
+		// Registration failed
+		m.regErrorMessage = "Registration failed. Please try again."
 	}
 
 	return m, listenForServerFrames(m.conn)
@@ -707,6 +908,7 @@ func (m Model) handleMessagePosted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 	if msg.Success {
 		m.statusMessage = "Message posted"
+
 		// Refresh the view
 		if m.composeMode == ComposeModeNewThread && m.currentChannel != nil {
 			return m, tea.Batch(
@@ -940,6 +1142,39 @@ func (m Model) sendSetNickname() tea.Cmd {
 	}
 }
 
+func (m Model) sendAuthRequest(password []byte) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.AuthRequestMessage{
+			Nickname: m.nickname,
+			Password: string(password),
+		}
+		if err := m.conn.SendMessage(protocol.TypeAuthRequest, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		// Zero password bytes after sending
+		for i := range password {
+			password[i] = 0
+		}
+		return nil
+	}
+}
+
+func (m Model) sendRegisterUser(password []byte) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.RegisterUserMessage{
+			Password: string(password),
+		}
+		if err := m.conn.SendMessage(protocol.TypeRegisterUser, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		// Zero password bytes after sending
+		for i := range password {
+			password[i] = 0
+		}
+		return nil
+	}
+}
+
 func (m Model) requestChannelList() tea.Cmd {
 	return func() tea.Msg {
 		msg := &protocol.ListChannelsMessage{
@@ -1049,6 +1284,19 @@ func (m Model) sendDeleteMessage(messageID uint64) tea.Cmd {
 			MessageID: messageID,
 		}
 		if err := m.conn.SendMessage(protocol.TypeDeleteMessage, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendEditMessage(messageID uint64, newContent string) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.EditMessageMessage{
+			MessageID:  messageID,
+			NewContent: newContent,
+		}
+		if err := m.conn.SendMessage(protocol.TypeEditMessage, msg); err != nil {
 			return ErrorMsg{Err: err}
 		}
 		return nil

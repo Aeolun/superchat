@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -24,26 +25,59 @@ func (m Model) View() string {
 		return m.renderReconnectingOverlay()
 	}
 
-	if m.showHelp {
-		return m.renderHelp()
-	}
-
+	// Render base view (help is now a modal, not a separate view)
+	var baseView string
 	switch m.currentView {
 	case ViewSplash:
-		return m.renderSplash()
+		baseView = m.renderSplash()
 	case ViewNicknameSetup:
-		return m.renderNicknameSetup()
+		baseView = m.renderNicknameSetup()
 	case ViewChannelList:
-		return m.renderChannelList()
+		baseView = m.renderChannelList()
 	case ViewThreadList:
-		return m.renderThreadList()
+		baseView = m.renderThreadList()
 	case ViewThreadView:
-		return m.renderThreadView()
+		baseView = m.renderThreadView()
 	case ViewCompose:
-		return m.renderCompose()
+		baseView = m.renderCompose()
 	default:
-		return "Unknown view"
+		baseView = "Unknown view"
 	}
+
+	// Render password modal overlay if prompting for auth (LEGACY)
+	if m.authState == AuthStatePrompting || m.authState == AuthStateAuthenticating {
+		return m.renderPasswordModalOverlay(baseView)
+	}
+
+	// Render registration modal overlay if in registration mode (LEGACY)
+	if m.registrationMode {
+		return m.renderRegistrationModalOverlay(baseView)
+	}
+
+	// Render nickname change modal overlay (LEGACY)
+	if m.nicknameChangeMode {
+		return m.renderNicknameChangeModalOverlay(baseView)
+	}
+
+	// Apply modal overlays from the modal stack
+	result := baseView
+	if !m.modalStack.IsEmpty() {
+		if activeModal := m.modalStack.Top(); activeModal != nil {
+			result = m.renderModalOverlay(result, activeModal)
+		}
+	}
+
+	return result
+}
+
+// renderModalOverlay overlays a modal on top of the base view
+func (m Model) renderModalOverlay(baseView string, activeModal modal.Modal) string {
+	// Get the modal content
+	modalContent := activeModal.Render(m.width, m.height)
+
+	// For now, just return the modal content overlaid
+	// In the future, we could dim the background or do more sophisticated layering
+	return modalContent
 }
 
 // renderSplash renders the splash screen
@@ -62,6 +96,11 @@ func (m Model) renderSplash() string {
 • Press [Enter] to select channels and threads
 • Press [h] or [?] anytime for help
 • Press [n] to start a new thread
+
+Anonymous vs Registered:
+• Anonymous: Post as ~username (no password required)
+• Registered: Post as username (use [Ctrl+R] to register)
+• Registering secures your nickname with a password
 
 You can browse anonymously without setting a nickname.
 When you want to post, you'll be prompted to set one.`)
@@ -92,7 +131,8 @@ func (m Model) renderNicknameSetup() string {
 	title := modalTitleStyle.Render("Set Your Nickname")
 	prompt := "Enter a nickname (3-20 characters, alphanumeric plus - and _):"
 
-	input := inputFocusedStyle.Render(m.nickname + "█")
+	// Input field with max width (52 chars to fit in 60-char modal with padding)
+	input := inputFocusedStyle.Width(52).Render(m.nickname + "█")
 
 	var errorMsg string
 	if m.errorMessage != "" {
@@ -153,6 +193,10 @@ func (m Model) renderChannelList() string {
 	welcomeLines = append(welcomeLines,
 		"Select a channel from the left to start browsing.",
 		"",
+		"Anonymous vs Registered:",
+		"• Anonymous: Post as ~username (no password)",
+		"• Registered: Post as username (press [Ctrl+R] to register)",
+		"",
 		"Press [n] to create a new thread once in a channel.",
 		"Press [h] or [?] for help.",
 	)
@@ -184,7 +228,7 @@ func (m Model) renderChannelList() string {
 	s.WriteString("\n")
 
 	// Footer
-	footer := m.renderFooter("[↑↓] Navigate  [Enter] Select  [r] Refresh  [h] Help  [q/Esc] Quit")
+	footer := m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m))
 	s.WriteString(footer)
 
 	return s.String()
@@ -217,7 +261,7 @@ func (m Model) renderThreadList() string {
 	s.WriteString("\n")
 
 	// Footer
-	footer := m.renderFooter("[↑↓] Navigate  [Enter] Open  [n] New Thread  [r] Refresh  [Esc] Back  [q] Quit  [h] Help")
+	footer := m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m))
 	s.WriteString(footer)
 
 	return s.String()
@@ -227,11 +271,7 @@ func (m Model) renderThreadList() string {
 func (m Model) renderThreadView() string {
 	header := m.renderHeader()
 	threadContent := m.renderThreadContent()
-	footerShortcuts := "[↑↓] Navigate  [r] Reply  [Esc] Back  [q] Quit  [h] Help"
-	if !m.selectedMessageDeleted() {
-		footerShortcuts = "[↑↓] Navigate  [r] Reply  [d] Delete  [Esc] Back  [q] Quit  [h] Help"
-	}
-	footer := m.renderFooter(footerShortcuts)
+	footer := m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m))
 
 	body := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -244,21 +284,8 @@ func (m Model) renderThreadView() string {
 
 	base := lipgloss.Place(m.width, m.height, lipgloss.Top, lipgloss.Left, body)
 
-	if !m.confirmingDelete {
-		return base
-	}
-
-	available := max(20, m.width-2)
-	modalWidth := max(24, m.width-4)
-	modalWidth = min(modalWidth, available)
-	modalWidth = min(modalWidth, 52)
-
-	modal := modalStyle.
-		Width(modalWidth).
-		Render("Delete this message?\n\n[y] Confirm    [n] Cancel")
-
-	overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
-	return mergeOverlay(base, overlay)
+	// Delete confirmation now handled by DeleteConfirmModal in modal stack
+	return base
 }
 
 func mergeOverlay(base, overlay string) string {
@@ -283,6 +310,8 @@ func (m Model) renderCompose() string {
 	title := "Compose New Thread"
 	if m.composeMode == ComposeModeReply {
 		title = "Compose Reply"
+	} else if m.composeMode == ComposeModeEdit {
+		title = "Edit Message"
 	}
 
 	titleRender := modalTitleStyle.Render(title)
@@ -324,18 +353,8 @@ func (m Model) renderCompose() string {
 func (m Model) renderHelp() string {
 	title := helpTitleStyle.Render("Keyboard Shortcuts")
 
-	shortcuts := [][]string{
-		{"↑ / k", "Move up"},
-		{"↓ / j", "Move down"},
-		{"Enter", "Select / Open"},
-		{"n", "New thread (in channel)"},
-		{"r", "Reply (in thread) / Refresh"},
-		{"Esc", "Go back / Cancel"},
-		{"h / ?", "Toggle help"},
-		{"q", "Quit (from main view)"},
-		{"Ctrl+D", "Send message (in compose)"},
-		{"Ctrl+Enter", "Send message (in compose)"},
-	}
+	// Auto-generate shortcuts from command registry (context-aware)
+	shortcuts := m.commands.GenerateHelp(int(m.currentView), m.modalStack.TopType(), &m)
 
 	var lines []string
 	for _, sc := range shortcuts {
@@ -371,7 +390,17 @@ func (m Model) renderHeader() string {
 	status := "Disconnected"
 	if m.conn.IsConnected() {
 		if m.nickname != "" {
-			status = fmt.Sprintf("Connected: ~%s", m.nickname)
+			// Show auth status: ~ for anonymous, no prefix for authenticated
+			prefix := ""
+			if m.authState == AuthStateAnonymous || m.authState == AuthStateNone {
+				prefix = "~"
+			}
+			status = fmt.Sprintf("Connected: %s%s", prefix, m.nickname)
+
+			// Show registration hint for anonymous users
+			if m.authState == AuthStateAnonymous {
+				status += "  [Ctrl+R] Register"
+			}
 		} else {
 			status = "Connected (anonymous)"
 		}
@@ -518,10 +547,8 @@ func (m Model) renderThreadContent() string {
 
 // formatThreadItem formats a thread list item
 func (m Model) formatThreadItem(thread protocol.Message) string {
+	// Server already prefixes anonymous users with ~
 	author := thread.AuthorNickname
-	if thread.AuthorUserID == nil {
-		author = "~" + author
-	}
 
 	// Wrap content to available width
 	availableWidth := m.threadListViewport.Width - 4 // Account for padding and selection indicator
@@ -577,7 +604,8 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 
 	author := msg.AuthorNickname
 	if msg.AuthorUserID == nil {
-		author = messageAnonymousStyle.Render("~" + author)
+		// Server already prefixes anonymous users with ~
+		author = messageAnonymousStyle.Render(author)
 	} else {
 		author = messageAuthorStyle.Render(author)
 	}
@@ -956,4 +984,196 @@ func (m Model) renderReconnectingOverlay() string {
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// renderPasswordModalOverlay renders the password input modal over the base view
+func (m Model) renderPasswordModalOverlay(baseView string) string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(primaryColor).
+		Align(lipgloss.Center).
+		MarginBottom(1).
+		Render(fmt.Sprintf("🔐 Authenticate as '%s'", m.nickname))
+
+	prompt := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")).
+		Align(lipgloss.Center).
+		MarginBottom(1).
+		Render("This nickname is registered. Enter password:")
+
+	// Password input (hidden)
+	passwordDisplay := strings.Repeat("•", len(m.passwordInput))
+	if m.authState == AuthStatePrompting {
+		passwordDisplay += "█" // Cursor
+	}
+	passwordField := inputFocusedStyle.Render(passwordDisplay)
+
+	// Error message if auth failed
+	var errorMsg string
+	if m.authErrorMessage != "" {
+		errorMsg = "\n" + lipgloss.NewStyle().
+			Foreground(errorColor).
+			Align(lipgloss.Center).
+			Render(m.authErrorMessage)
+	}
+
+	// Cooldown message if rate limited
+	var cooldownMsg string
+	if time.Now().Before(m.authCooldownUntil) {
+		remaining := int(time.Until(m.authCooldownUntil).Seconds()) + 1
+		cooldownMsg = "\n" + lipgloss.NewStyle().
+			Foreground(warningColor).
+			Align(lipgloss.Center).
+			Render(fmt.Sprintf("⏳ Please wait %d seconds before trying again", remaining))
+	}
+
+	// Status message
+	var statusMsg string
+	if m.authState == AuthStateAuthenticating {
+		statusMsg = lipgloss.NewStyle().
+			Foreground(mutedColor).
+			Align(lipgloss.Center).
+			MarginTop(1).
+			Render("Authenticating...")
+	} else {
+		statusMsg = lipgloss.NewStyle().
+			Foreground(mutedColor).
+			Align(lipgloss.Center).
+			MarginTop(1).
+			Render("[Enter] Authenticate  [ESC] Browse anonymously")
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		"",
+		title,
+		prompt,
+		passwordField,
+		errorMsg,
+		cooldownMsg,
+		statusMsg,
+		"",
+	)
+
+	modal := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(primaryColor).
+		Padding(1, 3).
+		Width(60).
+		Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+// renderRegistrationModalOverlay renders the registration modal over the base view
+func (m Model) renderRegistrationModalOverlay(baseView string) string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(primaryColor).
+		Align(lipgloss.Center).
+		MarginBottom(1).
+		Render(fmt.Sprintf("📝 Register '%s'", m.nickname))
+
+	prompt := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")).
+		Align(lipgloss.Center).
+		MarginBottom(1).
+		Render("Choose a password (minimum 8 characters):")
+
+	// Password input (hidden)
+	passwordDisplay := strings.Repeat("•", len(m.regPasswordInput))
+	if m.regPasswordCursor == 0 {
+		passwordDisplay += "█" // Cursor on password field
+	}
+	passwordField := inputFocusedStyle.Render("Password: " + passwordDisplay)
+
+	// Confirm password input (hidden)
+	confirmDisplay := strings.Repeat("•", len(m.regConfirmInput))
+	if m.regConfirmCursor == 1 {
+		confirmDisplay += "█" // Cursor on confirm field
+	}
+	var confirmStyle lipgloss.Style
+	if m.regPasswordCursor == 1 {
+		confirmStyle = inputFocusedStyle
+	} else {
+		confirmStyle = inputBlurredStyle
+	}
+	confirmField := confirmStyle.Render("Confirm:  " + confirmDisplay)
+
+	// Error message if registration failed
+	var errorMsg string
+	if m.regErrorMessage != "" {
+		errorMsg = "\n" + lipgloss.NewStyle().
+			Foreground(errorColor).
+			Align(lipgloss.Center).
+			Render(m.regErrorMessage)
+	}
+
+	// Requirements
+	requirements := lipgloss.NewStyle().
+		Foreground(mutedColor).
+		Align(lipgloss.Center).
+		MarginTop(1).
+		Render("Requirements: 8+ characters")
+
+	// Status message
+	statusMsg := lipgloss.NewStyle().
+		Foreground(mutedColor).
+		Align(lipgloss.Center).
+		MarginTop(1).
+		Render("[Tab] Next field  [Enter] Register  [ESC] Cancel")
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		"",
+		title,
+		prompt,
+		passwordField,
+		confirmField,
+		errorMsg,
+		requirements,
+		statusMsg,
+		"",
+	)
+
+	modal := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(primaryColor).
+		Padding(1, 3).
+		Width(60).
+		Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+// renderNicknameChangeModalOverlay renders the nickname change modal over the base view
+func (m Model) renderNicknameChangeModalOverlay(baseView string) string {
+	title := modalTitleStyle.Render("Change Nickname")
+	prompt := "Enter new nickname (3-20 characters, alphanumeric plus - and _):"
+
+	// Nickname input with cursor and max width (52 chars to fit in 60-char modal with padding)
+	nicknameDisplay := m.nicknameChangeInput + "█"
+	nicknameField := inputFocusedStyle.Width(52).Render(nicknameDisplay)
+
+	// Error message if change failed
+	var errorMsg string
+	if m.nicknameChangeError != "" {
+		errorMsg = "\n" + RenderError(m.nicknameChangeError)
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		title,
+		"",
+		prompt,
+		"",
+		nicknameField,
+		errorMsg,
+		"",
+		mutedTextStyle.Render("[Enter] Change  [ESC] Cancel"),
+	)
+
+	modal := modalStyle.Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
