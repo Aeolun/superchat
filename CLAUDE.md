@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SuperChat is a terminal-based threaded chat application with a custom binary protocol. The V1 implementation focuses on anonymous users, TCP connections, and forum-style threading. The codebase is designed for forward compatibility with V2 features (user registration, SSH, DMs, encryption) through extensible protocol design and forward-compatible database schemas.
 
+**Current Status:** V2 in progress (2/5 features complete)
+- See `docs/V2.md` for detailed V2 feature status and implementation plan
+- See `docs/V1.md` for V1 specification and rationale
+
 ## Build Commands
 
 ```bash
@@ -336,33 +340,36 @@ if err := tx.Commit(); err != nil {
 
 Critical for: user registration, channel creation, message posting with versions.
 
-## V1 vs V2 Compatibility
+## Version Status
 
-**V1 Scope (Current):**
-- Anonymous users only (no User table)
-- TCP connections only (no SSH)
-- Flat channels (no subchannels)
-- Forum threading (no chat type)
-- Client-side state (no server sync)
+**V1:** Complete ✅
+- Anonymous users, TCP connections, forum threading, client-side state
 
-**V2 Additions (Future):**
-- User registration with passwords
-- SSH key authentication
-- Subchannels (two-level hierarchy)
-- Message editing
-- User-created channels
+**V2:** Partially complete (2/5 features)
+- ✅ User registration with passwords (commit eabf559)
+- ✅ User-created channels (commit eabf559)
+- ❌ SSH connections (TODO)
+- ❌ Subchannels (TODO)
+- ❌ Message editing (TODO)
+
+**See `docs/V2.md` for detailed V2 status, implementation plan, and priority order.**
+
+**V3 (Future):**
 - Direct messages with encryption
+- Chat channel type
+- Message compression
 
 **Compatibility Strategy:**
-- Protocol messages 0x01-0x98 are defined but many return ERROR 1001 in V1
+- Protocol messages 0x01-0x98 are defined but many return ERROR 1001 until implemented
 - Database has nullable fields for V2 features (`author_user_id`, `subchannel_id`)
 - V1 leaves these NULL, V2 populates them
-- No schema migration needed for V1→V2 upgrade
+- No schema migration needed for V1→V2 upgrade (additive only)
 
 ## Key Files
 
 - `docs/PROTOCOL.md`: Complete binary protocol specification
 - `docs/V1.md`: V1 feature scope and implementation phases
+- `docs/V2.md`: **V2 feature status and TODO list** ⭐
 - `docs/DATA_MODEL.md`: Database schema and relationships
 - `docs/MIGRATIONS.md`: Database migration system guide
 - `pkg/protocol/frame.go`: Frame encoding/decoding
