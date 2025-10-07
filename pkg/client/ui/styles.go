@@ -51,7 +51,7 @@ var (
 	channelPaneStyle = baseStyle.Copy().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(borderColor).
-				Padding(1, 2)
+				Padding(0, 1)
 
 	channelTitleStyle = baseStyle.Copy().
 				Bold(true).
@@ -62,13 +62,12 @@ var (
 	// Thread list styles
 	threadPaneStyle = baseStyle.Copy().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(borderColor).
-			Padding(1, 0) // Top/bottom padding only, no left/right padding
+			BorderForeground(borderColor)
 
 	actualThreadStyle = baseStyle.Copy().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(borderColor).
-				Padding(1, 2) // Top/bottom padding only, no left/right padding
+				Padding(0, 1) // Top/bottom padding only, no left/right padding
 
 	threadTitleStyle = baseStyle.Copy().
 				Bold(true).
@@ -81,6 +80,10 @@ var (
 
 	messageAnonymousStyle = baseStyle.Copy().
 				Foreground(secondaryColor)
+
+	messageOwnAuthorStyle = baseStyle.Copy().
+				Foreground(successColor).
+				Bold(true)
 
 	messageTimeStyle = baseStyle.Copy().
 				Foreground(mutedColor).
@@ -170,7 +173,18 @@ var (
 	// Muted text style
 	mutedTextStyle = baseStyle.Copy().
 			Foreground(mutedColor)
+
+	// Spinner style
+	spinnerStyle = baseStyle.Copy().
+			Foreground(primaryColor)
 )
+
+// Styles holds all UI styles including spinner
+var Styles = struct {
+	Spinner lipgloss.Style
+}{
+	Spinner: spinnerStyle,
+}
 
 // RenderShortcut renders a keyboard shortcut
 func RenderShortcut(key, desc string) string {

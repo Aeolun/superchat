@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aeolun/superchat/pkg/protocol"
@@ -57,6 +59,13 @@ type Connection struct {
 	reconnectDelay    time.Duration
 	maxReconnectDelay time.Duration
 
+	// Traffic counters (bytes on the wire)
+	bytesSent     atomic.Uint64
+	bytesReceived atomic.Uint64
+
+	// Bandwidth throttling (for testing)
+	throttleBytesPerSec int // 0 = no throttle
+
 	// Logging
 	logger *log.Logger
 
@@ -90,6 +99,19 @@ func NewConnection(addr string) (*Connection, error) {
 // SetLogger sets a logger for debugging connection events
 func (c *Connection) SetLogger(logger *log.Logger) {
 	c.logger = logger
+}
+
+// SetThrottle sets bandwidth throttling in bytes per second (0 = no throttle)
+// Example: SetThrottle(3600) simulates 28.8kbps dial-up modem
+func (c *Connection) SetThrottle(bytesPerSec int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.throttleBytesPerSec = bytesPerSec
+	if bytesPerSec > 0 {
+		c.logf("Bandwidth throttling enabled: %d bytes/sec (~%.1f kbps)", bytesPerSec, float64(bytesPerSec*8)/1000)
+	} else {
+		c.logf("Bandwidth throttling disabled")
+	}
 }
 
 // DisableAutoReconnect disables automatic reconnection on connection loss
@@ -213,6 +235,16 @@ func (c *Connection) GetAddress() string {
 	return c.addr
 }
 
+// GetBytesSent returns the total bytes sent
+func (c *Connection) GetBytesSent() uint64 {
+	return c.bytesSent.Load()
+}
+
+// GetBytesReceived returns the total bytes received
+func (c *Connection) GetBytesReceived() uint64 {
+	return c.bytesReceived.Load()
+}
+
 // readLoop reads frames from the connection
 func (c *Connection) readLoop() {
 	defer c.wg.Done()
@@ -221,13 +253,23 @@ func (c *Connection) readLoop() {
 		c.mu.RLock()
 		conn := c.conn
 		connected := c.connected
+		throttle := c.throttleBytesPerSec
 		c.mu.RUnlock()
 
 		if !connected || conn == nil {
 			break
 		}
 
-		frame, err := protocol.DecodeFrame(conn)
+		// Build reader chain: conn -> throttle (optional) -> counter
+		var reader io.Reader = conn
+		if throttle > 0 {
+			reader = newThrottledReader(reader, throttle)
+		}
+		// Always count bytes at the lowest level
+		reader = &countingReader{r: reader, counter: &c.bytesReceived}
+
+		frame, err := protocol.DecodeFrame(reader)
+
 		if err != nil {
 			if err == io.EOF {
 				c.logf("Connection closed by server (EOF)")
@@ -250,6 +292,136 @@ func (c *Connection) readLoop() {
 	}
 }
 
+// countingReader wraps an io.Reader and counts bytes read using atomic counter
+type countingReader struct {
+	r       io.Reader
+	counter *atomic.Uint64
+}
+
+func (cr *countingReader) Read(p []byte) (n int, err error) {
+	n, err = cr.r.Read(p)
+	if n > 0 && cr.counter != nil {
+		cr.counter.Add(uint64(n))
+	}
+	return n, err
+}
+
+// countingWriter wraps an io.Writer and counts bytes written using atomic counter
+type countingWriter struct {
+	w       io.Writer
+	counter *atomic.Uint64
+}
+
+func (cw *countingWriter) Write(p []byte) (n int, err error) {
+	n, err = cw.w.Write(p)
+	if n > 0 && cw.counter != nil {
+		cw.counter.Add(uint64(n))
+	}
+	return n, err
+}
+
+// throttledReader wraps an io.Reader and limits read rate to bytesPerSec
+type throttledReader struct {
+	r            io.Reader
+	bytesPerSec  int
+	lastReadTime time.Time
+	mu           sync.Mutex
+}
+
+func newThrottledReader(r io.Reader, bytesPerSec int) *throttledReader {
+	return &throttledReader{
+		r:            r,
+		bytesPerSec:  bytesPerSec,
+		lastReadTime: time.Now(),
+	}
+}
+
+func (tr *throttledReader) Read(p []byte) (n int, err error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+
+	// Limit read size to avoid overshooting rate
+	maxChunkSize := tr.bytesPerSec / 10 // Read in smaller chunks for smoother throttling
+	if maxChunkSize < 1 {
+		maxChunkSize = 1
+	}
+	if len(p) > maxChunkSize {
+		p = p[:maxChunkSize]
+	}
+
+	n, err = tr.r.Read(p)
+	if n > 0 {
+		// Calculate required delay based on bytes read
+		elapsed := time.Since(tr.lastReadTime)
+		expectedDuration := time.Duration(float64(n) / float64(tr.bytesPerSec) * float64(time.Second))
+
+		if expectedDuration > elapsed {
+			time.Sleep(expectedDuration - elapsed)
+		}
+
+		tr.lastReadTime = time.Now()
+	}
+
+	return n, err
+}
+
+// throttledWriter wraps an io.Writer and limits write rate to bytesPerSec
+type throttledWriter struct {
+	w             io.Writer
+	bytesPerSec   int
+	lastWriteTime time.Time
+	mu            sync.Mutex
+}
+
+func newThrottledWriter(w io.Writer, bytesPerSec int) *throttledWriter {
+	return &throttledWriter{
+		w:             w,
+		bytesPerSec:   bytesPerSec,
+		lastWriteTime: time.Now(),
+	}
+}
+
+func (tw *throttledWriter) Write(p []byte) (n int, err error) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+
+	// Write in chunks to maintain rate limit
+	totalWritten := 0
+	for totalWritten < len(p) {
+		// Calculate chunk size
+		chunkSize := tw.bytesPerSec / 10 // Write in smaller chunks for smoother throttling
+		if chunkSize < 1 {
+			chunkSize = 1
+		}
+		remaining := len(p) - totalWritten
+		if chunkSize > remaining {
+			chunkSize = remaining
+		}
+
+		// Write chunk
+		written, err := tw.w.Write(p[totalWritten : totalWritten+chunkSize])
+		totalWritten += written
+
+		if err != nil {
+			return totalWritten, err
+		}
+
+		// Throttle if needed
+		if totalWritten < len(p) {
+			elapsed := time.Since(tw.lastWriteTime)
+			expectedDuration := time.Duration(float64(written) / float64(tw.bytesPerSec) * float64(time.Second))
+
+			if expectedDuration > elapsed {
+				time.Sleep(expectedDuration - elapsed)
+			}
+
+			tw.lastWriteTime = time.Now()
+		}
+	}
+
+	return totalWritten, nil
+}
+
 // writeLoop sends frames to the connection
 func (c *Connection) writeLoop() {
 	defer c.wg.Done()
@@ -260,20 +432,39 @@ func (c *Connection) writeLoop() {
 			c.mu.RLock()
 			conn := c.conn
 			connected := c.connected
+			throttle := c.throttleBytesPerSec
 			c.mu.RUnlock()
 
 			if !connected || conn == nil {
 				continue
 			}
 
-			c.logf("→ SEND: Type=0x%02X Flags=0x%02X PayloadLen=%d", frame.Type, frame.Flags, len(frame.Payload))
+			// Encode to buffer first
+			var buf bytes.Buffer
+			if err := protocol.EncodeFrame(&buf, frame); err != nil {
+				c.logf("Encode error: %v", err)
+				c.errors <- fmt.Errorf("encode error: %w", err)
+				continue
+			}
 
-			if err := protocol.EncodeFrame(conn, frame); err != nil {
+			frameBytes := buf.Bytes()
+
+			// Build writer chain: conn -> throttle (optional) -> counter
+			var writer io.Writer = conn
+			if throttle > 0 {
+				writer = newThrottledWriter(writer, throttle)
+			}
+			// Always count bytes at the lowest level
+			writer = &countingWriter{w: writer, counter: &c.bytesSent}
+
+			if _, err := writer.Write(frameBytes); err != nil {
 				c.logf("Write error: %v", err)
 				c.errors <- fmt.Errorf("write error: %w", err)
 				c.handleDisconnect()
 				return
 			}
+
+			c.logf("→ SEND: Type=0x%02X Flags=0x%02X PayloadLen=%d", frame.Type, frame.Flags, len(frame.Payload))
 
 		case <-c.shutdown:
 			return

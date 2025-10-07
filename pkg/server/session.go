@@ -23,6 +23,7 @@ type Session struct {
 	Nickname               string       // Current nickname
 	UserFlags              uint8        // Cached user flags (0 for anonymous, updated on login/register)
 	Conn                   *SafeConn    // TCP connection with automatic write synchronization
+	RemoteAddr             string       // Remote address (for rate limiting)
 	JoinedChannel          *int64       // Currently joined channel ID
 	mu                     sync.RWMutex // Protects Nickname, UserFlags, and JoinedChannel
 	lastActivityUpdateTime int64        // Last time we wrote activity to DB (milliseconds, atomic)
@@ -88,6 +89,7 @@ func (sm *SessionManager) CreateSession(userID *int64, nickname, connType string
 		UserID:                 userID,
 		Nickname:               nickname,
 		Conn:                   NewSafeConn(conn),
+		RemoteAddr:             conn.RemoteAddr().String(),
 		lastActivityUpdateTime: 0, // Will be set on first activity update
 		subscribedThreads:      make(map[uint64]ChannelSubscription),
 		subscribedChannels:     make(map[ChannelSubscription]bool),

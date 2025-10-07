@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -248,11 +250,13 @@ func (s *Server) handleListChannels(sess *Session, frame *protocol.Frame) error 
 
 		// Convert to protocol format
 		ch := protocol.Channel{
-			ID:          uint64(dbCh.ID),
-			Name:        dbCh.Name,
-			Description: safeDeref(dbCh.Description, ""),
-			UserCount:   0, // TODO: Track active user count
-			IsOperator:   false,
+			ID:             uint64(dbCh.ID),
+			Name:           dbCh.Name,
+			Description:    safeDeref(dbCh.Description, ""),
+			UserCount:      0, // TODO: Track active user count
+			IsOperator:     false,
+			Type:           dbCh.ChannelType,
+			RetentionHours: dbCh.MessageRetentionHours,
 		}
 		channelList = append(channelList, ch)
 
@@ -367,11 +371,11 @@ func (s *Server) handleCreateChannel(sess *Session, frame *protocol.Frame) error
 		})
 	}
 
-	// V2 only supports forum channels (type 1)
-	if msg.ChannelType != 1 {
+	// Validate channel type (0=chat, 1=forum)
+	if msg.ChannelType != 0 && msg.ChannelType != 1 {
 		return s.sendMessage(sess, protocol.TypeChannelCreated, &protocol.ChannelCreatedMessage{
 			Success: false,
-			Message: "Only forum channels are supported in V2",
+			Message: "Invalid channel type (must be 0=chat or 1=forum)",
 		})
 	}
 
@@ -384,7 +388,7 @@ func (s *Server) handleCreateChannel(sess *Session, frame *protocol.Frame) error
 	}
 
 	// Create channel in database
-	err := s.db.CreateChannel(msg.Name, msg.DisplayName, msg.Description, msg.ChannelType, msg.RetentionHours, userID)
+	channelID, err := s.db.CreateChannel(msg.Name, msg.DisplayName, msg.Description, msg.ChannelType, msg.RetentionHours, userID)
 	if err != nil {
 		// Check if it's a duplicate name error
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "already exists") {
@@ -396,39 +400,34 @@ func (s *Server) handleCreateChannel(sess *Session, frame *protocol.Frame) error
 		return s.dbError(sess, "CreateChannel", err)
 	}
 
-	// Get the created channel to get its ID
-	channels, err := s.db.ListChannels()
-	if err != nil {
-		return s.dbError(sess, "ListChannels", err)
-	}
-
-	// Find the newly created channel
-	var createdChannel *database.Channel
-	for _, ch := range channels {
-		if ch.Name == msg.Name {
-			createdChannel = ch
-			break
-		}
-	}
-
-	if createdChannel == nil {
-		return s.dbError(sess, "GetCreatedChannel", fmt.Errorf("channel created but not found in list"))
-	}
-
 	// Build CHANNEL_CREATED message (hybrid response + broadcast)
 	channelCreatedMsg := &protocol.ChannelCreatedMessage{
 		Success:        true,
-		ChannelID:      uint64(createdChannel.ID),
-		Name:           createdChannel.Name,
-		Description:    safeDeref(createdChannel.Description, ""),
-		Type:           createdChannel.ChannelType,
-		RetentionHours: createdChannel.MessageRetentionHours,
-		Message:        fmt.Sprintf("Channel '%s' created successfully", createdChannel.DisplayName),
+		ChannelID:      uint64(channelID),
+		Name:           msg.Name,
+		Description:    safeDeref(msg.Description, ""),
+		Type:           msg.ChannelType,
+		RetentionHours: msg.RetentionHours,
+		Message:        fmt.Sprintf("Channel '%s' created successfully", msg.DisplayName),
 	}
 
 	// Send to creator as confirmation
 	if err := s.sendMessage(sess, protocol.TypeChannelCreated, channelCreatedMsg); err != nil {
 		return err
+	}
+
+	// Construct channel object for broadcast (we have all the data)
+	now := time.Now().UnixMilli()
+	createdChannel := &database.Channel{
+		ID:                     channelID,
+		Name:                   msg.Name,
+		DisplayName:            msg.DisplayName,
+		Description:            msg.Description,
+		ChannelType:            msg.ChannelType,
+		MessageRetentionHours:  msg.RetentionHours,
+		CreatedBy:              userID,
+		CreatedAt:              now,
+		IsPrivate:              false,
 	}
 
 	// Broadcast to all OTHER connected users (not the creator again)
@@ -449,7 +448,7 @@ func (s *Server) handleListMessages(sess *Session, frame *protocol.Frame) error 
 
 	if msg.ParentID != nil {
 		// Get thread replies
-		dbMessages, err := s.db.ListThreadReplies(*msg.ParentID)
+		dbMessages, err := s.db.ListThreadReplies(*msg.ParentID, msg.Limit, msg.BeforeID, msg.AfterID)
 		if err != nil {
 			return s.dbError(sess, "ListThreadReplies", err)
 		}
@@ -462,7 +461,7 @@ func (s *Server) handleListMessages(sess *Session, frame *protocol.Frame) error 
 			subchannelID = &id
 		}
 
-		dbMessages, err := s.db.ListRootMessages(int64(msg.ChannelID), subchannelID, msg.Limit, msg.BeforeID)
+		dbMessages, err := s.db.ListRootMessages(int64(msg.ChannelID), subchannelID, msg.Limit, msg.BeforeID, msg.AfterID)
 		if err != nil {
 			return s.dbError(sess, "ListRootMessages", err)
 		}
@@ -512,6 +511,16 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 	if msg.ParentID != nil {
 		id := int64(*msg.ParentID)
 		parentID = &id
+	}
+
+	// Chat channels (type 0) don't support threading
+	channel, err := s.db.GetChannel(int64(msg.ChannelID))
+	if err != nil {
+		return s.dbError(sess, "GetChannel", err)
+	}
+
+	if channel.ChannelType == 0 && parentID != nil {
+		return s.sendError(sess, 6000, "Chat channels do not support threaded replies")
 	}
 
 	// Post message to in-memory database (instant)
@@ -798,14 +807,8 @@ func (s *Server) broadcastToChannel(channelID int64, msgType uint8, msg interfac
 		targetSessions = append(targetSessions, sess)
 	}
 
-	// Broadcast to target sessions
-	deadSessions := make([]uint64, 0)
-	for _, sess := range targetSessions {
-		if writeErr := sess.Conn.WriteBytes(frameBytes); writeErr != nil {
-			debugLog.Printf("Session %d: Broadcast write failed: %v", sess.ID, writeErr)
-			deadSessions = append(deadSessions, sess.ID)
-		}
-	}
+	// Broadcast to target sessions using worker pool
+	deadSessions := s.broadcastToSessionsParallel(targetSessions, frameBytes)
 
 	// Remove dead sessions
 	for _, sessID := range deadSessions {
@@ -813,6 +816,56 @@ func (s *Server) broadcastToChannel(channelID int64, msgType uint8, msg interfac
 	}
 
 	return nil
+}
+
+// broadcastToSessionsParallel broadcasts frameBytes to sessions using a worker pool
+// Returns list of session IDs that had write errors
+func (s *Server) broadcastToSessionsParallel(sessions []*Session, frameBytes []byte) []uint64 {
+	const maxWorkers = 40
+	const sessionsPerWorker = 50
+
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	// Determine actual worker count
+	numWorkers := (len(sessions) + sessionsPerWorker - 1) / sessionsPerWorker
+	if numWorkers > maxWorkers {
+		numWorkers = maxWorkers
+	}
+
+	// Calculate chunk size
+	chunkSize := (len(sessions) + numWorkers - 1) / numWorkers
+
+	// Broadcast in parallel chunks
+	var wg sync.WaitGroup
+	var deadSessionsMu sync.Mutex
+	deadSessions := make([]uint64, 0)
+
+	for i := 0; i < numWorkers; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if end > len(sessions) {
+			end = len(sessions)
+		}
+
+		chunk := sessions[start:end]
+		wg.Add(1)
+		go func(sessionChunk []*Session) {
+			defer wg.Done()
+			for _, sess := range sessionChunk {
+				if writeErr := sess.Conn.WriteBytes(frameBytes); writeErr != nil {
+					debugLog.Printf("Session %d: Broadcast write failed: %v", sess.ID, writeErr)
+					deadSessionsMu.Lock()
+					deadSessions = append(deadSessions, sess.ID)
+					deadSessionsMu.Unlock()
+				}
+			}
+		}(chunk)
+	}
+
+	wg.Wait()
+	return deadSessions
 }
 
 // broadcastNewMessage sends a NEW_MESSAGE to subscribed sessions only (subscription-aware)
@@ -870,20 +923,18 @@ func (s *Server) broadcastNewMessage(msg *protocol.NewMessageMessage, threadRoot
 	if isTopLevel {
 		// Top-level message: get channel subscribers
 		targetSessions = s.sessions.GetChannelSubscribers(channelSub)
+		debugLog.Printf("Broadcasting top-level message %d to channel %d: %d subscribers", msg.ID, msg.ChannelID, len(targetSessions))
 	} else if threadRootID != nil {
 		// Reply: get thread subscribers
 		targetSessions = s.sessions.GetThreadSubscribers(*threadRootID)
+		debugLog.Printf("Broadcasting reply message %d to thread %d: %d subscribers", msg.ID, *threadRootID, len(targetSessions))
+	} else {
+		debugLog.Printf("WARNING: Reply message %d has no threadRootID - will not be broadcast!", msg.ID)
 	}
 
-	// Broadcast to target sessions synchronously (writes are already buffered by TCP)
+	// Broadcast to target sessions using worker pool
 	recipientCount = len(targetSessions)
-	deadSessions := make([]uint64, 0)
-	for _, sess := range targetSessions {
-		if writeErr := sess.Conn.WriteBytes(frameBytes); writeErr != nil {
-			debugLog.Printf("Session %d: Broadcast write failed: %v", sess.ID, writeErr)
-			deadSessions = append(deadSessions, sess.ID)
-		}
-	}
+	deadSessions := s.broadcastToSessionsParallel(targetSessions, frameBytes)
 
 	// Remove dead sessions
 	for _, sessID := range deadSessions {
@@ -1106,6 +1157,119 @@ func (s *Server) handleUnsubscribeChannel(sess *Session, frame *protocol.Frame) 
 	return s.sendMessage(sess, protocol.TypeSubscribeOk, resp)
 }
 
+// handleGetUserInfo handles GET_USER_INFO message
+func (s *Server) handleGetUserInfo(sess *Session, frame *protocol.Frame) error {
+	msg := &protocol.GetUserInfoMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	log.Printf("Session %d: GET_USER_INFO request for nickname=%s", sess.ID, msg.Nickname)
+
+	// Check if user is registered in database
+	user, err := s.db.GetUserByNickname(msg.Nickname)
+	isRegistered := false
+	var userID *uint64
+
+	if err == nil {
+		// User is registered
+		isRegistered = true
+		uid := uint64(user.ID)
+		userID = &uid
+		log.Printf("Session %d: User '%s' is registered (user_id=%d)", sess.ID, msg.Nickname, uid)
+	} else if err != sql.ErrNoRows {
+		// Database error (not just "user not found")
+		return s.dbError(sess, "GetUserByNickname", err)
+	} else {
+		log.Printf("Session %d: User '%s' is not registered", sess.ID, msg.Nickname)
+	}
+
+	// Check if user is currently online (check all sessions for matching nickname)
+	online := false
+	allSessions := s.sessions.GetAllSessions()
+	for _, s := range allSessions {
+		s.mu.RLock()
+		if s.Nickname == msg.Nickname {
+			online = true
+			s.mu.RUnlock()
+			break
+		}
+		s.mu.RUnlock()
+	}
+
+	// Send response
+	resp := &protocol.UserInfoMessage{
+		Nickname:     msg.Nickname,
+		IsRegistered: isRegistered,
+		UserID:       userID,
+		Online:       online,
+	}
+	log.Printf("Session %d: Sending USER_INFO response: nickname=%s, is_registered=%v, online=%v", sess.ID, msg.Nickname, isRegistered, online)
+	return s.sendMessage(sess, protocol.TypeUserInfo, resp)
+}
+
+// handleListUsers handles LIST_USERS message
+func (s *Server) handleListUsers(sess *Session, frame *protocol.Frame) error {
+	msg := &protocol.ListUsersMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Apply limit constraints
+	limit := msg.Limit
+	if limit == 0 {
+		limit = 100 // Default
+	}
+	if limit > 500 {
+		limit = 500 // Max
+	}
+
+	// Get all online sessions
+	allSessions := s.sessions.GetAllSessions()
+
+	// Build user list (deduplicate by nickname)
+	seenNicknames := make(map[string]bool)
+	users := []protocol.UserListEntry{}
+
+	for _, session := range allSessions {
+		session.mu.RLock()
+		nickname := session.Nickname
+		userID := session.UserID
+		session.mu.RUnlock()
+
+		// Skip if we've already added this nickname
+		if seenNicknames[nickname] {
+			continue
+		}
+		seenNicknames[nickname] = true
+
+		// Determine if registered and get user_id
+		isRegistered := userID != nil
+		var uid *uint64
+		if isRegistered {
+			u := uint64(*userID)
+			uid = &u
+		}
+
+		users = append(users, protocol.UserListEntry{
+			Nickname:     nickname,
+			IsRegistered: isRegistered,
+			UserID:       uid,
+		})
+
+		// Stop if we've reached the limit
+		if len(users) >= int(limit) {
+			break
+		}
+	}
+
+	// Send response
+	resp := &protocol.UserListMessage{
+		Users: users,
+	}
+	return s.sendMessage(sess, protocol.TypeUserList, resp)
+}
+
 // broadcastChannelCreated broadcasts a CHANNEL_CREATED message to all connected users (except creator)
 func (s *Server) broadcastChannelCreated(ch *database.Channel, creatorSessionID uint64) {
 	msg := &protocol.ChannelCreatedMessage{
@@ -1128,4 +1292,342 @@ func (s *Server) broadcastChannelCreated(ch *database.Channel, creatorSessionID 
 			log.Printf("Failed to broadcast CHANNEL_CREATED to session %d: %v", sess.ID, err)
 		}
 	}
+}
+
+// ===== Server Discovery Handlers =====
+
+// handleListServers handles LIST_SERVERS message (request server directory)
+func (s *Server) handleListServers(sess *Session, frame *protocol.Frame) error {
+	// Only respond if directory mode is enabled
+	if !s.directoryEnabled {
+		// Return empty list for non-directory servers
+		resp := &protocol.ServerListMessage{
+			Servers: []protocol.ServerInfo{},
+		}
+		return s.sendMessage(sess, protocol.TypeServerList, resp)
+	}
+
+	// Decode message
+	msg := &protocol.ListServersMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, 1000, "Invalid message format")
+	}
+
+	// Validate limit
+	limit := msg.Limit
+	if limit == 0 {
+		limit = 100 // default
+	}
+	if limit > 500 {
+		limit = 500 // max
+	}
+
+	// Get servers from database
+	servers, err := s.db.ListDiscoveredServers(limit)
+	if err != nil {
+		return s.dbError(sess, "ListDiscoveredServers", err)
+	}
+
+	// Convert to protocol format
+	serverInfos := make([]protocol.ServerInfo, len(servers))
+	for i, server := range servers {
+		serverInfos[i] = protocol.ServerInfo{
+			Hostname:      server.Hostname,
+			Port:          server.Port,
+			Name:          server.Name,
+			Description:   server.Description,
+			UserCount:     server.UserCount,
+			MaxUsers:      server.MaxUsers,
+			UptimeSeconds: server.UptimeSeconds,
+			IsPublic:      server.IsPublic,
+		}
+	}
+
+	// Send response
+	resp := &protocol.ServerListMessage{
+		Servers: serverInfos,
+	}
+	return s.sendMessage(sess, protocol.TypeServerList, resp)
+}
+
+// handleRegisterServer handles REGISTER_SERVER message (server registration)
+func (s *Server) handleRegisterServer(sess *Session, frame *protocol.Frame) error {
+	// Only accept if directory mode is enabled
+	if !s.directoryEnabled {
+		return s.sendError(sess, 1001, "Directory mode not enabled on this server")
+	}
+
+	// Check rate limit (30 requests/hour per IP)
+	if !s.checkDiscoveryRateLimit(sess.RemoteAddr) {
+		resp := &protocol.RegisterAckMessage{
+			Success: false,
+			Message: "Rate limit exceeded (30 requests/hour)",
+		}
+		return s.sendMessage(sess, protocol.TypeRegisterAck, resp)
+	}
+
+	// Decode message
+	msg := &protocol.RegisterServerMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, 1000, "Invalid message format")
+	}
+
+	// Validate hostname and port
+	if msg.Hostname == "" || msg.Port == 0 {
+		resp := &protocol.RegisterAckMessage{
+			Success: false,
+			Message: "Invalid hostname or port",
+		}
+		return s.sendMessage(sess, protocol.TypeRegisterAck, resp)
+	}
+
+	// Start verification in background
+	go s.verifyAndRegisterServer(msg, sess.RemoteAddr)
+
+	// Send immediate response (verification happens async)
+	// Server will be added after successful verification
+	resp := &protocol.RegisterAckMessage{
+		Success:           false,
+		Message:           "Verification in progress...",
+	}
+	return s.sendMessage(sess, protocol.TypeRegisterAck, resp)
+}
+
+// handleVerifyResponse handles VERIFY_RESPONSE message (verification challenge response)
+func (s *Server) handleVerifyResponse(sess *Session, frame *protocol.Frame) error {
+	// Decode message
+	msg := &protocol.VerifyResponseMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, 1000, "Invalid message format")
+	}
+
+	// Check if we have a pending verification for this session
+	s.verificationMu.Lock()
+	expectedChallenge, exists := s.verificationChallenges[sess.ID]
+	if exists {
+		delete(s.verificationChallenges, sess.ID)
+	}
+	s.verificationMu.Unlock()
+
+	if !exists {
+		// No pending verification for this session
+		return s.sendError(sess, 6000, "No pending verification")
+	}
+
+	if msg.Challenge != expectedChallenge {
+		// Wrong challenge response
+		log.Printf("Verification failed for session %d: wrong challenge (expected %d, got %d)",
+			sess.ID, expectedChallenge, msg.Challenge)
+		return s.sendError(sess, 6000, "Verification failed")
+	}
+
+	// Verification succeeded! Mark this session as verified
+	log.Printf("Verification succeeded for session %d", sess.ID)
+
+	// Note: The actual server registration happens in verifyAndRegisterServer
+	// This handler just validates the challenge response
+
+	return nil
+}
+
+// handleHeartbeat handles HEARTBEAT message (periodic keepalive from registered servers)
+func (s *Server) handleHeartbeat(sess *Session, frame *protocol.Frame) error {
+	// Only accept if directory mode is enabled
+	if !s.directoryEnabled {
+		return s.sendError(sess, 1001, "Directory mode not enabled on this server")
+	}
+
+	// Decode message
+	msg := &protocol.HeartbeatMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, 1000, "Invalid message format")
+	}
+
+	// Check if server exists in directory
+	server, err := s.db.GetDiscoveredServer(msg.Hostname, msg.Port)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return s.sendError(sess, 4000, "Server not registered")
+		}
+		return s.dbError(sess, "GetDiscoveredServer", err)
+	}
+
+	// Calculate new heartbeat interval based on directory load
+	serverCount, err := s.db.CountDiscoveredServers()
+	if err != nil {
+		serverCount = 0 // fallback
+	}
+	newInterval := s.calculateHeartbeatInterval(serverCount)
+
+	// Update heartbeat
+	err = s.db.UpdateHeartbeat(msg.Hostname, msg.Port, msg.UserCount, msg.UptimeSeconds, newInterval)
+	if err != nil {
+		return s.dbError(sess, "UpdateHeartbeat", err)
+	}
+
+	// Log interval change if different
+	if newInterval != server.HeartbeatInterval {
+		log.Printf("Updated heartbeat interval for %s:%d from %ds to %ds (directory has %d servers)",
+			msg.Hostname, msg.Port, server.HeartbeatInterval, newInterval, serverCount)
+	}
+
+	// Send acknowledgment with new interval
+	resp := &protocol.HeartbeatAckMessage{
+		HeartbeatInterval: newInterval,
+	}
+	return s.sendMessage(sess, protocol.TypeHeartbeatAck, resp)
+}
+
+// Helper methods for server discovery
+
+type discoveryRateLimiter struct {
+	requests []time.Time
+	mu       sync.Mutex
+}
+
+// checkDiscoveryRateLimit checks if IP is within rate limit (30 requests/hour)
+func (s *Server) checkDiscoveryRateLimit(remoteAddr string) bool {
+	// Extract IP from address
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+
+	s.discoveryRateLimitMu.Lock()
+	defer s.discoveryRateLimitMu.Unlock()
+
+	limiter, exists := s.discoveryRateLimits[host]
+	if !exists {
+		limiter = &discoveryRateLimiter{
+			requests: []time.Time{},
+		}
+		s.discoveryRateLimits[host] = limiter
+	}
+
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-1 * time.Hour)
+
+	// Remove requests older than 1 hour
+	filtered := make([]time.Time, 0, len(limiter.requests))
+	for _, t := range limiter.requests {
+		if t.After(cutoff) {
+			filtered = append(filtered, t)
+		}
+	}
+	limiter.requests = filtered
+
+	// Check if under limit
+	if len(limiter.requests) >= 30 {
+		return false
+	}
+
+	// Add this request
+	limiter.requests = append(limiter.requests, now)
+	return true
+}
+
+// calculateHeartbeatInterval returns heartbeat interval based on server count
+func (s *Server) calculateHeartbeatInterval(serverCount uint32) uint32 {
+	switch {
+	case serverCount < 100:
+		return 300 // 5 minutes
+	case serverCount < 1000:
+		return 600 // 10 minutes
+	case serverCount < 5000:
+		return 1800 // 30 minutes
+	default:
+		return 3600 // 1 hour
+	}
+}
+
+// verifyAndRegisterServer verifies a server is reachable and registers it
+func (s *Server) verifyAndRegisterServer(msg *protocol.RegisterServerMessage, sourceIP string) {
+	// Connect to the server
+	addr := fmt.Sprintf("%s:%d", msg.Hostname, msg.Port)
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		log.Printf("Verification failed for %s: could not connect: %v", addr, err)
+		return
+	}
+	defer conn.Close()
+
+	// Generate random challenge
+	challenge := uint64(time.Now().UnixNano())
+
+	// Send VERIFY_REGISTRATION
+	verifyMsg := &protocol.VerifyRegistrationMessage{
+		Challenge: challenge,
+	}
+	payload, err := verifyMsg.Encode()
+	if err != nil {
+		log.Printf("Verification failed for %s: could not encode message: %v", addr, err)
+		return
+	}
+
+	frame := &protocol.Frame{
+		Version: 1,
+		Type:    protocol.TypeVerifyRegistration,
+		Flags:   0,
+		Payload: payload,
+	}
+
+	if err := protocol.EncodeFrame(conn, frame); err != nil {
+		log.Printf("Verification failed for %s: could not send challenge: %v", addr, err)
+		return
+	}
+
+	// Wait for VERIFY_RESPONSE (with timeout)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	respFrame, err := protocol.DecodeFrame(conn)
+	if err != nil {
+		log.Printf("Verification failed for %s: could not read response: %v", addr, err)
+		return
+	}
+
+	// Check message type
+	if respFrame.Type != protocol.TypeVerifyResponse {
+		log.Printf("Verification failed for %s: expected VERIFY_RESPONSE, got 0x%02x", addr, respFrame.Type)
+		return
+	}
+
+	// Decode response
+	respMsg := &protocol.VerifyResponseMessage{}
+	if err := respMsg.Decode(respFrame.Payload); err != nil {
+		log.Printf("Verification failed for %s: could not decode response: %v", addr, err)
+		return
+	}
+
+	// Check challenge
+	if respMsg.Challenge != challenge {
+		log.Printf("Verification failed for %s: wrong challenge (expected %d, got %d)", addr, challenge, respMsg.Challenge)
+		return
+	}
+
+	// Verification succeeded! Register the server
+	_, err = s.db.RegisterDiscoveredServer(
+		msg.Hostname,
+		msg.Port,
+		msg.Name,
+		msg.Description,
+		msg.MaxUsers,
+		msg.IsPublic,
+		sourceIP,
+		"registration",
+	)
+	if err != nil {
+		log.Printf("Failed to register server %s: %v", addr, err)
+		return
+	}
+
+	// Calculate initial heartbeat interval
+	serverCount, _ := s.db.CountDiscoveredServers()
+	interval := s.calculateHeartbeatInterval(serverCount)
+
+	log.Printf("Successfully registered server %s (heartbeat interval: %ds)", addr, interval)
+
+	// Note: We don't send REGISTER_ACK here because the original connection is gone
+	// The server will need to send a HEARTBEAT to get the interval
 }

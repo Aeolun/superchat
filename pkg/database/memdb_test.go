@@ -27,7 +27,7 @@ func TestSnapshotAndRecovery(t *testing.T) {
 		}
 
 		// Create a channel
-		err = db.CreateChannel("test-channel", "Test Channel", strPtr("Test description"), 0, 168, nil)
+		_, err = db.CreateChannel("test-channel", "Test Channel", strPtr("Test description"), 0, 168, nil)
 		if err != nil {
 			t.Fatalf("failed to create channel: %v", err)
 		}
@@ -152,7 +152,7 @@ func TestSnapshotDeletesOldMessages(t *testing.T) {
 	defer memDB.Close()
 
 	// Create a channel
-	err = db.CreateChannel("test-channel", "Test Channel", strPtr("Test description"), 0, 168, nil)
+	_, err = db.CreateChannel("test-channel", "Test Channel", strPtr("Test description"), 0, 168, nil)
 	if err != nil {
 		t.Fatalf("failed to create channel: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestReplyCountPersistence(t *testing.T) {
 		}
 		defer memDB.Close()
 
-		err = db.CreateChannel("test-channel", "Test Channel", strPtr("Test description"), 0, 168, nil)
+		_, err = db.CreateChannel("test-channel", "Test Channel", strPtr("Test description"), 0, 168, nil)
 		if err != nil {
 			t.Fatalf("failed to create channel: %v", err)
 		}
@@ -337,7 +337,7 @@ func TestNestedRepliesSnapshot(t *testing.T) {
 		}
 		defer memDB.Close()
 
-		err = db.CreateChannel("test", "Test", strPtr("Test"), 0, 168, nil)
+		_, err = db.CreateChannel("test", "Test", strPtr("Test"), 0, 168, nil)
 		if err != nil {
 			t.Fatalf("failed to create channel: %v", err)
 		}
@@ -440,7 +440,7 @@ func TestLargeBatchSnapshot(t *testing.T) {
 				t.Fatalf("failed to create MemDB: %v", err)
 			}
 
-			err = db.CreateChannel("test", "Test", strPtr("Test"), 0, 168, nil)
+			_, err = db.CreateChannel("test", "Test", strPtr("Test"), 0, 168, nil)
 			if err != nil {
 				t.Fatalf("failed to create channel: %v", err)
 			}

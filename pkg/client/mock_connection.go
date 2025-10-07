@@ -141,6 +141,21 @@ func (m *MockConnection) DisableAutoReconnect() {
 	m.autoReconnect = false
 }
 
+// SetThrottle is a no-op for mock
+func (m *MockConnection) SetThrottle(bytesPerSec int) {
+	// No-op for mock
+}
+
+// GetBytesSent returns 0 for mock
+func (m *MockConnection) GetBytesSent() uint64 {
+	return 0
+}
+
+// GetBytesReceived returns 0 for mock
+func (m *MockConnection) GetBytesReceived() uint64 {
+	return 0
+}
+
 // Test helpers
 
 // SetConnectError sets an error to return from Connect()

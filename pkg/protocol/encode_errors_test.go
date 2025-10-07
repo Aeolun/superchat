@@ -476,6 +476,16 @@ func TestAllMessageTypesEncodeToWithFailingWriter(t *testing.T) {
 		{"Pong", func() error { return (&PongMessage{}).EncodeTo(w) }},
 		{"Error", func() error { return (&ErrorMessage{}).EncodeTo(w) }},
 		{"ServerConfig", func() error { return (&ServerConfigMessage{}).EncodeTo(w) }},
+		{"GetUserInfo", func() error { return (&GetUserInfoMessage{Nickname: "alice"}).EncodeTo(w) }},
+		{"UserInfo", func() error { return (&UserInfoMessage{Nickname: "alice"}).EncodeTo(w) }},
+		{"ListUsers", func() error { return (&ListUsersMessage{}).EncodeTo(w) }},
+		{"UserList", func() error { return (&UserListMessage{Users: []UserListEntry{}}).EncodeTo(w) }},
+		{"AuthRequest", func() error { return (&AuthRequestMessage{Nickname: "alice", Password: "pwd"}).EncodeTo(w) }},
+		{"AuthResponse", func() error { return (&AuthResponseMessage{Success: true, UserID: 1}).EncodeTo(w) }},
+		{"RegisterUser", func() error { return (&RegisterUserMessage{Password: "pwd"}).EncodeTo(w) }},
+		{"RegisterResponse", func() error { return (&RegisterResponseMessage{Success: true, UserID: 1}).EncodeTo(w) }},
+		{"CreateChannel", func() error { return (&CreateChannelMessage{Name: "test", DisplayName: "#test", ChannelType: 1}).EncodeTo(w) }},
+		{"ChannelCreated", func() error { return (&ChannelCreatedMessage{Success: true, ChannelID: 1}).EncodeTo(w) }},
 	}
 
 	for _, tt := range tests {

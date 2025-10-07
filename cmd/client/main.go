@@ -66,6 +66,7 @@ func main() {
 	server := flag.String("server", "", "Server address (host:port, overrides config)")
 	profile := flag.String("profile", "", "Profile name for separate configuration (default: none)")
 	statePath := flag.String("state", "", "Path to state database (overrides config)")
+	throttle := flag.Int("throttle", 0, "Bandwidth limit in bytes/sec (e.g., 3600 for 28.8kbps dial-up, 0=unlimited)")
 	version := flag.Bool("version", false, "Show version information")
 	flag.Parse()
 
@@ -147,6 +148,14 @@ func main() {
 	if logger != nil {
 		conn.SetLogger(logger)
 		logger.Printf("Connecting to server: %s", conn.GetAddress())
+	}
+
+	// Apply bandwidth throttling if requested
+	if *throttle > 0 {
+		conn.SetThrottle(*throttle)
+		if logger != nil {
+			logger.Printf("Bandwidth throttling enabled: %d bytes/sec", *throttle)
+		}
 	}
 
 	// Connect to server

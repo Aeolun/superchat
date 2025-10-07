@@ -28,7 +28,12 @@ func main() {
 	configPath := flag.String("config", "~/.superchat/config.toml", "Path to config file")
 	port := flag.Int("port", 0, "TCP port to listen on (overrides config)")
 	dbPath := flag.String("db", "", "Path to SQLite database (overrides config)")
+	debug := flag.Bool("debug", false, "Enable debug logging")
 	version := flag.Bool("version", false, "Show version information")
+	disableDirectory := flag.Bool("disable-directory", false, "Disable directory mode (don't accept server registrations)")
+	announceTo := flag.String("announce-to", "", "Comma-separated list of directory servers to announce to (e.g., superchat.win:6465)")
+	serverName := flag.String("server-name", "", "Server name for directory listing")
+	serverDesc := flag.String("server-description", "", "Server description for directory listing")
 	flag.Parse()
 
 	// Handle --version flag
@@ -84,11 +89,49 @@ func main() {
 		log.Fatalf("Failed to create server: %v", err)
 	}
 
+	// Enable debug logging if requested
+	if *debug {
+		srv.EnableDebugLogging()
+		log.Printf("Debug logging enabled")
+	}
+
+	// Configure discovery settings
+	if *disableDirectory {
+		srv.DisableDirectory()
+		log.Printf("Directory mode disabled")
+	} else {
+		log.Printf("Directory mode enabled (servers can register)")
+	}
+
 	log.Printf("Config: %s (resolved to %s, using defaults if not found)", *configPath, resolvedConfigPath)
 	log.Printf("Database: %s", finalDBPath)
 
 	if err := srv.Start(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
+	}
+
+	// Announce to directories if specified
+	if *announceTo != "" {
+		directories := strings.Split(*announceTo, ",")
+		for _, dir := range directories {
+			dir = strings.TrimSpace(dir)
+			if dir == "" {
+				continue
+			}
+
+			name := *serverName
+			if name == "" {
+				name = fmt.Sprintf("SuperChat Server :%d", serverConfig.TCPPort)
+			}
+
+			desc := *serverDesc
+			if desc == "" {
+				desc = "A SuperChat server"
+			}
+
+			go srv.AnnounceToDirectory(dir, name, desc)
+			log.Printf("Announcing to directory: %s", dir)
+		}
 	}
 
 	log.Printf("SuperChat server %s started successfully", Version)

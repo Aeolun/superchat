@@ -60,8 +60,7 @@ func (m *HelpModal) Render(width, height int) string {
 	modalStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("205")).
-		Padding(1, 2).
-		Background(lipgloss.Color("235"))
+		Padding(1, 2)
 
 	// Build content
 	title := helpTitleStyle.Render("Keyboard Shortcuts")

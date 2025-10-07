@@ -20,12 +20,18 @@ const (
 	TypePostMessage        = 0x0A
 	TypeEditMessage        = 0x0B
 	TypeDeleteMessage      = 0x0C
+	TypeGetUserInfo        = 0x0F
 	TypePing               = 0x10
 	TypeDisconnect         = 0x11
+	TypeListUsers          = 0x16
 	TypeSubscribeThread    = 0x51
 	TypeUnsubscribeThread  = 0x52
 	TypeSubscribeChannel   = 0x53
 	TypeUnsubscribeChannel = 0x54
+	TypeListServers        = 0x55
+	TypeRegisterServer     = 0x56
+	TypeHeartbeat          = 0x57
+	TypeVerifyResponse     = 0x58
 )
 
 // Message type constants (Server → Client)
@@ -43,10 +49,16 @@ const (
 	TypeMessageEdited     = 0x8B
 	TypeMessageDeleted    = 0x8C
 	TypeNewMessage        = 0x8D
+	TypeUserInfo          = 0x8F
 	TypePong              = 0x90
 	TypeError             = 0x91
-	TypeServerConfig      = 0x98
-	TypeSubscribeOk       = 0x99
+	TypeServerConfig       = 0x98
+	TypeSubscribeOk        = 0x99
+	TypeUserList           = 0x9A
+	TypeServerList         = 0x9B
+	TypeRegisterAck        = 0x9C
+	TypeHeartbeatAck       = 0x9D
+	TypeVerifyRegistration = 0x9E
 )
 
 // Error codes
@@ -753,6 +765,7 @@ type ListMessagesMessage struct {
 	Limit        uint16
 	BeforeID     *uint64
 	ParentID     *uint64
+	AfterID      *uint64
 }
 
 func (m *ListMessagesMessage) EncodeTo(w io.Writer) error {
@@ -768,7 +781,10 @@ func (m *ListMessagesMessage) EncodeTo(w io.Writer) error {
 	if err := WriteOptionalUint64(w, m.BeforeID); err != nil {
 		return err
 	}
-	return WriteOptionalUint64(w, m.ParentID)
+	if err := WriteOptionalUint64(w, m.ParentID); err != nil {
+		return err
+	}
+	return WriteOptionalUint64(w, m.AfterID)
 }
 
 func (m *ListMessagesMessage) Encode() ([]byte, error) {
@@ -801,12 +817,17 @@ func (m *ListMessagesMessage) Decode(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	afterID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
 
 	m.ChannelID = channelID
 	m.SubchannelID = subchannelID
 	m.Limit = limit
 	m.BeforeID = beforeID
 	m.ParentID = parentID
+	m.AfterID = afterID
 	return nil
 }
 
@@ -1777,5 +1798,588 @@ func (m *SubscribeOkMessage) Decode(payload []byte) error {
 	m.Type = subType
 	m.ID = id
 	m.SubchannelID = subchannelID
+	return nil
+}
+
+// GetUserInfoMessage (0x0F) - Request user information by nickname
+type GetUserInfoMessage struct {
+	Nickname string
+}
+
+func (m *GetUserInfoMessage) EncodeTo(w io.Writer) error {
+	return WriteString(w, m.Nickname)
+}
+
+func (m *GetUserInfoMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *GetUserInfoMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	nickname, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Nickname = nickname
+	return nil
+}
+
+// UserInfoMessage (0x8F) - User information response
+type UserInfoMessage struct {
+	Nickname     string
+	IsRegistered bool
+	UserID       *uint64 // Only present if IsRegistered = true
+	Online       bool
+}
+
+func (m *UserInfoMessage) EncodeTo(w io.Writer) error {
+	if err := WriteString(w, m.Nickname); err != nil {
+		return err
+	}
+	if err := WriteBool(w, m.IsRegistered); err != nil {
+		return err
+	}
+	if err := WriteOptionalUint64(w, m.UserID); err != nil {
+		return err
+	}
+	return WriteBool(w, m.Online)
+}
+
+func (m *UserInfoMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UserInfoMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	nickname, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	isRegistered, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	userID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	online, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	m.Nickname = nickname
+	m.IsRegistered = isRegistered
+	m.UserID = userID
+	m.Online = online
+	return nil
+}
+
+// ListUsersMessage (0x16) - Request list of online users
+type ListUsersMessage struct {
+	Limit uint16
+}
+
+func (m *ListUsersMessage) EncodeTo(w io.Writer) error {
+	return WriteUint16(w, m.Limit)
+}
+
+func (m *ListUsersMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ListUsersMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	limit, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+	m.Limit = limit
+	return nil
+}
+
+// UserListEntry represents a single user in the user list
+type UserListEntry struct {
+	Nickname     string
+	IsRegistered bool
+	UserID       *uint64 // Only present if IsRegistered = true
+}
+
+// UserListMessage (0x9A) - List of online users response
+type UserListMessage struct {
+	Users []UserListEntry
+}
+
+func (m *UserListMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint16(w, uint16(len(m.Users))); err != nil {
+		return err
+	}
+	for _, user := range m.Users {
+		if err := WriteString(w, user.Nickname); err != nil {
+			return err
+		}
+		if err := WriteBool(w, user.IsRegistered); err != nil {
+			return err
+		}
+		if err := WriteOptionalUint64(w, user.UserID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *UserListMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UserListMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	userCount, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+
+	users := make([]UserListEntry, userCount)
+	for i := uint16(0); i < userCount; i++ {
+		nickname, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		isRegistered, err := ReadBool(buf)
+		if err != nil {
+			return err
+		}
+		userID, err := ReadOptionalUint64(buf)
+		if err != nil {
+			return err
+		}
+		users[i] = UserListEntry{
+			Nickname:     nickname,
+			IsRegistered: isRegistered,
+			UserID:       userID,
+		}
+	}
+
+	m.Users = users
+	return nil
+}
+
+// ===== Server Discovery Messages =====
+
+// ListServersMessage (0x55) - Request server list from directory
+type ListServersMessage struct {
+	Limit uint16
+}
+
+func (m *ListServersMessage) EncodeTo(w io.Writer) error {
+	return WriteUint16(w, m.Limit)
+}
+
+func (m *ListServersMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ListServersMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	limit, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+	m.Limit = limit
+	return nil
+}
+
+// ServerInfo represents a single server in the server list
+type ServerInfo struct {
+	Hostname       string
+	Port           uint16
+	Name           string
+	Description    string
+	UserCount      uint32
+	MaxUsers       uint32
+	UptimeSeconds  uint64
+	IsPublic       bool
+}
+
+// ServerListMessage (0x9B) - List of discoverable servers
+type ServerListMessage struct {
+	Servers []ServerInfo
+}
+
+func (m *ServerListMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint16(w, uint16(len(m.Servers))); err != nil {
+		return err
+	}
+	for _, server := range m.Servers {
+		if err := WriteString(w, server.Hostname); err != nil {
+			return err
+		}
+		if err := WriteUint16(w, server.Port); err != nil {
+			return err
+		}
+		if err := WriteString(w, server.Name); err != nil {
+			return err
+		}
+		if err := WriteString(w, server.Description); err != nil {
+			return err
+		}
+		if err := WriteUint32(w, server.UserCount); err != nil {
+			return err
+		}
+		if err := WriteUint32(w, server.MaxUsers); err != nil {
+			return err
+		}
+		if err := WriteUint64(w, server.UptimeSeconds); err != nil {
+			return err
+		}
+		if err := WriteBool(w, server.IsPublic); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ServerListMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ServerListMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	serverCount, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+
+	servers := make([]ServerInfo, serverCount)
+	for i := uint16(0); i < serverCount; i++ {
+		hostname, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		port, err := ReadUint16(buf)
+		if err != nil {
+			return err
+		}
+		name, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		description, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		userCount, err := ReadUint32(buf)
+		if err != nil {
+			return err
+		}
+		maxUsers, err := ReadUint32(buf)
+		if err != nil {
+			return err
+		}
+		uptimeSeconds, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		isPublic, err := ReadBool(buf)
+		if err != nil {
+			return err
+		}
+
+		servers[i] = ServerInfo{
+			Hostname:      hostname,
+			Port:          port,
+			Name:          name,
+			Description:   description,
+			UserCount:     userCount,
+			MaxUsers:      maxUsers,
+			UptimeSeconds: uptimeSeconds,
+			IsPublic:      isPublic,
+		}
+	}
+
+	m.Servers = servers
+	return nil
+}
+
+// RegisterServerMessage (0x56) - Register server with directory
+type RegisterServerMessage struct {
+	Hostname    string
+	Port        uint16
+	Name        string
+	Description string
+	MaxUsers    uint32
+	IsPublic    bool
+}
+
+func (m *RegisterServerMessage) EncodeTo(w io.Writer) error {
+	if err := WriteString(w, m.Hostname); err != nil {
+		return err
+	}
+	if err := WriteUint16(w, m.Port); err != nil {
+		return err
+	}
+	if err := WriteString(w, m.Name); err != nil {
+		return err
+	}
+	if err := WriteString(w, m.Description); err != nil {
+		return err
+	}
+	if err := WriteUint32(w, m.MaxUsers); err != nil {
+		return err
+	}
+	return WriteBool(w, m.IsPublic)
+}
+
+func (m *RegisterServerMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *RegisterServerMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	hostname, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	port, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+	name, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	description, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	maxUsers, err := ReadUint32(buf)
+	if err != nil {
+		return err
+	}
+	isPublic, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Hostname = hostname
+	m.Port = port
+	m.Name = name
+	m.Description = description
+	m.MaxUsers = maxUsers
+	m.IsPublic = isPublic
+	return nil
+}
+
+// RegisterAckMessage (0x9C) - Server registration acknowledgment
+type RegisterAckMessage struct {
+	Success           bool
+	HeartbeatInterval uint32 // Only present if success = true
+	Message           string
+}
+
+func (m *RegisterAckMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if m.Success {
+		if err := WriteUint32(w, m.HeartbeatInterval); err != nil {
+			return err
+		}
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *RegisterAckMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *RegisterAckMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	m.Success = success
+
+	if success {
+		heartbeatInterval, err := ReadUint32(buf)
+		if err != nil {
+			return err
+		}
+		m.HeartbeatInterval = heartbeatInterval
+	}
+
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Message = message
+	return nil
+}
+
+// VerifyRegistrationMessage (0x9E) - Verification challenge
+type VerifyRegistrationMessage struct {
+	Challenge uint64
+}
+
+func (m *VerifyRegistrationMessage) EncodeTo(w io.Writer) error {
+	return WriteUint64(w, m.Challenge)
+}
+
+func (m *VerifyRegistrationMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *VerifyRegistrationMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	challenge, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	m.Challenge = challenge
+	return nil
+}
+
+// VerifyResponseMessage (0x58) - Response to verification challenge
+type VerifyResponseMessage struct {
+	Challenge uint64
+}
+
+func (m *VerifyResponseMessage) EncodeTo(w io.Writer) error {
+	return WriteUint64(w, m.Challenge)
+}
+
+func (m *VerifyResponseMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *VerifyResponseMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	challenge, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	m.Challenge = challenge
+	return nil
+}
+
+// HeartbeatMessage (0x57) - Periodic heartbeat to directory
+type HeartbeatMessage struct {
+	Hostname      string
+	Port          uint16
+	UserCount     uint32
+	UptimeSeconds uint64
+}
+
+func (m *HeartbeatMessage) EncodeTo(w io.Writer) error {
+	if err := WriteString(w, m.Hostname); err != nil {
+		return err
+	}
+	if err := WriteUint16(w, m.Port); err != nil {
+		return err
+	}
+	if err := WriteUint32(w, m.UserCount); err != nil {
+		return err
+	}
+	return WriteUint64(w, m.UptimeSeconds)
+}
+
+func (m *HeartbeatMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *HeartbeatMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	hostname, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	port, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+	userCount, err := ReadUint32(buf)
+	if err != nil {
+		return err
+	}
+	uptimeSeconds, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Hostname = hostname
+	m.Port = port
+	m.UserCount = userCount
+	m.UptimeSeconds = uptimeSeconds
+	return nil
+}
+
+// HeartbeatAckMessage (0x9D) - Heartbeat acknowledgment with interval
+type HeartbeatAckMessage struct {
+	HeartbeatInterval uint32
+}
+
+func (m *HeartbeatAckMessage) EncodeTo(w io.Writer) error {
+	return WriteUint32(w, m.HeartbeatInterval)
+}
+
+func (m *HeartbeatAckMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *HeartbeatAckMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	heartbeatInterval, err := ReadUint32(buf)
+	if err != nil {
+		return err
+	}
+	m.HeartbeatInterval = heartbeatInterval
 	return nil
 }

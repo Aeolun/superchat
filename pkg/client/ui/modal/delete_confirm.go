@@ -56,8 +56,7 @@ func (m *DeleteConfirmModal) Render(width, height int) string {
 	modalStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("205")).
-		Padding(1, 2).
-		Background(lipgloss.Color("235"))
+		Padding(1, 2)
 
 	content := "Delete this message?\n\n[y] Confirm    [n] Cancel"
 

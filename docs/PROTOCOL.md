@@ -155,10 +155,15 @@ All messages use a simple frame-based format:
 | 0x13 | PROVIDE_PUBLIC_KEY | Upload public key for encryption |
 | 0x14 | ALLOW_UNENCRYPTED | Explicitly allow unencrypted DMs |
 | 0x15 | GET_SUBCHANNELS | Request subchannels for a channel |
+| 0x16 | LIST_USERS | Request list of online users |
 | 0x51 | SUBSCRIBE_THREAD | Subscribe to thread updates |
 | 0x52 | UNSUBSCRIBE_THREAD | Unsubscribe from thread updates |
 | 0x53 | SUBSCRIBE_CHANNEL | Subscribe to new threads in channel |
 | 0x54 | UNSUBSCRIBE_CHANNEL | Unsubscribe from channel updates |
+| 0x55 | LIST_SERVERS | Request server list from directory |
+| 0x56 | REGISTER_SERVER | Register server with directory |
+| 0x57 | HEARTBEAT | Directory heartbeat (keep-alive) |
+| 0x58 | VERIFY_RESPONSE | Response to verification challenge |
 
 ### Server → Client Messages
 
@@ -189,6 +194,11 @@ All messages use a simple frame-based format:
 | 0x97 | SUBCHANNEL_LIST | List of subchannels for a channel |
 | 0x98 | SERVER_CONFIG | Server configuration and limits (sent on connect) |
 | 0x99 | SUBSCRIBE_OK | Subscription confirmation |
+| 0x9A | USER_LIST | List of online users |
+| 0x9B | SERVER_LIST | List of discoverable servers |
+| 0x9C | REGISTER_ACK | Server registration acknowledgment |
+| 0x9D | HEARTBEAT_ACK | Heartbeat acknowledgment |
+| 0x9E | VERIFY_REGISTRATION | Verification challenge for new servers |
 
 ## Message Payloads
 
@@ -403,16 +413,20 @@ Request messages from a channel/subchannel.
 +-------------------+-----------------------------+------------------------+
 | before_id (Optional u64)  | parent_id (Optional u64) |
 +-------------------------------+-------------------------+
+| after_id (Optional u64)   |
++---------------------------+
 ```
 
 **Parameters:**
 - `limit`: Max messages to return (default: 50, max: 200)
-- `before_id`: Return messages older than this message ID (for pagination)
+- `before_id`: Return messages older than this message ID (for backward pagination)
 - `parent_id`: If set, only return replies to this message (thread view)
+- `after_id`: Return messages newer than this message ID (for forward pagination / catching up)
 
 **Behavior:**
 - **Without `parent_id`**: Returns root messages only (thread starters, where `parent_id = null`)
-  - Sorted by `created_at` descending (newest first)
+  - Sorted by `created_at` descending (newest first) when using `before_id` or neither
+  - Sorted by `created_at` ascending (oldest first) when using `after_id`
   - Each message includes `reply_count` to show thread size
   - Use for displaying thread list in channel/subchannel
 
@@ -423,9 +437,19 @@ Request messages from a channel/subchannel.
   - Use for displaying a single thread's conversation
 
 **Pagination:**
-- Without `before_id`: Returns most recent messages
-- With `before_id`: Returns messages older than specified ID
-- Allows scrolling backwards through message history
+- **Without `before_id` or `after_id`**: Returns most recent messages (sorted newest-first)
+- **With `before_id`**: Returns messages with `id < before_id` (older messages, sorted newest-first)
+- **With `after_id`**: Returns messages with `id > after_id` (newer messages, sorted oldest-first)
+- **Both set**: `before_id` takes precedence, `after_id` is ignored
+- Allows scrolling backwards through history (`before_id`) or catching up with new messages (`after_id`)
+
+**Use Case - Bandwidth Optimization:**
+When reopening a thread, the client can request only messages posted since last view:
+1. Client caches thread replies locally with the highest message ID seen
+2. When reopening thread, send `after_id` = highest cached message ID
+3. Server returns only new messages (id > after_id)
+4. Client merges new messages with cache and re-sorts the tree
+5. This avoids re-fetching all 50+ messages every time, fetching only the few new ones
 
 ### 0x89 - MESSAGE_LIST (Server → Client)
 
@@ -627,6 +651,88 @@ Each count entry:
 - Only sent to registered users (anonymous users track locally)
 - `unread_count` is calculated from `UserChannelState.last_read_at`
 - If user has never read a channel, count is total messages in that channel
+
+### 0x0F - GET_USER_INFO (Client → Server)
+
+Request information about a user by nickname.
+
+```
++-------------------+
+| nickname (String) |
++-------------------+
+```
+
+**Notes:**
+- Can be used to check if a nickname is registered before attempting authentication
+- Useful for client UI to show "Sign In" vs "Register" options dynamically
+- Returns basic public information about the user
+
+### 0x8F - USER_INFO (Server → Client)
+
+Response with user information.
+
+```
++-------------------+---------------------+-------------------+
+| nickname (String) | is_registered(bool) | user_id           |
+|                   |                     | (Optional u64)    |
++-------------------+---------------------+-------------------+
+| online (bool)     |
++-------------------+
+```
+
+**Fields:**
+- `nickname`: Echo back the nickname that was queried
+- `is_registered`: True if this nickname belongs to a registered user (has password)
+- `user_id`: Only present if `is_registered = true`, the user's ID
+- `online`: True if the user is currently connected (any session with this nickname)
+
+**Notes:**
+- For anonymous users with this nickname, `is_registered = false` and `user_id` is absent
+- If no user exists with this nickname (neither registered nor currently online), `online = false` and `is_registered = false`
+- Client can use `is_registered` to determine whether to show sign-in or registration UI
+
+### 0x16 - LIST_USERS (Client → Server)
+
+Request list of currently online users.
+
+```
++-------------------+
+| limit (u16)       |
++-------------------+
+```
+
+**Notes:**
+- `limit`: Maximum number of users to return (default: 100, max: 500)
+- Returns only currently connected users (active sessions)
+- Includes both registered and anonymous users
+- Results sorted by connection time (most recent first)
+
+### 0x9A - USER_LIST (Server → Client)
+
+Response with list of online users.
+
+```
++-------------------+----------------+
+| user_count (u16)  | users []       |
++-------------------+----------------+
+
+Each user:
++-------------------+---------------------+-------------------+
+| nickname (String) | is_registered(bool) | user_id           |
+|                   |                     | (Optional u64)    |
++-------------------+---------------------+-------------------+
+```
+
+**Fields (per user):**
+- `nickname`: The user's current nickname (includes ~ prefix for anonymous users in display)
+- `is_registered`: True if registered user, false if anonymous
+- `user_id`: Only present if `is_registered = true`
+
+**Notes:**
+- Shows all currently connected users (sessions with active connections)
+- Anonymous users appear with their session nickname
+- Same user_id may appear multiple times if user has multiple sessions
+- Useful for seeing who's currently online
 
 ### 0x07 - CREATE_CHANNEL (Client → Server)
 
@@ -1135,6 +1241,275 @@ Generic error response.
 - 9001: Database error
 - 9002: Service unavailable
 
+## Server Discovery Protocol
+
+SuperChat supports server discovery through directory services. Any SuperChat server can optionally act as a directory by enabling discovery mode. Servers can announce themselves to directories, and clients can browse available servers. This enables a federated-style discovery model similar to Mastodon's instance list, while keeping servers completely independent.
+
+**Key Concepts:**
+- **Directory**: Any SuperChat server running in directory mode (accepts REGISTER_SERVER requests and maintains a list of known servers)
+- **Discoverable Server**: Any SuperChat server that announces itself to one or more directories
+- **Client Discovery**: Clients connect to a directory to browse available servers, then disconnect and connect to chosen server
+
+**Important:** A directory is just a regular SuperChat server with directory mode enabled. The same server binary provides both chat functionality and optional directory services. For example, `superchat.win:6465` serves as both a chat server AND a directory.
+
+**Directory Configuration:**
+- Clients maintain a list of directories (default: `superchat.win:6465`)
+- Any server can enable directory mode (via `--enable-directory` flag)
+- Servers can announce to multiple directories (via `--announce-to` flag)
+
+**Directory Gossip Protocol:**
+- Directories periodically query registered servers with LIST_SERVERS
+- If a registered server is also a directory, it returns its known servers
+- The querying directory discovers new servers and can register to them
+- This creates a self-sustaining mesh network of directories
+- If the primary directory (e.g., superchat.win) goes down, other directories continue operating
+- Gossip interval: every 1-6 hours (configurable, randomized to avoid thundering herd)
+
+**Anti-Spam Measures:**
+- **Verification Challenge**: Directories connect back to verify servers are real and reachable
+- **Rate Limiting**: 30 requests/hour per IP (enough for heartbeats + retries)
+- **Adaptive Heartbeat**: Directories adjust heartbeat interval based on load
+- **Deduplication**: Only one entry per hostname:port (re-registration updates existing)
+
+**Trust Model:**
+- Verification ensures servers are reachable, but doesn't prevent all abuse
+- A malicious actor could still spin up many real servers to flood directories
+- We rely on economic disincentives: running real servers is expensive and tedious
+- The barrier to entry (actual server infrastructure) deters casual spam
+- Directories operated by trusted community members are preferred
+
+### 0x55 - LIST_SERVERS (Client/Directory → Server)
+
+Request list of discoverable servers from a directory.
+
+```
++-------------------+
+| limit (u16)       |
++-------------------+
+```
+
+**Notes:**
+- `limit`: Maximum number of servers to return (default: 100, max: 500)
+- Returns servers sorted by last heartbeat (most recently active first)
+- Only returns servers that have sent heartbeat within their interval window
+- Can be sent by clients (browsing servers) or by directories (gossip protocol)
+- Regular chat servers (not in directory mode) respond with empty SERVER_LIST (count: 0)
+
+### 0x9B - SERVER_LIST (Server → Client/Directory)
+
+Response with list of discoverable servers.
+
+```
++-------------------+----------------+
+| server_count(u16) | servers []     |
++-------------------+----------------+
+
+Each server:
++-------------------+-------------------+-------------------+
+| hostname (String) | port (u16)        | name (String)     |
++-------------------+-------------------+-------------------+
+| description (String)                | user_count (u32)  |
++-------------------------------------+-------------------+
+| max_users (u32)   | uptime_seconds (u64)                |
++-------------------+------------------------------------- +
+| is_public (bool)  |
++-------------------+
+```
+
+**Fields:**
+- `hostname`: DNS hostname or IP address
+- `port`: TCP port (typically 6465)
+- `name`: Human-readable server name
+- `description`: Server description/purpose
+- `user_count`: Current number of connected users
+- `max_users`: Maximum user capacity (0 = unlimited)
+- `uptime_seconds`: How long server has been running
+- `is_public`: Whether server accepts public registrations
+
+**Notes:**
+- Sorted by last heartbeat time (most recent first)
+- Only includes servers with recent heartbeats (within 2x heartbeat interval)
+
+### 0x56 - REGISTER_SERVER (Server → Directory)
+
+Register or update server entry in directory.
+
+```
++-------------------+-------------------+-------------------+
+| hostname (String) | port (u16)        | name (String)     |
++-------------------+-------------------+-------------------+
+| description (String)                | max_users (u32)   |
++-------------------------------------+-------------------+
+| is_public (bool)  |
++-------------------+
+```
+
+**Fields:**
+- `hostname`: Server's publicly accessible hostname or IP
+- `port`: Server's port (must be reachable from directory)
+- `name`: Human-readable server name (e.g., "Gaming Community")
+- `description`: Server description/purpose
+- `max_users`: Maximum user capacity (0 = unlimited)
+- `is_public`: Whether server accepts public registrations
+
+**Behavior:**
+- If hostname:port already registered: updates existing entry
+- If new registration: triggers verification challenge (VERIFY_REGISTRATION)
+- Directory may reject if rate limit exceeded (30/hour)
+
+**Notes:**
+- Server must respond to VERIFY_REGISTRATION challenge to complete registration
+- After successful registration, server must send HEARTBEAT periodically
+- Failed verification removes server from directory
+
+### 0x9C - REGISTER_ACK (Directory → Server)
+
+Acknowledgment of server registration with heartbeat interval.
+
+```
++-------------------+------------------------+-------------------+
+| success (bool)    | heartbeat_interval(u32)| message (String)  |
+|                   | (only if success)      | (error if failed) |
++-------------------+------------------------+-------------------+
+```
+
+**Fields:**
+- `success`: Whether registration was successful
+- `heartbeat_interval`: Seconds between heartbeats (e.g., 300 = 5 minutes)
+- `message`: Error description if failed, or welcome message if success
+
+**Heartbeat Interval:**
+- Directory calculates based on current load (number of registered servers)
+- Typical values: 300s (5 min), 600s (10 min), 1800s (30 min), 3600s (1 hour)
+- Server must send HEARTBEAT before interval expires or be removed
+
+**Error Cases:**
+- Rate limit exceeded: `success = false`, `message = "Rate limit exceeded"`
+- Invalid hostname/port: `success = false`, `message = "Invalid hostname or port"`
+- Verification failed: `success = false`, `message = "Could not verify server"`
+
+### 0x9E - VERIFY_REGISTRATION (Directory → Server)
+
+Challenge sent to verify server is reachable and authentic.
+
+```
++-------------------+
+| challenge (u64)   |
++-------------------+
+```
+
+**Fields:**
+- `challenge`: Random 64-bit nonce
+
+**Behavior:**
+- Directory connects to server's hostname:port
+- Sends VERIFY_REGISTRATION with random challenge
+- Server must respond with VERIFY_RESPONSE containing same challenge
+- If response matches, registration is confirmed (server added to directory)
+- If connection fails or response incorrect, registration is rejected
+
+**Two Use Cases:**
+
+1. **Initial Registration** (server-initiated):
+   - Server sends REGISTER_SERVER to directory
+   - Directory immediately verifies by sending VERIFY_REGISTRATION
+   - If verification succeeds, server is added and receives REGISTER_ACK
+   - If verification fails, server receives REGISTER_ACK with `success = false`
+
+2. **Gossip Discovery** (directory-initiated):
+   - Directory A discovers Server C through gossip from Directory B
+   - Directory A connects to Server C and sends VERIFY_REGISTRATION
+   - If verification succeeds, Server C is added to Directory A's list (no REGISTER_SERVER needed)
+   - If verification fails, Directory A ignores Server C
+   - Server C is NOT notified of successful gossip-based addition (silent verification)
+
+**Notes:**
+- Prevents registering fake/unreachable servers
+- Prevents malicious directories from injecting fake servers through gossip
+- Directory times out after 10 seconds if no response
+- Servers must respond to VERIFY_REGISTRATION from any directory (not just ones they registered to)
+
+### 0x58 - VERIFY_RESPONSE (Server → Directory)
+
+Response to verification challenge.
+
+```
++-------------------+
+| challenge (u64)   |
++-------------------+
+```
+
+**Fields:**
+- `challenge`: Echo back the challenge from VERIFY_REGISTRATION
+
+**Behavior:**
+- Server receives VERIFY_REGISTRATION on its main listener
+- Immediately responds with VERIFY_RESPONSE containing same challenge
+- Directory verifies challenge matches and completes registration
+
+**Notes:**
+- Must be sent within 10 seconds of receiving VERIFY_REGISTRATION
+- Failure to respond correctly removes server from directory
+
+### 0x57 - HEARTBEAT (Server → Directory)
+
+Periodic heartbeat to maintain directory listing.
+
+```
++-------------------+-------------------+
+| hostname (String) | port (u16)        |
++-------------------+-------------------+
+| user_count (u32)  | uptime_seconds(u64)|
++-------------------+-------------------+
+```
+
+**Fields:**
+- `hostname`: Server's hostname (must match registration)
+- `port`: Server's port (must match registration)
+- `user_count`: Current number of connected users (updated)
+- `uptime_seconds`: Server uptime in seconds (updated)
+
+**Behavior:**
+- Sent at interval specified in REGISTER_ACK or HEARTBEAT_ACK
+- Updates server's metadata in directory (user count, uptime)
+- Resets "last seen" timestamp to prevent removal
+
+**Notes:**
+- Must be sent before heartbeat_interval expires
+- Missing 3 consecutive heartbeats removes server from directory
+- Includes updated stats so directory has current info
+
+### 0x9D - HEARTBEAT_ACK (Directory → Server)
+
+Acknowledgment of heartbeat with updated interval.
+
+```
++-------------------+
+| heartbeat_interval(u32)|
++-------------------+
+```
+
+**Fields:**
+- `heartbeat_interval`: Seconds until next heartbeat (may be adjusted)
+
+**Behavior:**
+- Directory may adjust interval based on current load
+- If interval changes, server should use new value for next heartbeat
+- Allows directory to scale heartbeat frequency dynamically
+
+**Load-Based Intervals:**
+```
+< 100 servers:   300s (5 minutes)
+< 1000 servers:  600s (10 minutes)
+< 5000 servers:  1800s (30 minutes)
+>= 5000 servers: 3600s (1 hour)
+```
+
+**Notes:**
+- Server should log interval changes for debugging
+- If server ignores interval adjustments, directory may remove it
+- Prevents directory overload with thousands of servers
+
 ## Connection Flow
 
 ### Anonymous TCP Connection (Read-Only)
@@ -1485,6 +1860,180 @@ User A (registered, has key)            Server                          User B (
 - Private key stored in memory only (lost on disconnect)
 - Channel key sent in plaintext in DM_READY for anonymous users (no way to encrypt it)
 - Trade-off: session-only privacy vs. no setup burden
+
+## Server Discovery Flow
+
+### Client Browsing Servers
+
+```
+Client                                  Directory (superchat.win)
+  |                                       |
+  |--- TCP Connect ------------------->  |
+  |                                       |
+  |--- LIST_SERVERS (limit: 100) ----->  |
+  |<-- SERVER_LIST (50 servers) --------  |
+  |                                       |
+  |(User picks server from list)          |
+  |                                       |
+  |--- DISCONNECT --------------------->  |
+  |                                       |
+  (Client connects to chosen server at chat.example.com:6465)
+```
+
+**Notes:**
+- Client connects to directory server(s) temporarily
+- Receives server list, displays to user
+- Disconnects from directory
+- Connects to chosen server for actual chat
+
+### Server Registration
+
+```
+Server (chat.example.com)              Directory (superchat.win)
+  |                                       |
+  |(Server startup with                   |
+  | --announce-to superchat.win:6465)     |
+  |                                       |
+  |--- TCP Connect ------------------->  |
+  |                                       |
+  |--- REGISTER_SERVER ---------------->  |
+  |    (hostname, port, name, desc)       |
+  |                                       |
+  |                                       |(Directory validates)
+  |                                       |
+  |                                       |--- TCP Connect to --------->  |
+  |                                       |    chat.example.com:6465      |
+  |                                       |                               |
+  |<-- VERIFY_REGISTRATION (challenge) --|                               |
+  |                                       |                               |
+  |--- VERIFY_RESPONSE (challenge) ----->|                               |
+  |                                       |(Verification OK)              |
+  |                                       |
+  |<-- REGISTER_ACK (success,             |
+  |    heartbeat_interval: 300s) -------  |
+  |                                       |
+  |(Wait 5 minutes)                       |
+  |                                       |
+  |--- HEARTBEAT (hostname, port,         |
+  |    user_count, uptime) ------------>  |
+  |                                       |
+  |<-- HEARTBEAT_ACK (300s) ------------  |
+  |                                       |
+  |(Repeat heartbeat every 5 min)         |
+```
+
+**Notes:**
+- Server maintains persistent connection to directory
+- Sends heartbeat at interval specified by directory
+- Directory can adjust interval via HEARTBEAT_ACK
+- Missing 3 heartbeats removes server from directory
+
+### Server Registration Failure (Verification)
+
+```
+Server (fake.example.com)               Directory (superchat.win)
+  |                                       |
+  |--- REGISTER_SERVER ---------------->  |
+  |    (hostname: fake.example.com:6465)  |
+  |                                       |
+  |                                       |(Attempts to connect to
+  |                                       | fake.example.com:6465)
+  |                                       |
+  |                                       |(Connection fails - timeout)
+  |                                       |
+  |<-- REGISTER_ACK (success: false,      |
+  |    message: "Could not verify...") -  |
+  |                                       |
+```
+
+**Notes:**
+- Directory rejects registration if it can't connect back
+- Prevents spam registrations of fake servers
+- Rate limiting prevents brute-force attempts
+
+### Directory Load Adaptation
+
+```
+Server                                  Directory (has 1500 servers)
+  |                                       |
+  |--- REGISTER_SERVER ---------------->  |
+  |                                       |
+  |(Verification succeeds)                |
+  |                                       |
+  |<-- REGISTER_ACK (success,             |
+  |    heartbeat_interval: 600s) -------  |
+  |    "High load, heartbeat every 10m"   |
+  |                                       |
+  |(Wait 10 minutes - adjusted interval)  |
+  |                                       |
+  |--- HEARTBEAT ---------------------->  |
+  |                                       |
+  |<-- HEARTBEAT_ACK (600s) ------------  |
+  |                                       |
+```
+
+**Notes:**
+- Directory dynamically adjusts heartbeat interval based on number of servers
+- Servers respect the interval to avoid overloading directory
+- Prevents performance degradation with thousands of servers
+
+### Directory Gossip (Network Expansion)
+
+```
+Directory A (superchat.win)             Server B (chat.example.com, also a directory)
+  |                                       |
+  |(B already registered to A)            |
+  |                                       |
+  |(Gossip timer fires - every 3 hours)   |
+  |                                       |
+  |--- LIST_SERVERS (limit: 500) ----->  |
+  |                                       |
+  |<-- SERVER_LIST (B knows 20 servers) -|
+  |                                       |
+  |(A discovers new Server C)             |
+  |(A doesn't know C yet - needs verify)  |
+  |                                       |
+  |(A connects to Server C)               |
+  |                                       |
+  |                                       Server C (game.example.org)
+  |                                       |
+  |--- VERIFY_REGISTRATION (challenge) ----------------->  |
+  |                                       |               |
+  |<-- VERIFY_RESPONSE (challenge) -------------------  |
+  |                                       |
+  |(Verification OK - A adds C to list)   |
+  |(C doesn't know A registered it)       |
+  |                                       |
+  |(Later, A may announce itself to C)    |
+  |(A connects to C again)                |
+  |                                       |
+  |--- REGISTER_SERVER (A's info) ---------------------->  |
+  |                                       |               |
+  |                                       |          (C verifies A)
+  |                                       |               |
+  |<-- REGISTER_ACK (success) ------------------------  |
+  |                                       |
+  |(Now A and C know about each other)    |
+  |(B acted as bridge for discovery)      |
+```
+
+**Notes:**
+- Directories periodically query all registered servers for their server lists (gossip)
+- New servers discovered through gossip are **verified** before being added
+- Directory connects to discovered server and sends VERIFY_REGISTRATION
+- Only servers that pass verification are added (prevents fake server injection)
+- Server is silently added to directory (no notification sent to server)
+- Directory may optionally register itself to newly discovered servers (bidirectional)
+- This creates a mesh network where directories discover each other
+- If superchat.win goes down, other directories continue discovering servers
+- Gossip interval is randomized (1-6 hours) to prevent synchronized queries
+- Only servers in directory mode respond with SERVER_LIST, regular chat servers return empty list
+
+**Network Resilience:**
+- No single point of failure - multiple directories can exist
+- Directories learn from each other through gossip
+- Clients can configure multiple directories as fallbacks
+- If primary directory fails, clients use secondary directories
 
 ## Protocol Extensions
 

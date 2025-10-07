@@ -62,13 +62,20 @@ func (m *mockDB) SubchannelExists(subchannelID int64) (bool, error) {
 }
 
 // ListRootMessages returns root messages in a channel
-func (m *mockDB) ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64) ([]*database.Message, error) {
+func (m *mockDB) ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64, afterID *uint64) ([]*database.Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	messages := make([]*database.Message, 0)
 	for _, msg := range m.messages {
 		if msg.ChannelID == channelID && msg.ParentID == nil {
+			// Apply beforeID/afterID filters if specified
+			if beforeID != nil && uint64(msg.ID) >= *beforeID {
+				continue
+			}
+			if afterID != nil && beforeID == nil && uint64(msg.ID) <= *afterID {
+				continue
+			}
 			messages = append(messages, msg)
 		}
 	}
@@ -76,7 +83,7 @@ func (m *mockDB) ListRootMessages(channelID int64, subchannelID *int64, limit ui
 }
 
 // ListThreadReplies returns replies to a message
-func (m *mockDB) ListThreadReplies(parentID uint64) ([]*database.Message, error) {
+func (m *mockDB) ListThreadReplies(parentID uint64, afterID *uint64) ([]*database.Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -84,6 +91,10 @@ func (m *mockDB) ListThreadReplies(parentID uint64) ([]*database.Message, error)
 	parentIDInt := int64(parentID)
 	for _, msg := range m.messages {
 		if msg.ParentID != nil && *msg.ParentID == parentIDInt {
+			// Apply afterID filter if specified
+			if afterID != nil && uint64(msg.ID) <= *afterID {
+				continue
+			}
 			messages = append(messages, msg)
 		}
 	}

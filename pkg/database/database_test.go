@@ -2,7 +2,6 @@ package database
 
 import (
 	"errors"
-	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -20,23 +19,11 @@ func newTestDB(t *testing.T) *DB {
 func mustChannelID(t *testing.T, db *DB) int64 {
 	t.Helper()
 	desc := "Test channel"
-	if err := db.CreateChannel("test", "#test", &desc, 1, 168, nil); err != nil {
+	channelID, err := db.CreateChannel("test", "#test", &desc, 1, 168, nil)
+	if err != nil {
 		t.Fatalf("failed to create channel: %v", err)
 	}
-
-	channels, err := db.ListChannels()
-	if err != nil {
-		t.Fatalf("failed to list channels: %v", err)
-	}
-
-	for _, ch := range channels {
-		if ch.Name == "test" {
-			return ch.ID
-		}
-	}
-
-	t.Fatalf("test channel not found: %v", fmt.Errorf("name test missing"))
-	return 0
+	return channelID
 }
 
 func TestSoftDeleteMessageSuccess(t *testing.T) {
@@ -135,7 +122,7 @@ func TestCleanupExpiredMessages(t *testing.T) {
 
 	// Create a channel with 1-hour retention
 	desc := "Short retention channel"
-	if err := db.CreateChannel("shortretention", "#shortretention", &desc, 1, 1, nil); err != nil {
+	if _, err := db.CreateChannel("shortretention", "#shortretention", &desc, 1, 1, nil); err != nil {
 		t.Fatalf("failed to create channel: %v", err)
 	}
 
@@ -202,7 +189,7 @@ func TestCleanupExpiredMessagesWithReplies(t *testing.T) {
 
 	// Create a channel with 1-hour retention
 	desc := "Short retention channel"
-	if err := db.CreateChannel("shortretention", "#shortretention", &desc, 1, 1, nil); err != nil {
+	if _, err := db.CreateChannel("shortretention", "#shortretention", &desc, 1, 1, nil); err != nil {
 		t.Fatalf("failed to create channel: %v", err)
 	}
 

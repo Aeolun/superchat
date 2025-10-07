@@ -2,10 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -84,6 +86,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.latestVersion = msg.LatestVersion
 		m.updateAvailable = msg.UpdateAvailable
 		return m, nil
+
+	case ForceRenderMsg:
+		// No-op message just to trigger a re-render
+		return m, nil
+
+	case NicknameSentMsg:
+		// Store the nickname we sent so we can use it when server confirms
+		m.pendingNickname = msg.Nickname
+
+		// If going anonymous, clear authentication locally
+		if msg.GoAnonymous {
+			m.userID = nil
+			m.authState = AuthStateAnonymous
+			m.state.SetUserID(nil)
+		}
+		return m, nil
+
+	default:
+		// Always update spinner (it manages its own tick messages)
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+
+		// Update viewport content if we're currently loading something
+		if m.loadingThreadList || m.loadingMore {
+			m.threadListViewport.SetContent(m.buildThreadListContent())
+		}
+		if m.loadingThreadReplies || m.loadingMoreReplies {
+			m.threadViewport.SetContent(m.buildThreadContent())
+		}
+
+		return m, cmd
 	}
 
 	return m, nil
@@ -123,61 +156,6 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Handle password modal text input (LEGACY - will be moved to PasswordPromptModal)
-	if m.authState == AuthStatePrompting {
-		switch msg.Type {
-		case tea.KeyRunes:
-			m.passwordInput = append(m.passwordInput, []byte(string(msg.Runes))...)
-			return m, nil
-		case tea.KeyBackspace:
-			if len(m.passwordInput) > 0 {
-				m.passwordInput = m.passwordInput[:len(m.passwordInput)-1]
-			}
-			return m, nil
-		}
-	}
-
-	// Handle registration modal text input (LEGACY - will be moved to RegistrationModal)
-	if m.registrationMode {
-		switch msg.Type {
-		case tea.KeyRunes:
-			if m.regPasswordCursor == 0 {
-				m.regPasswordInput = append(m.regPasswordInput, []byte(string(msg.Runes))...)
-			} else {
-				m.regConfirmInput = append(m.regConfirmInput, []byte(string(msg.Runes))...)
-			}
-			return m, nil
-		case tea.KeyBackspace:
-			if m.regPasswordCursor == 0 {
-				if len(m.regPasswordInput) > 0 {
-					m.regPasswordInput = m.regPasswordInput[:len(m.regPasswordInput)-1]
-				}
-			} else {
-				if len(m.regConfirmInput) > 0 {
-					m.regConfirmInput = m.regConfirmInput[:len(m.regConfirmInput)-1]
-				}
-			}
-			return m, nil
-		}
-	}
-
-	// Handle nickname change modal text input (LEGACY - will be moved to NicknameChangeModal)
-	if m.nicknameChangeMode {
-		// Let Enter and ESC fall through to command handler
-		if key != "enter" && key != "esc" {
-			switch msg.Type {
-			case tea.KeyRunes:
-				m.nicknameChangeInput += string(msg.Runes)
-				return m, nil
-			case tea.KeyBackspace:
-				if len(m.nicknameChangeInput) > 0 {
-					m.nicknameChangeInput = m.nicknameChangeInput[:len(m.nicknameChangeInput)-1]
-				}
-				return m, nil
-			}
-		}
-	}
-
 	// No modal active or modal didn't handle the key
 	// Route through command registry based on main view and active modal
 	activeModalType := m.modalStack.TopType()
@@ -196,31 +174,16 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleLegacyKeyPress contains existing key handling code
 // This will be gradually emptied as commands are migrated to the new system
 func (m Model) handleLegacyKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Global shortcuts
-	switch msg.String() {
-	case "q":
-		// Allow quit from anywhere except compose mode
-		if m.currentView != ViewCompose && m.currentView != ViewNicknameSetup {
-			return m, tea.Quit
-		}
-	}
-
-	// Old help handling removed - now handled by HelpModal
-
 	// View-specific handling
 	switch m.currentView {
 	case ViewSplash:
 		return m.handleSplashKeys(msg)
-	case ViewNicknameSetup:
-		return m.handleNicknameSetupKeys(msg)
 	case ViewChannelList:
 		return m.handleChannelListKeys(msg)
 	case ViewThreadList:
 		return m.handleThreadListKeys(msg)
 	case ViewThreadView:
 		return m.handleThreadViewKeys(msg)
-	case ViewCompose:
-		return m.handleComposeKeys(msg)
 	}
 
 	return m, nil
@@ -230,58 +193,19 @@ func (m Model) handleLegacyKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleSplashKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Any key continues - go straight to browsing
 	m.currentView = ViewChannelList
+	m.loadingChannels = true
 
 	// Send SET_NICKNAME if we have one from last time
 	if m.nickname != "" {
 		return m, tea.Batch(
 			m.sendSetNickname(),
+			m.sendGetUserInfo(m.nickname),
 			m.requestChannelList(),
 		)
 	}
 
 	// No nickname - browse anonymously
 	return m, m.requestChannelList()
-}
-
-// handleNicknameSetupKeys handles nickname setup keys
-func (m Model) handleNicknameSetupKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		if len(m.nickname) >= 3 {
-			// Save nickname and proceed
-			m.state.SetLastNickname(m.nickname)
-			if m.firstRun {
-				m.state.SetFirstRunComplete()
-			}
-
-			// Return to the view we came from, or channel list by default
-			nextView := ViewChannelList
-			if m.returnToView != ViewSplash && m.returnToView != ViewNicknameSetup {
-				nextView = m.returnToView
-			}
-			m.currentView = nextView
-
-			return m, m.sendSetNickname()
-		}
-		m.errorMessage = "Nickname must be at least 3 characters"
-		return m, nil
-
-	case "backspace":
-		if len(m.nickname) > 0 {
-			m.nickname = m.nickname[:len(m.nickname)-1]
-		}
-		return m, nil
-
-	case "esc":
-		return m, tea.Quit
-
-	default:
-		// Add character if valid
-		if len(msg.String()) == 1 && len(m.nickname) < 20 {
-			m.nickname += msg.String()
-		}
-		return m, nil
-	}
 }
 
 // handleChannelListKeys handles channel list navigation
@@ -407,22 +331,6 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "n":
-		// New thread - check for nickname first
-		if m.nickname == "" {
-			m.composeMode = ComposeModeNewThread
-			m.composeInput = ""
-			m.composeParentID = nil
-			m.returnToView = ViewCompose
-			m.currentView = ViewNicknameSetup
-			return m, nil
-		}
-		m.currentView = ViewCompose
-		m.composeMode = ComposeModeNewThread
-		m.composeInput = ""
-		m.composeParentID = nil
-		return m, nil
-
 	case "r":
 		// Refresh thread list
 		if m.currentChannel != nil {
@@ -475,73 +383,6 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.threadViewport.SetContent(m.buildThreadContent())
 			m.scrollToKeepCursorVisible()
 		}
-		return m, nil
-
-	case "r":
-		// Reply to selected message - check for nickname first
-		var parentID uint64
-		if m.replyCursor == 0 {
-			// Replying to root
-			if m.currentThread != nil {
-				parentID = m.currentThread.ID
-			}
-		} else if m.replyCursor-1 < len(m.threadReplies) {
-			parentID = m.threadReplies[m.replyCursor-1].ID
-		}
-
-		if m.nickname == "" {
-			m.composeMode = ComposeModeReply
-			m.composeParentID = &parentID
-			m.composeInput = ""
-			m.returnToView = ViewCompose
-			m.currentView = ViewNicknameSetup
-			return m, nil
-		}
-
-		m.currentView = ViewCompose
-		m.composeMode = ComposeModeReply
-		m.composeParentID = &parentID
-		m.composeInput = ""
-		return m, nil
-
-	case "d":
-		msgPtr, ok := m.selectedMessage()
-		if !ok {
-			return m, nil
-		}
-		if m.nickname == "" {
-			m.errorMessage = "Set a nickname before deleting messages"
-			return m, nil
-		}
-		if isDeletedMessageContent(msgPtr.Content) {
-			m.statusMessage = "Message already deleted"
-			return m, nil
-		}
-		m.pendingDeleteID = msgPtr.ID
-		m.confirmingDelete = true
-		m.statusMessage = ""
-		return m, nil
-
-	case "e":
-		// Edit selected message - check for nickname first
-		msgPtr, ok := m.selectedMessage()
-		if !ok {
-			return m, nil
-		}
-		if m.nickname == "" {
-			m.errorMessage = "Set a nickname before editing messages"
-			return m, nil
-		}
-		if isDeletedMessageContent(msgPtr.Content) {
-			m.statusMessage = "Cannot edit deleted message"
-			return m, nil
-		}
-		// Pre-populate compose with existing content
-		m.currentView = ViewCompose
-		m.composeMode = ComposeModeEdit
-		m.composeInput = msgPtr.Content
-		m.composeMessageID = &msgPtr.ID
-		m.composeParentID = nil
 		return m, nil
 
 	case "esc":
@@ -598,75 +439,6 @@ func (m Model) selectedMessageDeleted() bool {
 	return isDeletedMessageContent(msg.Content)
 }
 
-// handleComposeKeys handles message composition
-func (m Model) handleComposeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		// Cancel compose
-		if m.composeMode == ComposeModeNewThread {
-			m.currentView = ViewThreadList
-		} else {
-			m.currentView = ViewThreadView
-		}
-		m.composeInput = ""
-		m.composeMessageID = nil
-		return m, nil
-
-	case "ctrl+d", "ctrl+enter":
-		// Send message or edit
-		if len(m.composeInput) == 0 {
-			m.errorMessage = "Message cannot be empty"
-			return m, nil
-		}
-
-		var cmd tea.Cmd
-
-		if m.composeMode == ComposeModeEdit {
-			// Edit existing message
-			if m.composeMessageID == nil {
-				m.errorMessage = "No message ID for edit"
-				return m, nil
-			}
-			cmd = m.sendEditMessage(*m.composeMessageID, m.composeInput)
-		} else {
-			// Post new message
-			if m.currentChannel == nil {
-				m.errorMessage = "No channel selected"
-				return m, nil
-			}
-			cmd = m.sendPostMessage(m.currentChannel.ID, m.composeParentID, m.composeInput)
-		}
-
-		// Return to previous view
-		if m.composeMode == ComposeModeNewThread {
-			m.currentView = ViewThreadList
-		} else {
-			m.currentView = ViewThreadView
-		}
-		m.composeInput = ""
-		m.composeMessageID = nil
-
-		return m, cmd
-
-	case "backspace":
-		if len(m.composeInput) > 0 {
-			m.composeInput = m.composeInput[:len(m.composeInput)-1]
-		}
-		return m, nil
-
-	case "enter":
-		m.composeInput += "\n"
-		return m, nil
-
-	default:
-		// Add character
-		if len(msg.String()) == 1 {
-			m.composeInput += msg.String()
-		}
-		return m, nil
-	}
-}
-
 // handleServerFrame processes incoming server frames
 func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	switch frame.Type {
@@ -678,8 +450,12 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleRegisterResponse(frame)
 	case protocol.TypeNicknameResponse:
 		return m.handleNicknameResponse(frame)
+	case protocol.TypeUserInfo:
+		return m.handleUserInfo(frame)
 	case protocol.TypeChannelList:
 		return m.handleChannelList(frame)
+	case protocol.TypeChannelCreated:
+		return m.handleChannelCreated(frame)
 	case protocol.TypeJoinResponse:
 		return m.handleJoinResponse(frame)
 	case protocol.TypeMessageList:
@@ -725,16 +501,35 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 	}
 
 	if msg.Success {
-		m.statusMessage = fmt.Sprintf("Nickname set to ~%s", m.nickname)
-		m.authState = AuthStateAnonymous // Successfully set as anonymous
+		// Use the pending nickname we sent (stored when we sent the request)
+		if m.pendingNickname != "" {
+			m.nickname = m.pendingNickname
+			m.pendingNickname = "" // Clear it
+		}
+
+		// Show appropriate status message based on auth state
+		if m.authState == AuthStateAuthenticated {
+			// Registered user changed nickname - PRESERVE authenticated state
+			m.statusMessage = fmt.Sprintf("Nickname changed to %s", m.nickname)
+			// DO NOT change m.authState - keep it as AuthStateAuthenticated
+		} else {
+			// Anonymous user set nickname for first time
+			m.statusMessage = fmt.Sprintf("Nickname set to ~%s", m.nickname)
+			m.authState = AuthStateAnonymous
+		}
+
+		// Close the nickname modal if open
+		m.modalStack.RemoveByType(modal.ModalNicknameChange)
+		m.modalStack.RemoveByType(modal.ModalNicknameSetup)
 	} else {
 		// Check if nickname is registered (V2)
 		if strings.Contains(strings.ToLower(msg.Message), "registered") ||
 		   strings.Contains(strings.ToLower(msg.Message), "password") {
 			// Nickname is registered, show password modal
-			m.authState = AuthStatePrompting
-			m.passwordInput = []byte{}
 			m.authErrorMessage = ""
+			m.authAttempts = 0
+			m.authCooldownUntil = time.Time{}
+			m.showPasswordModal()
 		} else {
 			// Other error (invalid nickname, etc.)
 			m.errorMessage = msg.Message
@@ -744,6 +539,35 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 	return m, listenForServerFrames(m.conn)
 }
 
+// handleUserInfo processes USER_INFO response
+func (m Model) handleUserInfo(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.UserInfoMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode USER_INFO: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	// Debug: log the response
+	fmt.Fprintf(os.Stderr, "[DEBUG] USER_INFO response: nickname=%s, isRegistered=%v, online=%v\n", msg.Nickname, msg.IsRegistered, msg.Online)
+	fmt.Fprintf(os.Stderr, "[DEBUG] Current nickname=%s, pending=%s\n", m.nickname, m.pendingNickname)
+
+	// Update our tracking of whether this nickname is registered
+	// Only update if this is info about our current or pending nickname
+	if msg.Nickname == m.nickname || msg.Nickname == m.pendingNickname {
+		m.nicknameIsRegistered = msg.IsRegistered
+		fmt.Fprintf(os.Stderr, "[DEBUG] Updated nicknameIsRegistered=%v\n", m.nicknameIsRegistered)
+	}
+
+	// Force a re-render so the UI updates (footer commands change based on nicknameIsRegistered)
+	return m, tea.Batch(
+		listenForServerFrames(m.conn),
+		func() tea.Msg { return ForceRenderMsg{} },
+	)
+}
+
+// ForceRenderMsg triggers a re-render without any other action
+type ForceRenderMsg struct{}
+
 // handleAuthResponse processes AUTH_RESPONSE
 func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.AuthResponseMessage{}
@@ -751,12 +575,6 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.errorMessage = fmt.Sprintf("Failed to decode AUTH_RESPONSE: %v", err)
 		return m, listenForServerFrames(m.conn)
 	}
-
-	// Clear password input
-	for i := range m.passwordInput {
-		m.passwordInput[i] = 0
-	}
-	m.passwordInput = []byte{}
 
 	if msg.Success {
 		// Successfully authenticated
@@ -768,6 +586,9 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 		// Save user ID to state
 		m.state.SetUserID(&msg.UserID)
+
+		// Close password modal if it's open
+		m.modalStack.RemoveByType(modal.ModalPasswordAuth)
 	} else {
 		// Authentication failed
 		m.authState = AuthStatePrompting
@@ -778,10 +599,16 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		if m.authAttempts >= 5 {
 			m.errorMessage = "Too many failed attempts. Please restart the application."
 			m.authState = AuthStateFailed
-		} else if m.authAttempts >= 2 {
-			// Exponential backoff: 1s, 2s, 4s, 8s
-			cooldownSeconds := 1 << (m.authAttempts - 2) // 2^(attempts-2)
-			m.authCooldownUntil = time.Now().Add(time.Duration(cooldownSeconds) * time.Second)
+			m.modalStack.RemoveByType(modal.ModalPasswordAuth)
+		} else {
+			if m.authAttempts >= 2 {
+				// Exponential backoff: 1s, 2s, 4s, 8s
+				cooldownSeconds := 1 << (m.authAttempts - 2) // 2^(attempts-2)
+				m.authCooldownUntil = time.Now().Add(time.Duration(cooldownSeconds) * time.Second)
+			}
+			// Update password modal with error message
+			m.modalStack.RemoveByType(modal.ModalPasswordAuth)
+			m.showPasswordModal()
 		}
 	}
 
@@ -796,29 +623,21 @@ func (m Model) handleRegisterResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 		return m, listenForServerFrames(m.conn)
 	}
 
-	// Clear password inputs
-	for i := range m.regPasswordInput {
-		m.regPasswordInput[i] = 0
-	}
-	for i := range m.regConfirmInput {
-		m.regConfirmInput[i] = 0
-	}
-	m.regPasswordInput = []byte{}
-	m.regConfirmInput = []byte{}
-
 	if msg.Success {
 		// Successfully registered
-		m.registrationMode = false
 		m.authState = AuthStateAuthenticated
 		m.userID = &msg.UserID
-		m.regErrorMessage = ""
 		m.statusMessage = fmt.Sprintf("Registered as %s", m.nickname)
 
 		// Save user ID to state
 		m.state.SetUserID(&msg.UserID)
+
+		// Close registration modal if it's open
+		m.modalStack.RemoveByType(modal.ModalRegistration)
 	} else {
-		// Registration failed
-		m.regErrorMessage = "Registration failed. Please try again."
+		// Registration failed - close modal and show error
+		m.modalStack.RemoveByType(modal.ModalRegistration)
+		m.errorMessage = "Registration failed. Please try again."
 	}
 
 	return m, listenForServerFrames(m.conn)
@@ -826,6 +645,8 @@ func (m Model) handleRegisterResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 
 // handleChannelList processes CHANNEL_LIST
 func (m Model) handleChannelList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	m.loadingChannels = false
+
 	msg := &protocol.ChannelListMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode channel list: %v", err)
@@ -834,6 +655,39 @@ func (m Model) handleChannelList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 	m.channels = msg.Channels
 	m.statusMessage = fmt.Sprintf("Loaded %d channels", len(m.channels))
+
+	return m, listenForServerFrames(m.conn)
+}
+
+// handleChannelCreated processes CHANNEL_CREATED (response + broadcast)
+func (m Model) handleChannelCreated(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.ChannelCreatedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode channel created: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	if msg.Success {
+		// Close the create channel modal if it's open
+		m.modalStack.RemoveByType(modal.ModalCreateChannel)
+
+		// Add the new channel to the list
+		newChannel := protocol.Channel{
+			ID:             msg.ChannelID,
+			Name:           msg.Name,
+			Description:    msg.Description,
+			UserCount:      0,
+			IsOperator:     true, // Creator is always operator
+			Type:           msg.Type,
+			RetentionHours: msg.RetentionHours,
+		}
+		m.channels = append(m.channels, newChannel)
+
+		m.statusMessage = fmt.Sprintf("Channel '%s' created successfully", msg.Name)
+	} else {
+		// Keep modal open but show error
+		m.errorMessage = msg.Message
+	}
 
 	return m, listenForServerFrames(m.conn)
 }
@@ -860,39 +714,88 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.MessageListMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode message list: %v", err)
+		m.loadingThreadList = false
+		m.loadingThreadReplies = false
+		m.loadingMore = false
 		return m, listenForServerFrames(m.conn)
 	}
 
 	if msg.ParentID == nil {
 		// Root messages (thread list)
+		m.loadingThreadList = false
+
 		if m.loadingMore {
 			// Append to existing threads
 			m.threads = append(m.threads, msg.Messages...)
 			m.loadingMore = false
 
-			// If we got fewer than 50, we've reached the end
-			if len(msg.Messages) < 50 {
+			// If we got fewer than 25, we've reached the end
+			if len(msg.Messages) < 25 {
 				m.allThreadsLoaded = true
 			}
 
-			m.threadListViewport.SetContent(m.buildThreadListContent())
 			m.statusMessage = fmt.Sprintf("Loaded %d more threads", len(msg.Messages))
 		} else {
 			// Initial load - replace threads
 			m.threads = msg.Messages
-			m.allThreadsLoaded = len(msg.Messages) < 50
-			m.threadListViewport.SetContent(m.buildThreadListContent())
+			m.allThreadsLoaded = len(msg.Messages) < 25
 			m.statusMessage = fmt.Sprintf("Loaded %d threads", len(m.threads))
 		}
+
+		// Update viewport to show loaded threads
+		m.threadListViewport.SetContent(m.buildThreadListContent())
 	} else {
 		// Thread replies - sort them in depth-first order
+		m.loadingThreadReplies = false
+		isLoadingMore := m.loadingMoreReplies
+		m.loadingMoreReplies = false
+
 		if m.currentThread != nil {
-			m.threadReplies = sortThreadReplies(msg.Messages, m.currentThread.ID)
+			newReplies := msg.Messages
+
+			if isLoadingMore {
+				// Pagination: append to existing replies
+				m.threadReplies = append(m.threadReplies, newReplies...)
+				m.threadReplies = sortThreadReplies(m.threadReplies, m.currentThread.ID)
+
+				// Check if we've reached the end
+				if len(newReplies) < 10 {
+					m.allRepliesLoaded = true
+				}
+
+				m.statusMessage = fmt.Sprintf("Loaded %d more replies", len(newReplies))
+			} else if cachedReplies, ok := m.threadRepliesCache[m.currentThread.ID]; ok && len(newReplies) > 0 {
+				// Incremental update: merge cached and new replies
+				merged := append(cachedReplies, newReplies...)
+				m.threadReplies = sortThreadReplies(merged, m.currentThread.ID)
+				m.statusMessage = fmt.Sprintf("Loaded %d new replies", len(newReplies))
+			} else {
+				// Initial load: replace replies
+				m.threadReplies = sortThreadReplies(msg.Messages, m.currentThread.ID)
+				m.allRepliesLoaded = len(msg.Messages) < 10
+				m.statusMessage = fmt.Sprintf("Loaded %d replies", len(m.threadReplies))
+			}
+
+			// Cache the sorted replies
+			m.threadRepliesCache[m.currentThread.ID] = m.threadReplies
+
+			// Track highest message ID
+			highestID := uint64(0)
+			for _, reply := range m.threadReplies {
+				if reply.ID > highestID {
+					highestID = reply.ID
+				}
+			}
+			if highestID > 0 {
+				m.threadHighestMessageID[m.currentThread.ID] = highestID
+			}
 		} else {
 			m.threadReplies = msg.Messages
+			m.statusMessage = fmt.Sprintf("Loaded %d replies", len(m.threadReplies))
 		}
+
+		// Update viewport to show loaded replies
 		m.threadViewport.SetContent(m.buildThreadContent())
-		m.statusMessage = fmt.Sprintf("Loaded %d replies", len(m.threadReplies))
 	}
 
 	return m, listenForServerFrames(m.conn)
@@ -900,6 +803,8 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 // handleMessagePosted processes MESSAGE_POSTED
 func (m Model) handleMessagePosted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	m.sendingMessage = false
+
 	msg := &protocol.MessagePostedMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode response: %v", err)
@@ -909,18 +814,9 @@ func (m Model) handleMessagePosted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	if msg.Success {
 		m.statusMessage = "Message posted"
 
-		// Refresh the view
-		if m.composeMode == ComposeModeNewThread && m.currentChannel != nil {
-			return m, tea.Batch(
-				listenForServerFrames(m.conn),
-				m.requestThreadList(m.currentChannel.ID),
-			)
-		} else if m.currentThread != nil {
-			return m, tea.Batch(
-				listenForServerFrames(m.conn),
-				m.requestThreadReplies(m.currentThread.ID),
-			)
-		}
+		// Don't request message lists - rely on NEW_MESSAGE broadcasts instead
+		// The server will broadcast our message to us as a subscriber, and handleNewMessage
+		// will add it to the appropriate list (threads or threadReplies)
 	} else {
 		m.errorMessage = msg.Message
 	}
@@ -949,6 +845,24 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 				return m.threads[i].CreatedAt.After(m.threads[j].CreatedAt)
 			})
 			m.threadListViewport.SetContent(m.buildThreadListContent())
+
+			// If this is our own new thread and we're in thread list view, select it
+			// Server adds ~ prefix for anonymous users
+			var isOwnThread bool
+			if m.authState == AuthStateAuthenticated {
+				isOwnThread = newMsg.AuthorNickname == m.nickname
+			} else {
+				isOwnThread = newMsg.AuthorNickname == "~"+m.nickname
+			}
+
+			if m.currentView == ViewThreadList && isOwnThread {
+				for i, thread := range m.threads {
+					if thread.ID == newMsg.ID {
+						m.threadCursor = i
+						break
+					}
+				}
+			}
 		} else if m.currentThread != nil && newMsg.ParentID != nil {
 			// Check if this message belongs to the current thread
 			// (either replying to root or to any existing reply)
@@ -969,9 +883,23 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 				// Sort replies in depth-first order based on tree structure
 				m.threadReplies = sortThreadReplies(m.threadReplies, m.currentThread.ID)
 
+				// Update cache with new message
+				m.threadRepliesCache[m.currentThread.ID] = m.threadReplies
+
+				// Update highest message ID if this is newer
+				if newMsg.ID > m.threadHighestMessageID[m.currentThread.ID] {
+					m.threadHighestMessageID[m.currentThread.ID] = newMsg.ID
+				}
+
 				if m.currentView == ViewThreadView {
 					// Check if this is our own message
-					isOwnMessage := newMsg.AuthorNickname == m.nickname
+					// Server adds ~ prefix for anonymous users
+					var isOwnMessage bool
+					if m.authState == AuthStateAuthenticated {
+						isOwnMessage = newMsg.AuthorNickname == m.nickname
+					} else {
+						isOwnMessage = newMsg.AuthorNickname == "~"+m.nickname
+					}
 
 					if isOwnMessage {
 						// Scroll to and select our own message
@@ -1000,6 +928,8 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 // handleMessageDeleted processes MESSAGE_DELETED confirmations and broadcasts.
 func (m Model) handleMessageDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	m.sendingMessage = false
+
 	msg := &protocol.MessageDeletedMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode message deletion: %v", err)
@@ -1018,6 +948,8 @@ func (m Model) handleMessageDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 
 // handleMessageEdited processes MESSAGE_EDITED confirmations and broadcasts.
 func (m Model) handleMessageEdited(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	m.sendingMessage = false
+
 	msg := &protocol.MessageEditedMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode message edit: %v", err)
@@ -1131,14 +1063,32 @@ func (m *Model) applyMessageEdit(messageID uint64, newContent string, editedAt t
 }
 
 func (m Model) sendSetNickname() tea.Cmd {
+	return m.sendSetNicknameWith(m.nickname)
+}
+
+// NicknameSentMsg is sent after we send a nickname change request
+type NicknameSentMsg struct {
+	Nickname     string
+	GoAnonymous  bool // If true, clear userID and authState when nickname changes
+}
+
+func (m Model) sendSetNicknameWith(nickname string) tea.Cmd {
+	return m.sendSetNicknameWithAnonymous(nickname, false)
+}
+
+func (m Model) sendSetNicknameWithAnonymous(nickname string, goAnonymous bool) tea.Cmd {
 	return func() tea.Msg {
 		msg := &protocol.SetNicknameMessage{
-			Nickname: m.nickname,
+			Nickname: nickname,
 		}
 		if err := m.conn.SendMessage(protocol.TypeSetNickname, msg); err != nil {
 			return ErrorMsg{Err: err}
 		}
-		return nil
+		// Return a message with the nickname we just sent
+		return NicknameSentMsg{
+			Nickname:    nickname,
+			GoAnonymous: goAnonymous,
+		}
 	}
 }
 
@@ -1170,6 +1120,18 @@ func (m Model) sendRegisterUser(password []byte) tea.Cmd {
 		// Zero password bytes after sending
 		for i := range password {
 			password[i] = 0
+		}
+		return nil
+	}
+}
+
+func (m Model) sendGetUserInfo(nickname string) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.GetUserInfoMessage{
+			Nickname: nickname,
+		}
+		if err := m.conn.SendMessage(protocol.TypeGetUserInfo, msg); err != nil {
+			return ErrorMsg{Err: err}
 		}
 		return nil
 	}
@@ -1208,14 +1170,40 @@ func (m Model) sendLeaveChannel() tea.Cmd {
 	}
 }
 
+func (m Model) sendCreateChannel(name, displayName, description string, channelType uint8) tea.Cmd {
+	return func() tea.Msg {
+		var desc *string
+		if description != "" {
+			desc = &description
+		}
+
+		msg := &protocol.CreateChannelMessage{
+			Name:           name,
+			DisplayName:    displayName,
+			Description:    desc,
+			ChannelType:    channelType, // 0=chat, 1=forum
+			RetentionHours: 168,          // 7 days default
+		}
+		if err := m.conn.SendMessage(protocol.TypeCreateChannel, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
 func (m Model) requestThreadList(channelID uint64) tea.Cmd {
 	return func() tea.Msg {
+		limit := uint16(m.height - 6)
+		if limit < 10 {
+			limit = 10 // Minimum limit
+		}
 		msg := &protocol.ListMessagesMessage{
 			ChannelID:    channelID,
 			SubchannelID: nil,
-			Limit:        50,
+			Limit:        limit,
 			BeforeID:     nil,
 			ParentID:     nil,
+			AfterID:      nil,
 		}
 		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {
 			return ErrorMsg{Err: err}
@@ -1233,12 +1221,17 @@ func (m Model) loadMoreThreads() tea.Cmd {
 		// Get the ID of the oldest thread we have
 		oldestThreadID := m.threads[len(m.threads)-1].ID
 
+		limit := uint16(m.height - 6)
+		if limit < 10 {
+			limit = 10 // Minimum limit
+		}
 		msg := &protocol.ListMessagesMessage{
 			ChannelID:    m.currentChannel.ID,
 			SubchannelID: nil,
-			Limit:        50,
+			Limit:        limit,
 			BeforeID:     &oldestThreadID,
 			ParentID:     nil,
+			AfterID:      nil,
 		}
 		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {
 			return ErrorMsg{Err: err}
@@ -1249,12 +1242,63 @@ func (m Model) loadMoreThreads() tea.Cmd {
 
 func (m Model) requestThreadReplies(threadID uint64) tea.Cmd {
 	return func() tea.Msg {
+		// Load only enough to fill the screen initially
+		// Page is 24 rows high, 3 lines per message = ~8 messages visible
+		// Load 10 to have a bit of buffer
+		limit := uint16(10)
+
 		msg := &protocol.ListMessagesMessage{
 			ChannelID:    m.currentChannel.ID,
 			SubchannelID: nil,
-			Limit:        200,
+			Limit:        limit,
 			BeforeID:     nil,
 			ParentID:     &threadID,
+			AfterID:      nil,
+		}
+		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+// loadMoreReplies loads more replies in the current thread (pagination)
+func (m Model) loadMoreReplies() tea.Cmd {
+	return func() tea.Msg {
+		if m.currentThread == nil || len(m.threadReplies) == 0 {
+			return nil
+		}
+
+		// Get the ID of the oldest reply we have
+		oldestReplyID := m.threadReplies[len(m.threadReplies)-1].ID
+
+		limit := uint16(10)
+		msg := &protocol.ListMessagesMessage{
+			ChannelID:    m.currentChannel.ID,
+			SubchannelID: nil,
+			Limit:        limit,
+			BeforeID:     &oldestReplyID,
+			ParentID:     &m.currentThread.ID,
+			AfterID:      nil,
+		}
+		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+// requestThreadRepliesAfter requests only new thread replies after a specific message ID
+func (m Model) requestThreadRepliesAfter(threadID uint64, afterID uint64) tea.Cmd {
+	return func() tea.Msg {
+		// Only fetch new messages, not all 200
+		msg := &protocol.ListMessagesMessage{
+			ChannelID:    m.currentChannel.ID,
+			SubchannelID: nil,
+			Limit:        50, // Reasonable limit for new messages
+			BeforeID:     nil,
+			ParentID:     &threadID,
+			AfterID:      &afterID,
 		}
 		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {
 			return ErrorMsg{Err: err}
@@ -1435,13 +1479,18 @@ func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
 	// Re-send nickname if we have one
 	if m.nickname != "" {
 		cmds = append(cmds, m.sendSetNickname())
+		cmds = append(cmds, m.sendGetUserInfo(m.nickname))
 	}
 
 	// Re-request channel list
+	m.loadingChannels = true
 	cmds = append(cmds, m.requestChannelList())
 
 	// If we're in a channel, rejoin and reload threads
 	if m.currentChannel != nil {
+		m.loadingThreadList = true
+		m.threads = []protocol.Message{} // Clear threads
+		m.threadListViewport.SetContent(m.buildThreadListContent()) // Show initial spinner
 		cmds = append(cmds, m.sendJoinChannel(m.currentChannel.ID))
 		cmds = append(cmds, m.requestThreadList(m.currentChannel.ID))
 
@@ -1452,6 +1501,9 @@ func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
 
 		// If we're viewing a specific thread, reload replies and re-subscribe
 		if m.currentThread != nil && m.currentView == ViewThreadView {
+			m.loadingThreadReplies = true
+			m.threadReplies = []protocol.Message{} // Clear replies
+			m.threadViewport.SetContent(m.buildThreadContent()) // Show initial spinner
 			cmds = append(cmds, m.requestThreadReplies(m.currentThread.ID))
 			cmds = append(cmds, m.sendSubscribeThread(m.currentThread.ID))
 		}

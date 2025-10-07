@@ -740,7 +740,7 @@ func (m *MemDB) MessageExists(messageID int64) (bool, error) {
 }
 
 // ListRootMessages retrieves top-level messages (compatible with SQLite DB interface)
-func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64) ([]*Message, error) {
+func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64, afterID *uint64) ([]*Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -751,7 +751,11 @@ func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uin
 
 	messages := make([]*Message, 0, limit)
 	for _, msgID := range allMessageIDs {
+		// beforeID takes precedence over afterID
 		if beforeID != nil && uint64(msgID) >= *beforeID {
+			continue
+		}
+		if afterID != nil && beforeID == nil && uint64(msgID) <= *afterID {
 			continue
 		}
 
@@ -776,25 +780,55 @@ func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uin
 	return messages, nil
 }
 
-// ListThreadReplies retrieves all replies to a message (compatible with SQLite DB interface)
-func (m *MemDB) ListThreadReplies(parentID uint64) ([]*Message, error) {
+// ListThreadReplies retrieves all replies to a message recursively (compatible with SQLite DB interface)
+// Supports pagination via limit, beforeID, and afterID parameters
+func (m *MemDB) ListThreadReplies(parentID uint64, limit uint16, beforeID *uint64, afterID *uint64) ([]*Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	replyIDs, exists := m.messagesByParent[int64(parentID)]
-	if !exists {
-		return []*Message{}, nil
-	}
-
-	messages := make([]*Message, 0, len(replyIDs))
-	for _, msgID := range replyIDs {
-		msg := m.messages[msgID]
-		if msg != nil && msg.DeletedAt == nil {
-			messages = append(messages, msg)
-		}
-	}
+	// Recursively collect all descendant messages in depth-first order
+	var messages []*Message
+	m.collectThreadReplies(int64(parentID), &messages, beforeID, afterID, limit)
 
 	return messages, nil
+}
+
+// collectThreadReplies recursively collects all descendants in depth-first order (assumes lock held)
+func (m *MemDB) collectThreadReplies(parentID int64, messages *[]*Message, beforeID *uint64, afterID *uint64, limit uint16) {
+	// Stop if we've reached the limit
+	if limit > 0 && len(*messages) >= int(limit) {
+		return
+	}
+
+	replyIDs, exists := m.messagesByParent[parentID]
+	if !exists {
+		return
+	}
+
+	// Process direct children in order
+	for _, msgID := range replyIDs {
+		// Stop if we've reached the limit
+		if limit > 0 && len(*messages) >= int(limit) {
+			return
+		}
+
+		// Filter by beforeID if specified
+		if beforeID != nil && uint64(msgID) >= *beforeID {
+			continue
+		}
+		// Filter by afterID if specified
+		if afterID != nil && uint64(msgID) <= *afterID {
+			continue
+		}
+
+		msg := m.messages[msgID]
+		if msg != nil && msg.DeletedAt == nil {
+			*messages = append(*messages, msg)
+
+			// Recursively collect this message's children
+			m.collectThreadReplies(msgID, messages, beforeID, afterID, limit)
+		}
+	}
 }
 
 // recomputeReplyCount recalculates the reply count for a message (assumes lock held)
@@ -941,6 +975,62 @@ func (m *MemDB) UpdateSessionUserID(sessionID, userID int64) error {
 }
 
 // CreateChannel creates a new channel (wrapper for sqliteDB.CreateChannel)
-func (m *MemDB) CreateChannel(name, displayName string, description *string, channelType uint8, retentionHours uint32, createdBy *int64) error {
-	return m.sqliteDB.CreateChannel(name, displayName, description, channelType, retentionHours, createdBy)
+func (m *MemDB) CreateChannel(name, displayName string, description *string, channelType uint8, retentionHours uint32, createdBy *int64) (int64, error) {
+	// Write to SQLite and get the new ID
+	channelID, err := m.sqliteDB.CreateChannel(name, displayName, description, channelType, retentionHours, createdBy)
+	if err != nil {
+		return 0, err
+	}
+
+	// Construct the channel object and add to cache
+	now := time.Now().UnixMilli()
+	ch := &Channel{
+		ID:                     channelID,
+		Name:                   name,
+		DisplayName:            displayName,
+		Description:            description,
+		ChannelType:            channelType,
+		MessageRetentionHours:  retentionHours,
+		CreatedBy:              createdBy,
+		CreatedAt:              now,
+		IsPrivate:              false,
+	}
+
+	m.mu.Lock()
+	m.channels[channelID] = ch
+	m.mu.Unlock()
+
+	log.Printf("MemDB: added new channel to cache: id=%d, name=%s", channelID, name)
+	return channelID, nil
+}
+
+// ===== Server Discovery Passthrough Methods =====
+// Discovery operations don't need in-memory caching - they're read-mostly and infrequent
+
+func (m *MemDB) RegisterDiscoveredServer(hostname string, port uint16, name, description string, maxUsers uint32, isPublic bool, sourceIP, discoveredVia string) (int64, error) {
+	return m.sqliteDB.RegisterDiscoveredServer(hostname, port, name, description, maxUsers, isPublic, sourceIP, discoveredVia)
+}
+
+func (m *MemDB) UpdateHeartbeat(hostname string, port uint16, userCount uint32, uptimeSeconds uint64, newInterval uint32) error {
+	return m.sqliteDB.UpdateHeartbeat(hostname, port, userCount, uptimeSeconds, newInterval)
+}
+
+func (m *MemDB) ListDiscoveredServers(limit uint16) ([]*DiscoveredServer, error) {
+	return m.sqliteDB.ListDiscoveredServers(limit)
+}
+
+func (m *MemDB) GetDiscoveredServer(hostname string, port uint16) (*DiscoveredServer, error) {
+	return m.sqliteDB.GetDiscoveredServer(hostname, port)
+}
+
+func (m *MemDB) DeleteDiscoveredServer(hostname string, port uint16) error {
+	return m.sqliteDB.DeleteDiscoveredServer(hostname, port)
+}
+
+func (m *MemDB) CleanupStaleServers() (int64, error) {
+	return m.sqliteDB.CleanupStaleServers()
+}
+
+func (m *MemDB) CountDiscoveredServers() (uint32, error) {
+	return m.sqliteDB.CountDiscoveredServers()
 }

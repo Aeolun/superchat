@@ -675,6 +675,7 @@ func TestListMessagesMessageEdgeCases(t *testing.T) {
 			SubchannelID: nil,
 			ParentID:     nil,
 			BeforeID:     nil,
+			AfterID:      nil,
 			Limit:        10,
 		}
 		payload, err := msg.Encode()
@@ -686,17 +687,20 @@ func TestListMessagesMessageEdgeCases(t *testing.T) {
 		assert.Nil(t, decoded.SubchannelID)
 		assert.Nil(t, decoded.ParentID)
 		assert.Nil(t, decoded.BeforeID)
+		assert.Nil(t, decoded.AfterID)
 	})
 
 	t.Run("all optionals set", func(t *testing.T) {
 		sub := uint64(5)
 		parent := uint64(10)
 		before := uint64(15)
+		after := uint64(3)
 		msg := &ListMessagesMessage{
 			ChannelID:    1,
 			SubchannelID: &sub,
 			ParentID:     &parent,
 			BeforeID:     &before,
+			AfterID:      &after,
 			Limit:        10,
 		}
 		payload, err := msg.Encode()
@@ -708,6 +712,7 @@ func TestListMessagesMessageEdgeCases(t *testing.T) {
 		assert.Equal(t, sub, *decoded.SubchannelID)
 		assert.Equal(t, parent, *decoded.ParentID)
 		assert.Equal(t, before, *decoded.BeforeID)
+		assert.Equal(t, after, *decoded.AfterID)
 	})
 }
 

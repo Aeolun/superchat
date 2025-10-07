@@ -9,7 +9,10 @@
       "Bash(go build:*)",
       "Bash(make:*)",
       "Bash(sqlite3:*)",
-      "Bash(go tool pprof:*)"
+      "Bash(go tool pprof:*)",
+      "Bash(cat:*)",
+      "Bash(go tool cover:*)",
+      "Bash(awk:*)"
     ],
     "deny": [],
     "ask": []

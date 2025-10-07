@@ -25,38 +25,19 @@ func (m Model) View() string {
 		return m.renderReconnectingOverlay()
 	}
 
-	// Render base view (help is now a modal, not a separate view)
+	// Render base view
 	var baseView string
 	switch m.currentView {
 	case ViewSplash:
 		baseView = m.renderSplash()
-	case ViewNicknameSetup:
-		baseView = m.renderNicknameSetup()
 	case ViewChannelList:
 		baseView = m.renderChannelList()
 	case ViewThreadList:
 		baseView = m.renderThreadList()
 	case ViewThreadView:
 		baseView = m.renderThreadView()
-	case ViewCompose:
-		baseView = m.renderCompose()
 	default:
 		baseView = "Unknown view"
-	}
-
-	// Render password modal overlay if prompting for auth (LEGACY)
-	if m.authState == AuthStatePrompting || m.authState == AuthStateAuthenticating {
-		return m.renderPasswordModalOverlay(baseView)
-	}
-
-	// Render registration modal overlay if in registration mode (LEGACY)
-	if m.registrationMode {
-		return m.renderRegistrationModalOverlay(baseView)
-	}
-
-	// Render nickname change modal overlay (LEGACY)
-	if m.nicknameChangeMode {
-		return m.renderNicknameChangeModalOverlay(baseView)
 	}
 
 	// Apply modal overlays from the modal stack
@@ -115,40 +96,6 @@ When you want to post, you'll be prompted to set one.`)
 		body,
 		"",
 		prompt,
-	)
-
-	box := modalStyle.Render(content)
-	s.WriteString("\n\n")
-	s.WriteString(lipgloss.Place(m.width, m.height-4, lipgloss.Center, lipgloss.Center, box))
-
-	return s.String()
-}
-
-// renderNicknameSetup renders the nickname setup screen
-func (m Model) renderNicknameSetup() string {
-	var s strings.Builder
-
-	title := modalTitleStyle.Render("Set Your Nickname")
-	prompt := "Enter a nickname (3-20 characters, alphanumeric plus - and _):"
-
-	// Input field with max width (52 chars to fit in 60-char modal with padding)
-	input := inputFocusedStyle.Width(52).Render(m.nickname + "█")
-
-	var errorMsg string
-	if m.errorMessage != "" {
-		errorMsg = "\n" + RenderError(m.errorMessage)
-	}
-
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		title,
-		"",
-		prompt,
-		"",
-		input,
-		errorMsg,
-		"",
-		mutedTextStyle.Render("[Enter] Confirm  [Esc] Quit"),
 	)
 
 	box := modalStyle.Render(content)
@@ -305,50 +252,6 @@ func mergeOverlay(base, overlay string) string {
 	return strings.Join(baseLines, "\n")
 }
 
-// renderCompose renders the composition modal
-func (m Model) renderCompose() string {
-	title := "Compose New Thread"
-	if m.composeMode == ComposeModeReply {
-		title = "Compose Reply"
-	} else if m.composeMode == ComposeModeEdit {
-		title = "Edit Message"
-	}
-
-	titleRender := modalTitleStyle.Render(title)
-
-	preview := m.composeInput
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
-	}
-
-	// Subtract 2 for border (lipgloss adds border on top of width)
-	inputBox := inputFocusedStyle.
-		Width(52).
-		Height(11).
-		Render(preview + "█")
-
-	instructions := mutedTextStyle.Render("[Ctrl+D or Ctrl+Enter] Send  [Esc] Cancel")
-
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		titleRender,
-		inputBox,
-		"",
-		instructions,
-	)
-
-	modal := modalStyle.Render(content)
-
-	// Overlay modal on base view (simple version - just place centered)
-	return lipgloss.Place(
-		m.width,
-		m.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		modal,
-	)
-}
-
 // renderHelp renders the help modal
 func (m Model) renderHelp() string {
 	title := helpTitleStyle.Render("Keyboard Shortcuts")
@@ -383,6 +286,20 @@ func (m Model) renderHelp() string {
 	)
 }
 
+// formatBytes formats bytes into human-readable form
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	div, exp := uint64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
 // renderHeader renders the header
 func (m Model) renderHeader() string {
 	left := headerStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
@@ -396,17 +313,18 @@ func (m Model) renderHeader() string {
 				prefix = "~"
 			}
 			status = fmt.Sprintf("Connected: %s%s", prefix, m.nickname)
-
-			// Show registration hint for anonymous users
-			if m.authState == AuthStateAnonymous {
-				status += "  [Ctrl+R] Register"
-			}
 		} else {
 			status = "Connected (anonymous)"
 		}
 		if m.onlineUsers > 0 {
 			status += fmt.Sprintf("  %d users", m.onlineUsers)
 		}
+
+		// Add traffic counter
+		sent := formatBytes(m.conn.GetBytesSent())
+		recv := formatBytes(m.conn.GetBytesReceived())
+		traffic := mutedTextStyle.Render(fmt.Sprintf("  ↑%s ↓%s", sent, recv))
+		status += traffic
 	}
 
 	right := statusStyle.Render(status)
@@ -416,18 +334,131 @@ func (m Model) renderHeader() string {
 	return left + spacer + right
 }
 
+// getVisibleSubstring gets a substring of visible characters, skipping ANSI codes
+func getVisibleSubstring(s string, start, length int) string {
+	var result strings.Builder
+	currentPos := 0
+	inEscape := false
+	collecting := false
+
+	for _, r := range s {
+		// Track ANSI escape sequences
+		if r == '\x1b' {
+			inEscape = true
+		}
+
+		if inEscape {
+			if collecting {
+				result.WriteRune(r)
+			}
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+
+		// Start collecting once we reach the start position
+		if currentPos >= start {
+			if !collecting {
+				collecting = true
+			}
+			result.WriteRune(r)
+			if currentPos-start+1 >= length {
+				break
+			}
+		}
+
+		currentPos++
+	}
+
+	return result.String()
+}
+
+// truncateString truncates a string to maxLen runes, accounting for ANSI escape codes
+func truncateString(s string, maxLen int) string {
+	// Use lipgloss.Width to handle ANSI codes properly
+	if lipgloss.Width(s) <= maxLen {
+		return s
+	}
+
+	// Iterate through runes and truncate when we hit the limit
+	var result strings.Builder
+	currentWidth := 0
+	inEscape := false
+
+	for _, r := range s {
+		// Track ANSI escape sequences (don't count toward width)
+		if r == '\x1b' {
+			inEscape = true
+		}
+
+		if inEscape {
+			result.WriteRune(r)
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+
+		// Check if adding this rune would exceed the limit
+		if currentWidth >= maxLen {
+			break
+		}
+
+		result.WriteRune(r)
+		currentWidth++
+	}
+
+	return result.String()
+}
+
 // renderFooter renders the footer
 func (m Model) renderFooter(shortcuts string) string {
-	footer := footerStyle.Render(shortcuts)
+	// Build footer content
+	footerContent := shortcuts
 
 	if m.statusMessage != "" {
-		footer += "  " + successStyle.Render(m.statusMessage)
+		footerContent += "  " + successStyle.Render(m.statusMessage)
 	}
 
 	if m.errorMessage != "" {
-		footer += "  " + RenderError(m.errorMessage)
+		footerContent += "  " + RenderError(m.errorMessage)
 	}
 
+	// Truncate if too long (account for padding in footerStyle)
+	// footerStyle has Padding(0, 1) which adds 2 chars total
+	maxWidth := m.width - 2
+	suffix := " [?/h] for more…"
+	fadeLength := 3
+
+	if lipgloss.Width(footerContent) > maxWidth {
+		// Truncate, leaving room for fade effect and suffix
+		truncateAt := maxWidth - lipgloss.Width(suffix) - fadeLength
+		truncated := truncateString(footerContent, truncateAt)
+
+		// Trim trailing spaces so we don't fade invisible characters
+		trimmed := strings.TrimRight(truncated, " ")
+		trimmedWidth := lipgloss.Width(trimmed)
+
+		// Extract the next fadeLength visible (non-space) characters for fading
+		remainingContent := getVisibleSubstring(footerContent, trimmedWidth, fadeLength)
+
+		// Apply fade effect to these characters
+		// Colors: #666666 -> #444444 -> #222222
+		fadeColors := []string{"#666666", "#444444", "#222222"}
+		var faded strings.Builder
+		for i, r := range []rune(remainingContent) {
+			if i < len(fadeColors) {
+				faded.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(fadeColors[i])).Render(string(r)))
+			} else {
+				faded.WriteRune(r)
+			}
+		}
+
+		footerContent = trimmed + faded.String() + suffix
+	}
+
+	footer := footerStyle.Render(footerContent)
 	return footer
 }
 
@@ -443,18 +474,24 @@ func (m Model) renderChannelPane() string {
 	serverAddr := mutedTextStyle.MarginBottom(1).Render(addr)
 
 	var items []string
-	for i, channel := range m.channels {
-		item := "#" + channel.Name
-		if i == m.channelCursor {
-			item = selectedItemStyle.Render("▶ " + item)
-		} else {
-			item = unselectedItemStyle.Render("  " + item)
-		}
-		items = append(items, item)
-	}
 
-	if len(items) == 0 {
-		items = append(items, mutedTextStyle.Render("  (no channels)"))
+	// Show loading indicator if loading channels
+	if m.loadingChannels {
+		items = append(items, mutedTextStyle.Render("  "+m.spinner.View()+" Loading channels..."))
+	} else {
+		for i, channel := range m.channels {
+			item := "#" + channel.Name
+			if i == m.channelCursor {
+				item = selectedItemStyle.Render("▶ " + item)
+			} else {
+				item = unselectedItemStyle.Render("  " + item)
+			}
+			items = append(items, item)
+		}
+
+		if len(items) == 0 {
+			items = append(items, mutedTextStyle.Render("  (no channels)"))
+		}
 	}
 
 	content := lipgloss.JoinVertical(
@@ -546,6 +583,19 @@ func (m Model) renderThreadContent() string {
 }
 
 // formatThreadItem formats a thread list item
+// isOwnMessage checks if a message was authored by the current user
+func (m Model) isOwnMessage(msg protocol.Message) bool {
+	// For registered users, compare user ID
+	if m.userID != nil && msg.AuthorUserID != nil {
+		return *m.userID == *msg.AuthorUserID
+	}
+
+	// For anonymous users, compare nickname (strip prefix from server's AuthorNickname)
+	// Server sends "~nickname" for anonymous users
+	strippedNickname := strings.TrimPrefix(msg.AuthorNickname, "~")
+	return strippedNickname == m.nickname
+}
+
 func (m Model) formatThreadItem(thread protocol.Message) string {
 	// Server already prefixes anonymous users with ~
 	author := thread.AuthorNickname
@@ -568,7 +618,11 @@ func (m Model) formatThreadItem(thread protocol.Message) string {
 
 	// Calculate space for preview
 	// Format: "author preview  time(replies)"
-	authorRendered := messageAuthorStyle.Render(author)
+	authorStyle := messageAuthorStyle
+	if m.isOwnMessage(thread) {
+		authorStyle = messageOwnAuthorStyle
+	}
+	authorRendered := authorStyle.Render(author)
 	metadataRendered := messageTimeStyle.Render(timeStr) + mutedTextStyle.Render(replyCount)
 
 	// Use lipgloss.Width to get actual rendered width (accounting for ANSI codes)
@@ -603,12 +657,19 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 	}
 
 	author := msg.AuthorNickname
-	if msg.AuthorUserID == nil {
-		// Server already prefixes anonymous users with ~
-		author = messageAnonymousStyle.Render(author)
+
+	// Choose style based on whether this is the current user's message
+	var authorStyle lipgloss.Style
+	if m.isOwnMessage(msg) {
+		authorStyle = messageOwnAuthorStyle
+	} else if msg.AuthorUserID == nil {
+		// Anonymous user (not current user)
+		authorStyle = messageAnonymousStyle
 	} else {
-		author = messageAuthorStyle.Render(author)
+		// Registered user (not current user)
+		authorStyle = messageAuthorStyle
 	}
+	author = authorStyle.Render(author)
 
 	timeStr := formatTime(msg.CreatedAt)
 	timestamp := messageTimeStyle.Render(timeStr)
@@ -708,18 +769,29 @@ func (m Model) buildThreadListContent() string {
 	}
 
 	var items []string
-	for i, thread := range m.threads {
-		item := m.formatThreadItem(thread)
-		if i == m.threadCursor {
-			item = selectedItemStyle.Render("▶ " + item)
-		} else {
-			item = unselectedItemStyle.Render("  " + item)
-		}
-		items = append(items, item)
-	}
 
-	if len(items) == 0 {
-		items = append(items, mutedTextStyle.Render("  (no threads)"))
+	// Show loading indicator if initially loading
+	if m.loadingThreadList {
+		items = append(items, mutedTextStyle.Render("  "+m.spinner.View()+" Loading threads..."))
+	} else {
+		for i, thread := range m.threads {
+			item := m.formatThreadItem(thread)
+			if i == m.threadCursor {
+				item = selectedItemStyle.Render("▶ " + item)
+			} else {
+				item = unselectedItemStyle.Render("  " + item)
+			}
+			items = append(items, item)
+		}
+
+		if len(items) == 0 {
+			items = append(items, mutedTextStyle.Render("  (no threads)"))
+		}
+
+		// Show "loading more" indicator at bottom if appropriate
+		if m.loadingMore {
+			items = append(items, "", mutedTextStyle.Render("  "+m.spinner.View()+" Loading more threads..."))
+		}
 	}
 
 	return lipgloss.JoinVertical(
@@ -737,6 +809,12 @@ func (m Model) buildThreadContent() string {
 		return ""
 	}
 
+	// Show loading indicator if loading initial replies
+	if m.loadingThreadReplies {
+		content.WriteString(mutedTextStyle.Render(m.spinner.View() + " Loading replies..."))
+		return content.String()
+	}
+
 	// Calculate depths once for all messages
 	depths := m.calculateThreadDepths()
 
@@ -750,6 +828,12 @@ func (m Model) buildThreadContent() string {
 		depth := depths[reply.ID]
 		msg := m.formatMessage(reply, depth, m.replyCursor == i+1)
 		content.WriteString(msg)
+		content.WriteString("\n\n")
+	}
+
+	// Show "loading more" indicator at bottom if appropriate
+	if m.loadingMoreReplies {
+		content.WriteString(mutedTextStyle.Render(m.spinner.View() + " Loading more replies..."))
 		content.WriteString("\n\n")
 	}
 
@@ -984,196 +1068,4 @@ func (m Model) renderReconnectingOverlay() string {
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
-}
-
-// renderPasswordModalOverlay renders the password input modal over the base view
-func (m Model) renderPasswordModalOverlay(baseView string) string {
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(primaryColor).
-		Align(lipgloss.Center).
-		MarginBottom(1).
-		Render(fmt.Sprintf("🔐 Authenticate as '%s'", m.nickname))
-
-	prompt := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")).
-		Align(lipgloss.Center).
-		MarginBottom(1).
-		Render("This nickname is registered. Enter password:")
-
-	// Password input (hidden)
-	passwordDisplay := strings.Repeat("•", len(m.passwordInput))
-	if m.authState == AuthStatePrompting {
-		passwordDisplay += "█" // Cursor
-	}
-	passwordField := inputFocusedStyle.Render(passwordDisplay)
-
-	// Error message if auth failed
-	var errorMsg string
-	if m.authErrorMessage != "" {
-		errorMsg = "\n" + lipgloss.NewStyle().
-			Foreground(errorColor).
-			Align(lipgloss.Center).
-			Render(m.authErrorMessage)
-	}
-
-	// Cooldown message if rate limited
-	var cooldownMsg string
-	if time.Now().Before(m.authCooldownUntil) {
-		remaining := int(time.Until(m.authCooldownUntil).Seconds()) + 1
-		cooldownMsg = "\n" + lipgloss.NewStyle().
-			Foreground(warningColor).
-			Align(lipgloss.Center).
-			Render(fmt.Sprintf("⏳ Please wait %d seconds before trying again", remaining))
-	}
-
-	// Status message
-	var statusMsg string
-	if m.authState == AuthStateAuthenticating {
-		statusMsg = lipgloss.NewStyle().
-			Foreground(mutedColor).
-			Align(lipgloss.Center).
-			MarginTop(1).
-			Render("Authenticating...")
-	} else {
-		statusMsg = lipgloss.NewStyle().
-			Foreground(mutedColor).
-			Align(lipgloss.Center).
-			MarginTop(1).
-			Render("[Enter] Authenticate  [ESC] Browse anonymously")
-	}
-
-	content := lipgloss.JoinVertical(
-		lipgloss.Center,
-		"",
-		title,
-		prompt,
-		passwordField,
-		errorMsg,
-		cooldownMsg,
-		statusMsg,
-		"",
-	)
-
-	modal := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(primaryColor).
-		Padding(1, 3).
-		Width(60).
-		Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
-}
-
-// renderRegistrationModalOverlay renders the registration modal over the base view
-func (m Model) renderRegistrationModalOverlay(baseView string) string {
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(primaryColor).
-		Align(lipgloss.Center).
-		MarginBottom(1).
-		Render(fmt.Sprintf("📝 Register '%s'", m.nickname))
-
-	prompt := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")).
-		Align(lipgloss.Center).
-		MarginBottom(1).
-		Render("Choose a password (minimum 8 characters):")
-
-	// Password input (hidden)
-	passwordDisplay := strings.Repeat("•", len(m.regPasswordInput))
-	if m.regPasswordCursor == 0 {
-		passwordDisplay += "█" // Cursor on password field
-	}
-	passwordField := inputFocusedStyle.Render("Password: " + passwordDisplay)
-
-	// Confirm password input (hidden)
-	confirmDisplay := strings.Repeat("•", len(m.regConfirmInput))
-	if m.regConfirmCursor == 1 {
-		confirmDisplay += "█" // Cursor on confirm field
-	}
-	var confirmStyle lipgloss.Style
-	if m.regPasswordCursor == 1 {
-		confirmStyle = inputFocusedStyle
-	} else {
-		confirmStyle = inputBlurredStyle
-	}
-	confirmField := confirmStyle.Render("Confirm:  " + confirmDisplay)
-
-	// Error message if registration failed
-	var errorMsg string
-	if m.regErrorMessage != "" {
-		errorMsg = "\n" + lipgloss.NewStyle().
-			Foreground(errorColor).
-			Align(lipgloss.Center).
-			Render(m.regErrorMessage)
-	}
-
-	// Requirements
-	requirements := lipgloss.NewStyle().
-		Foreground(mutedColor).
-		Align(lipgloss.Center).
-		MarginTop(1).
-		Render("Requirements: 8+ characters")
-
-	// Status message
-	statusMsg := lipgloss.NewStyle().
-		Foreground(mutedColor).
-		Align(lipgloss.Center).
-		MarginTop(1).
-		Render("[Tab] Next field  [Enter] Register  [ESC] Cancel")
-
-	content := lipgloss.JoinVertical(
-		lipgloss.Center,
-		"",
-		title,
-		prompt,
-		passwordField,
-		confirmField,
-		errorMsg,
-		requirements,
-		statusMsg,
-		"",
-	)
-
-	modal := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(primaryColor).
-		Padding(1, 3).
-		Width(60).
-		Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
-}
-
-// renderNicknameChangeModalOverlay renders the nickname change modal over the base view
-func (m Model) renderNicknameChangeModalOverlay(baseView string) string {
-	title := modalTitleStyle.Render("Change Nickname")
-	prompt := "Enter new nickname (3-20 characters, alphanumeric plus - and _):"
-
-	// Nickname input with cursor and max width (52 chars to fit in 60-char modal with padding)
-	nicknameDisplay := m.nicknameChangeInput + "█"
-	nicknameField := inputFocusedStyle.Width(52).Render(nicknameDisplay)
-
-	// Error message if change failed
-	var errorMsg string
-	if m.nicknameChangeError != "" {
-		errorMsg = "\n" + RenderError(m.nicknameChangeError)
-	}
-
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		title,
-		"",
-		prompt,
-		"",
-		nicknameField,
-		errorMsg,
-		"",
-		mutedTextStyle.Render("[Enter] Change  [ESC] Cancel"),
-	)
-
-	modal := modalStyle.Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }

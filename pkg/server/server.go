@@ -40,6 +40,13 @@ type Server struct {
 	// Connection deltas for periodic reporting
 	connectionsSinceReport    atomic.Int64
 	disconnectionsSinceReport atomic.Int64
+
+	// Server discovery
+	directoryEnabled        bool
+	verificationMu          sync.Mutex
+	verificationChallenges  map[uint64]uint64 // sessionID -> challenge
+	discoveryRateLimits     map[string]*discoveryRateLimiter
+	discoveryRateLimitMu    sync.Mutex
 }
 
 // ServerConfig holds server configuration
@@ -109,12 +116,15 @@ func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, 
 	sessions.SetMetrics(metrics)
 
 	server := &Server{
-		db:         memDB,
-		sessions:   sessions,
-		config:     config,
-		configPath: configPath,
-		shutdown:   make(chan struct{}),
-		metrics:    metrics,
+		db:                     memDB,
+		sessions:               sessions,
+		config:                 config,
+		configPath:             configPath,
+		shutdown:               make(chan struct{}),
+		metrics:                metrics,
+		directoryEnabled:       true, // Default enabled - servers can opt-out via --disable-directory
+		verificationChallenges: make(map[uint64]uint64),
+		discoveryRateLimits:    make(map[string]*discoveryRateLimiter),
 	}
 
 	return server, nil
@@ -136,7 +146,7 @@ func initLoggers() error {
 
 	errorLog = log.New(io.MultiWriter(os.Stderr, errorFile), "ERROR: ", log.LstdFlags)
 
-	// Debug log goes to /dev/null by default (can be enabled via config later)
+	// Debug log goes to /dev/null by default (can be enabled via EnableDebugLogging)
 	debugLog = log.New(io.Discard, "DEBUG: ", log.LstdFlags)
 
 	// Redirect standard log (used by database package) to stdout and server.log
@@ -148,6 +158,19 @@ func initLoggers() error {
 	log.SetOutput(io.MultiWriter(os.Stdout, serverLogFile))
 
 	return nil
+}
+
+// EnableDebugLogging enables debug logging to debug.log
+func (s *Server) EnableDebugLogging() {
+	// Create/truncate debug.log
+	debugLogFile, err := os.OpenFile("debug.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		log.Printf("Failed to open debug.log: %v", err)
+		return
+	}
+
+	debugLog = log.New(debugLogFile, "DEBUG: ", log.LstdFlags)
+	debugLog.Println("Debug logging enabled")
 }
 
 // Start starts the TCP and SSH servers
@@ -397,6 +420,10 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleEditMessage(sess, frame)
 	case protocol.TypeDeleteMessage:
 		return s.handleDeleteMessage(sess, frame)
+	case protocol.TypeGetUserInfo:
+		return s.handleGetUserInfo(sess, frame)
+	case protocol.TypeListUsers:
+		return s.handleListUsers(sess, frame)
 	case protocol.TypePing:
 		return s.handlePing(sess, frame)
 	case protocol.TypeDisconnect:
@@ -409,6 +436,14 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleSubscribeChannel(sess, frame)
 	case protocol.TypeUnsubscribeChannel:
 		return s.handleUnsubscribeChannel(sess, frame)
+	case protocol.TypeListServers:
+		return s.handleListServers(sess, frame)
+	case protocol.TypeRegisterServer:
+		return s.handleRegisterServer(sess, frame)
+	case protocol.TypeVerifyResponse:
+		return s.handleVerifyResponse(sess, frame)
+	case protocol.TypeHeartbeat:
+		return s.handleHeartbeat(sess, frame)
 	default:
 		// Unknown or unimplemented message type
 		return s.sendError(sess, 1001, "Unsupported message type")
@@ -578,5 +613,249 @@ func (s *Server) cleanupExpiredMessages() {
 
 	if sessionCount > 0 {
 		log.Printf("Cleaned up %d idle database sessions", sessionCount)
+	}
+}
+
+// ===== Server Discovery Methods =====
+
+// DisableDirectory disables directory mode (server won't accept registrations)
+func (s *Server) DisableDirectory() {
+	s.directoryEnabled = false
+}
+
+// EnableDirectory enables directory mode (server will accept registrations)
+func (s *Server) EnableDirectory() {
+	s.directoryEnabled = true
+}
+
+// AnnounceToDirectory announces this server to a directory server and maintains heartbeat
+func (s *Server) AnnounceToDirectory(directoryAddr, serverName, serverDescription string) {
+	// Parse directory address
+	host, portStr, err := net.SplitHostPort(directoryAddr)
+	if err != nil {
+		log.Printf("Failed to parse directory address %s: %v", directoryAddr, err)
+		return
+	}
+
+	port := 0
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+		log.Printf("Invalid port in directory address %s: %v", directoryAddr, err)
+		return
+	}
+
+	// Get our external hostname (from config or listener)
+	ourHostname := host // TODO: Get from config or detect external IP
+	if s.listener != nil {
+		if addr := s.listener.Addr().String(); addr != "" {
+			// Extract just the port from our listener
+			_, ourPort, _ := net.SplitHostPort(addr)
+			if ourPort != "" {
+				// Use the directory's host as a guess for our hostname
+				// In production, this should be configurable
+				ourHostname = host
+			}
+		}
+	}
+	ourPort := uint16(s.config.TCPPort)
+
+	// Start announcement loop
+	go s.maintainDirectoryAnnouncement(directoryAddr, ourHostname, ourPort, serverName, serverDescription)
+}
+
+// maintainDirectoryAnnouncement maintains connection to directory with registration and heartbeats
+func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string, ourPort uint16, serverName, serverDescription string) {
+	heartbeatInterval := uint32(300) // Start with 5 minutes
+	startTime := time.Now()
+
+	for {
+		select {
+		case <-s.shutdown:
+			log.Printf("Stopping announcement to %s (server shutdown)", directoryAddr)
+			return
+		default:
+		}
+
+		// Connect to directory
+		conn, err := net.DialTimeout("tcp", directoryAddr, 10*time.Second)
+		if err != nil {
+			log.Printf("Failed to connect to directory %s: %v (retrying in 60s)", directoryAddr, err)
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		log.Printf("Connected to directory %s", directoryAddr)
+
+		// Send REGISTER_SERVER
+		registerMsg := &protocol.RegisterServerMessage{
+			Hostname:    ourHostname,
+			Port:        ourPort,
+			Name:        serverName,
+			Description: serverDescription,
+			MaxUsers:    0, // 0 = unlimited
+			IsPublic:    true,
+		}
+
+		payload, err := registerMsg.Encode()
+		if err != nil {
+			log.Printf("Failed to encode REGISTER_SERVER: %v", err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		frame := &protocol.Frame{
+			Version: 1,
+			Type:    protocol.TypeRegisterServer,
+			Flags:   0,
+			Payload: payload,
+		}
+
+		if err := protocol.EncodeFrame(conn, frame); err != nil {
+			log.Printf("Failed to send REGISTER_SERVER to %s: %v", directoryAddr, err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		log.Printf("Sent REGISTER_SERVER to %s", directoryAddr)
+
+		// Wait for VERIFY_REGISTRATION challenge
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		verifyFrame, err := protocol.DecodeFrame(conn)
+		if err != nil {
+			log.Printf("Failed to receive verification from %s: %v (retrying in 60s)", directoryAddr, err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		if verifyFrame.Type != protocol.TypeVerifyRegistration {
+			log.Printf("Expected VERIFY_REGISTRATION from %s, got 0x%02x", directoryAddr, verifyFrame.Type)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		// Decode challenge
+		verifyMsg := &protocol.VerifyRegistrationMessage{}
+		if err := verifyMsg.Decode(verifyFrame.Payload); err != nil {
+			log.Printf("Failed to decode VERIFY_REGISTRATION: %v", err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		log.Printf("Received verification challenge from %s: %d", directoryAddr, verifyMsg.Challenge)
+
+		// Send VERIFY_RESPONSE
+		responseMsg := &protocol.VerifyResponseMessage{
+			Challenge: verifyMsg.Challenge,
+		}
+
+		respPayload, err := responseMsg.Encode()
+		if err != nil {
+			log.Printf("Failed to encode VERIFY_RESPONSE: %v", err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		respFrame := &protocol.Frame{
+			Version: 1,
+			Type:    protocol.TypeVerifyResponse,
+			Flags:   0,
+			Payload: respPayload,
+		}
+
+		if err := protocol.EncodeFrame(conn, respFrame); err != nil {
+			log.Printf("Failed to send VERIFY_RESPONSE: %v", err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		log.Printf("Successfully registered with directory %s", directoryAddr)
+
+		// Start heartbeat loop
+		ticker := time.NewTicker(time.Duration(heartbeatInterval) * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-s.shutdown:
+				log.Printf("Stopping heartbeat to %s (server shutdown)", directoryAddr)
+				conn.Close()
+				return
+
+			case <-ticker.C:
+				// Calculate uptime
+				uptime := uint64(time.Since(startTime).Seconds())
+
+				// Get current user count
+				userCount := s.sessions.CountOnlineUsers()
+
+				// Send HEARTBEAT
+				heartbeatMsg := &protocol.HeartbeatMessage{
+					Hostname:      ourHostname,
+					Port:          ourPort,
+					UserCount:     userCount,
+					UptimeSeconds: uptime,
+				}
+
+				hbPayload, err := heartbeatMsg.Encode()
+				if err != nil {
+					log.Printf("Failed to encode HEARTBEAT: %v", err)
+					goto reconnect
+				}
+
+				hbFrame := &protocol.Frame{
+					Version: 1,
+					Type:    protocol.TypeHeartbeat,
+					Flags:   0,
+					Payload: hbPayload,
+				}
+
+				if err := protocol.EncodeFrame(conn, hbFrame); err != nil {
+					log.Printf("Failed to send HEARTBEAT to %s: %v (reconnecting)", directoryAddr, err)
+					goto reconnect
+				}
+
+				// Wait for HEARTBEAT_ACK
+				conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+				ackFrame, err := protocol.DecodeFrame(conn)
+				if err != nil {
+					log.Printf("Failed to receive HEARTBEAT_ACK from %s: %v (reconnecting)", directoryAddr, err)
+					goto reconnect
+				}
+
+				if ackFrame.Type != protocol.TypeHeartbeatAck {
+					log.Printf("Expected HEARTBEAT_ACK from %s, got 0x%02x", directoryAddr, ackFrame.Type)
+					goto reconnect
+				}
+
+				// Decode ACK to get new interval
+				ackMsg := &protocol.HeartbeatAckMessage{}
+				if err := ackMsg.Decode(ackFrame.Payload); err != nil {
+					log.Printf("Failed to decode HEARTBEAT_ACK: %v", err)
+					goto reconnect
+				}
+
+				// Update interval if changed
+				if ackMsg.HeartbeatInterval != heartbeatInterval {
+					oldInterval := heartbeatInterval
+					heartbeatInterval = ackMsg.HeartbeatInterval
+					log.Printf("Directory %s adjusted heartbeat interval: %ds -> %ds", directoryAddr, oldInterval, heartbeatInterval)
+					ticker.Reset(time.Duration(heartbeatInterval) * time.Second)
+				}
+
+				log.Printf("Heartbeat sent to %s (users: %d, uptime: %ds, next in %ds)", directoryAddr, userCount, uptime, heartbeatInterval)
+			}
+		}
+
+	reconnect:
+		ticker.Stop()
+		conn.Close()
+		log.Printf("Lost connection to directory %s, reconnecting in 60s...", directoryAddr)
+		time.Sleep(60 * time.Second)
 	}
 }

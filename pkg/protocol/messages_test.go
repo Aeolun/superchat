@@ -8,6 +8,270 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAuthRequestMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		nickname string
+		password string
+	}{
+		{
+			name:     "valid auth request",
+			nickname: "alice",
+			password: "secret123",
+		},
+		{
+			name:     "long password",
+			nickname: "bob",
+			password: "verylongpassword12345678901234567890",
+		},
+		{
+			name:     "short credentials",
+			nickname: "abc",
+			password: "pwd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &AuthRequestMessage{
+				Nickname: tt.nickname,
+				Password: tt.password,
+			}
+
+			payload, err := msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &AuthRequestMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.nickname, decoded.Nickname)
+			assert.Equal(t, tt.password, decoded.Password)
+		})
+	}
+}
+
+func TestAuthResponseMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		msg     AuthResponseMessage
+	}{
+		{
+			name: "success response",
+			msg: AuthResponseMessage{
+				Success: true,
+				UserID:  42,
+				Message: "Welcome back!",
+			},
+		},
+		{
+			name: "failure response",
+			msg: AuthResponseMessage{
+				Success: false,
+				Message: "Invalid credentials",
+			},
+		},
+		{
+			name: "success with user ID 0",
+			msg: AuthResponseMessage{
+				Success: true,
+				UserID:  0,
+				Message: "Authenticated",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &AuthResponseMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.msg.Success, decoded.Success)
+			assert.Equal(t, tt.msg.Message, decoded.Message)
+			if tt.msg.Success {
+				assert.Equal(t, tt.msg.UserID, decoded.UserID)
+			}
+		})
+	}
+}
+
+func TestRegisterUserMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		password string
+	}{
+		{
+			name:     "valid password",
+			password: "password123",
+		},
+		{
+			name:     "long password",
+			password: "verylongpassword12345678901234567890",
+		},
+		{
+			name:     "short password",
+			password: "pwd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &RegisterUserMessage{
+				Password: tt.password,
+			}
+
+			payload, err := msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &RegisterUserMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.password, decoded.Password)
+		})
+	}
+}
+
+func TestRegisterResponseMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		msg     RegisterResponseMessage
+	}{
+		{
+			name: "success response",
+			msg: RegisterResponseMessage{
+				Success: true,
+				UserID:  123,
+				Message: "Registration successful",
+			},
+		},
+		{
+			name: "failure response",
+			msg: RegisterResponseMessage{
+				Success: false,
+				Message: "Nickname already registered",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &RegisterResponseMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.msg.Success, decoded.Success)
+			assert.Equal(t, tt.msg.Message, decoded.Message)
+			if tt.msg.Success {
+				assert.Equal(t, tt.msg.UserID, decoded.UserID)
+			}
+		})
+	}
+}
+
+func TestCreateChannelMessage(t *testing.T) {
+	desc1 := "A test channel"
+
+	tests := []struct {
+		name string
+		msg  CreateChannelMessage
+	}{
+		{
+			name: "with description",
+			msg: CreateChannelMessage{
+				Name:           "general",
+				DisplayName:    "#general",
+				Description:    &desc1,
+				ChannelType:    1,
+				RetentionHours: 168,
+			},
+		},
+		{
+			name: "without description",
+			msg: CreateChannelMessage{
+				Name:           "random",
+				DisplayName:    "#random",
+				Description:    nil,
+				ChannelType:    1,
+				RetentionHours: 720,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &CreateChannelMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.msg.Name, decoded.Name)
+			assert.Equal(t, tt.msg.DisplayName, decoded.DisplayName)
+			assert.Equal(t, tt.msg.ChannelType, decoded.ChannelType)
+			assert.Equal(t, tt.msg.RetentionHours, decoded.RetentionHours)
+
+			if tt.msg.Description == nil {
+				assert.Nil(t, decoded.Description)
+			} else {
+				require.NotNil(t, decoded.Description)
+				assert.Equal(t, *tt.msg.Description, *decoded.Description)
+			}
+		})
+	}
+}
+
+func TestChannelCreatedMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  ChannelCreatedMessage
+	}{
+		{
+			name: "success response",
+			msg: ChannelCreatedMessage{
+				Success:        true,
+				ChannelID:      42,
+				Name:           "general",
+				Description:    "General discussion",
+				Type:           1,
+				RetentionHours: 168,
+				Message:        "Channel created successfully",
+			},
+		},
+		{
+			name: "failure response",
+			msg: ChannelCreatedMessage{
+				Success: false,
+				Message: "Insufficient permissions",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &ChannelCreatedMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.msg.Success, decoded.Success)
+			assert.Equal(t, tt.msg.Message, decoded.Message)
+
+			if tt.msg.Success {
+				assert.Equal(t, tt.msg.ChannelID, decoded.ChannelID)
+				assert.Equal(t, tt.msg.Name, decoded.Name)
+				assert.Equal(t, tt.msg.Description, decoded.Description)
+				assert.Equal(t, tt.msg.Type, decoded.Type)
+				assert.Equal(t, tt.msg.RetentionHours, decoded.RetentionHours)
+			}
+		})
+	}
+}
+
 func TestSetNicknameMessage(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -312,6 +576,7 @@ func TestJoinResponseMessage(t *testing.T) {
 func TestListMessagesMessage(t *testing.T) {
 	subchannelID := uint64(5)
 	beforeID := uint64(100)
+	afterID := uint64(75)
 	parentID := uint64(50)
 
 	tests := []struct {
@@ -326,6 +591,7 @@ func TestListMessagesMessage(t *testing.T) {
 				Limit:        50,
 				BeforeID:     nil,
 				ParentID:     nil,
+				AfterID:      nil,
 			},
 		},
 		{
@@ -336,16 +602,29 @@ func TestListMessagesMessage(t *testing.T) {
 				Limit:        100,
 				BeforeID:     nil,
 				ParentID:     nil,
+				AfterID:      nil,
 			},
 		},
 		{
-			name: "with pagination",
+			name: "with pagination (before)",
 			msg: ListMessagesMessage{
 				ChannelID:    1,
 				SubchannelID: nil,
 				Limit:        50,
 				BeforeID:     &beforeID,
 				ParentID:     nil,
+				AfterID:      nil,
+			},
+		},
+		{
+			name: "with pagination (after)",
+			msg: ListMessagesMessage{
+				ChannelID:    1,
+				SubchannelID: nil,
+				Limit:        50,
+				BeforeID:     nil,
+				ParentID:     nil,
+				AfterID:      &afterID,
 			},
 		},
 		{
@@ -356,6 +635,18 @@ func TestListMessagesMessage(t *testing.T) {
 				Limit:        200,
 				BeforeID:     nil,
 				ParentID:     &parentID,
+				AfterID:      nil,
+			},
+		},
+		{
+			name: "thread view with after_id (catching up)",
+			msg: ListMessagesMessage{
+				ChannelID:    1,
+				SubchannelID: nil,
+				Limit:        200,
+				BeforeID:     nil,
+				ParentID:     &parentID,
+				AfterID:      &afterID,
 			},
 		},
 		{
@@ -366,6 +657,7 @@ func TestListMessagesMessage(t *testing.T) {
 				Limit:        50,
 				BeforeID:     &beforeID,
 				ParentID:     &parentID,
+				AfterID:      nil,
 			},
 		},
 	}
@@ -1038,6 +1330,236 @@ func TestNewMessageMessage(t *testing.T) {
 	}
 }
 
+func TestGetUserInfoMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		nickname string
+	}{
+		{
+			name:     "valid nickname",
+			nickname: "alice",
+		},
+		{
+			name:     "long nickname",
+			nickname: "12345678901234567890",
+		},
+		{
+			name:     "nickname with underscore",
+			nickname: "alice_123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &GetUserInfoMessage{
+				Nickname: tt.nickname,
+			}
+
+			payload, err := msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &GetUserInfoMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.nickname, decoded.Nickname)
+		})
+	}
+}
+
+func TestUserInfoMessage(t *testing.T) {
+	userID := uint64(42)
+
+	tests := []struct {
+		name string
+		msg  UserInfoMessage
+	}{
+		{
+			name: "registered user online",
+			msg: UserInfoMessage{
+				Nickname:     "alice",
+				IsRegistered: true,
+				UserID:       &userID,
+				Online:       true,
+			},
+		},
+		{
+			name: "registered user offline",
+			msg: UserInfoMessage{
+				Nickname:     "bob",
+				IsRegistered: true,
+				UserID:       &userID,
+				Online:       false,
+			},
+		},
+		{
+			name: "anonymous user online",
+			msg: UserInfoMessage{
+				Nickname:     "charlie",
+				IsRegistered: false,
+				UserID:       nil,
+				Online:       true,
+			},
+		},
+		{
+			name: "user not found",
+			msg: UserInfoMessage{
+				Nickname:     "unknown",
+				IsRegistered: false,
+				UserID:       nil,
+				Online:       false,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &UserInfoMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.msg.Nickname, decoded.Nickname)
+			assert.Equal(t, tt.msg.IsRegistered, decoded.IsRegistered)
+			assert.Equal(t, tt.msg.Online, decoded.Online)
+
+			if tt.msg.UserID == nil {
+				assert.Nil(t, decoded.UserID)
+			} else {
+				require.NotNil(t, decoded.UserID)
+				assert.Equal(t, *tt.msg.UserID, *decoded.UserID)
+			}
+		})
+	}
+}
+
+func TestListUsersMessage(t *testing.T) {
+	tests := []struct {
+		name  string
+		limit uint16
+	}{
+		{
+			name:  "default limit",
+			limit: 100,
+		},
+		{
+			name:  "small limit",
+			limit: 10,
+		},
+		{
+			name:  "max limit",
+			limit: 500,
+		},
+		{
+			name:  "zero limit",
+			limit: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &ListUsersMessage{
+				Limit: tt.limit,
+			}
+
+			payload, err := msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &ListUsersMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.limit, decoded.Limit)
+		})
+	}
+}
+
+func TestUserListMessage(t *testing.T) {
+	userID1 := uint64(1)
+	userID2 := uint64(2)
+
+	tests := []struct {
+		name string
+		msg  UserListMessage
+	}{
+		{
+			name: "empty list",
+			msg: UserListMessage{
+				Users: []UserListEntry{},
+			},
+		},
+		{
+			name: "single registered user",
+			msg: UserListMessage{
+				Users: []UserListEntry{
+					{
+						Nickname:     "alice",
+						IsRegistered: true,
+						UserID:       &userID1,
+					},
+				},
+			},
+		},
+		{
+			name: "single anonymous user",
+			msg: UserListMessage{
+				Users: []UserListEntry{
+					{
+						Nickname:     "bob",
+						IsRegistered: false,
+						UserID:       nil,
+					},
+				},
+			},
+		},
+		{
+			name: "mixed users",
+			msg: UserListMessage{
+				Users: []UserListEntry{
+					{
+						Nickname:     "alice",
+						IsRegistered: true,
+						UserID:       &userID1,
+					},
+					{
+						Nickname:     "bob",
+						IsRegistered: false,
+						UserID:       nil,
+					},
+					{
+						Nickname:     "charlie",
+						IsRegistered: true,
+						UserID:       &userID2,
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &UserListMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			require.Equal(t, len(tt.msg.Users), len(decoded.Users))
+
+			for i, user := range tt.msg.Users {
+				assert.Equal(t, user.Nickname, decoded.Users[i].Nickname)
+				assert.Equal(t, user.IsRegistered, decoded.Users[i].IsRegistered)
+
+				if user.UserID == nil {
+					assert.Nil(t, decoded.Users[i].UserID)
+				} else {
+					require.NotNil(t, decoded.Users[i].UserID)
+					assert.Equal(t, *user.UserID, *decoded.Users[i].UserID)
+				}
+			}
+		})
+	}
+}
+
 func TestMessageTypeConstants(t *testing.T) {
 	// Test that message type constants have expected values
 	assert.Equal(t, 0x02, TypeSetNickname)
@@ -1047,7 +1569,9 @@ func TestMessageTypeConstants(t *testing.T) {
 	assert.Equal(t, 0x09, TypeListMessages)
 	assert.Equal(t, 0x0A, TypePostMessage)
 	assert.Equal(t, 0x0C, TypeDeleteMessage)
+	assert.Equal(t, 0x0F, TypeGetUserInfo)
 	assert.Equal(t, 0x10, TypePing)
+	assert.Equal(t, 0x16, TypeListUsers)
 
 	assert.Equal(t, 0x82, TypeNicknameResponse)
 	assert.Equal(t, 0x84, TypeChannelList)
@@ -1058,9 +1582,11 @@ func TestMessageTypeConstants(t *testing.T) {
 	assert.Equal(t, 0x8B, TypeMessageEdited)
 	assert.Equal(t, 0x8C, TypeMessageDeleted)
 	assert.Equal(t, 0x8D, TypeNewMessage)
+	assert.Equal(t, 0x8F, TypeUserInfo)
 	assert.Equal(t, 0x90, TypePong)
 	assert.Equal(t, 0x91, TypeError)
 	assert.Equal(t, 0x98, TypeServerConfig)
+	assert.Equal(t, 0x9A, TypeUserList)
 }
 
 func TestErrorCodeConstants(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -291,7 +292,7 @@ func (db *DB) SeedDefaultChannels() error {
 	}
 
 	for _, ch := range defaultChannels {
-		if err := db.CreateChannel(ch.name, ch.displayName, &ch.description, 1, 168, nil); err != nil {
+		if _, err := db.CreateChannel(ch.name, ch.displayName, &ch.description, 1, 168, nil); err != nil {
 			return fmt.Errorf("failed to seed channel %s: %w", ch.name, err)
 		}
 	}
@@ -301,7 +302,7 @@ func (db *DB) SeedDefaultChannels() error {
 
 // CreateChannel creates a new channel (returns nil if already exists)
 // createdBy is optional - NULL for admin-created channels (V1), populated for user-created channels (V2+)
-func (db *DB) CreateChannel(name, displayName string, description *string, channelType uint8, retentionHours uint32, createdBy *int64) error {
+func (db *DB) CreateChannel(name, displayName string, description *string, channelType uint8, retentionHours uint32, createdBy *int64) (int64, error) {
 	start := time.Now()
 	descStr := sql.NullString{}
 	if description != nil {
@@ -315,15 +316,24 @@ func (db *DB) CreateChannel(name, displayName string, description *string, chann
 		createdByVal.Int64 = *createdBy
 	}
 
-	_, err := db.writeConn.Exec(`
+	result, err := db.writeConn.Exec(`
 		INSERT OR IGNORE INTO Channel (name, display_name, description, channel_type, message_retention_hours, created_by, created_at, is_private)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 0)
 	`, name, displayName, descStr, channelType, retentionHours, createdByVal, nowMillis())
 
+	if err != nil {
+		return 0, err
+	}
+
+	channelID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last insert ID: %w", err)
+	}
+
 	elapsed := time.Since(start)
 	log.Printf("DB: CreateChannel took %v", elapsed)
 
-	return err
+	return channelID, nil
 }
 
 // ListChannels returns all public channels
@@ -540,8 +550,9 @@ func (db *DB) PostMessage(channelID int64, subchannelID, parentID, authorUserID 
 	return messageID, nil
 }
 
-// ListRootMessages returns root messages (parent_id = null) for a channel, sorted newest first
-func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64) ([]*Message, error) {
+// ListRootMessages returns root messages (parent_id = null) for a channel
+// Sorting: DESC (newest first) by default or with beforeID, ASC (oldest first) with afterID
+func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64, afterID *uint64) ([]*Message, error) {
 	var subchannelIDVal sql.NullInt64
 	if subchannelID != nil {
 		subchannelIDVal.Valid = true
@@ -558,12 +569,18 @@ func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint1
 	`
 	args := []interface{}{channelID, subchannelIDVal, subchannelIDVal}
 
+	// beforeID takes precedence over afterID
 	if beforeID != nil {
 		query += ` AND id < ?`
 		args = append(args, *beforeID)
+		query += ` ORDER BY created_at DESC LIMIT ?`
+	} else if afterID != nil {
+		query += ` AND id > ?`
+		args = append(args, *afterID)
+		query += ` ORDER BY created_at ASC LIMIT ?`
+	} else {
+		query += ` ORDER BY created_at DESC LIMIT ?`
 	}
-
-	query += ` ORDER BY created_at DESC LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := db.conn.Query(query, args...)
@@ -576,7 +593,8 @@ func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint1
 }
 
 // ListThreadReplies returns all replies under a parent message, sorted for depth-first display
-func (db *DB) ListThreadReplies(parentID uint64) ([]*Message, error) {
+// Supports pagination via limit, beforeID, and afterID parameters
+func (db *DB) ListThreadReplies(parentID uint64, limit uint16, beforeID *uint64, afterID *uint64) ([]*Message, error) {
 	// Recursive CTE to get all descendants with a path for proper depth-first ordering
 	query := `
 		WITH RECURSIVE thread_tree AS (
@@ -600,10 +618,34 @@ func (db *DB) ListThreadReplies(parentID uint64) ([]*Message, error) {
 		SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname,
 		       content, created_at, edited_at, deleted_at
 		FROM thread_tree
-		ORDER BY path ASC
 	`
 
-	rows, err := db.conn.Query(query, parentID)
+	args := []interface{}{parentID}
+
+	// Add WHERE clauses for pagination
+	var whereClauses []string
+	if beforeID != nil {
+		whereClauses = append(whereClauses, "id < ?")
+		args = append(args, *beforeID)
+	}
+	if afterID != nil {
+		whereClauses = append(whereClauses, "id > ?")
+		args = append(args, *afterID)
+	}
+
+	if len(whereClauses) > 0 {
+		query += " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	query += ` ORDER BY path ASC`
+
+	// Add LIMIT if specified
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1078,4 +1120,200 @@ func (db *DB) UpdateSessionUserID(sessionID, userID int64) error {
 		UPDATE Session SET user_id = ? WHERE id = ?
 	`, userID, sessionID)
 	return err
+}
+
+// ===== DiscoveredServer Methods (Server Discovery Protocol) =====
+
+// DiscoveredServer represents a server in the directory
+type DiscoveredServer struct {
+	ID                int64
+	Hostname          string
+	Port              uint16
+	Name              string
+	Description       string
+	MaxUsers          uint32
+	IsPublic          bool
+	UserCount         uint32
+	UptimeSeconds     uint64
+	LastHeartbeat     int64
+	HeartbeatInterval uint32
+	DiscoveredVia     string // "registration" or "gossip"
+	SourceIP          string
+	CreatedAt         int64
+}
+
+// RegisterDiscoveredServer adds or updates a server in the directory
+// This is an upsert operation: if hostname:port exists, it updates; otherwise inserts
+func (db *DB) RegisterDiscoveredServer(hostname string, port uint16, name, description string, maxUsers uint32, isPublic bool, sourceIP, discoveredVia string) (int64, error) {
+	now := nowMillis()
+
+	result, err := db.writeConn.Exec(`
+		INSERT INTO DiscoveredServer (
+			hostname, port, name, description, max_users, is_public,
+			user_count, uptime_seconds, last_heartbeat, heartbeat_interval,
+			discovered_via, source_ip, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 300, ?, ?, ?)
+		ON CONFLICT(hostname, port) DO UPDATE SET
+			name = excluded.name,
+			description = excluded.description,
+			max_users = excluded.max_users,
+			is_public = excluded.is_public,
+			last_heartbeat = excluded.last_heartbeat
+	`, hostname, port, name, description, maxUsers, isPublic, now, discoveredVia, sourceIP, now)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to register discovered server: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		// If it was an update, LastInsertId might fail. Get the ID by querying.
+		var serverID int64
+		err = db.conn.QueryRow("SELECT id FROM DiscoveredServer WHERE hostname = ? AND port = ?", hostname, port).Scan(&serverID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get discovered server ID: %w", err)
+		}
+		return serverID, nil
+	}
+
+	return id, nil
+}
+
+// UpdateHeartbeat updates the heartbeat timestamp and stats for a server
+func (db *DB) UpdateHeartbeat(hostname string, port uint16, userCount uint32, uptimeSeconds uint64, newInterval uint32) error {
+	now := nowMillis()
+
+	_, err := db.writeConn.Exec(`
+		UPDATE DiscoveredServer
+		SET last_heartbeat = ?,
+		    user_count = ?,
+		    uptime_seconds = ?,
+		    heartbeat_interval = ?
+		WHERE hostname = ? AND port = ?
+	`, now, userCount, uptimeSeconds, newInterval, hostname, port)
+
+	if err != nil {
+		return fmt.Errorf("failed to update heartbeat: %w", err)
+	}
+
+	return nil
+}
+
+// ListDiscoveredServers returns servers sorted by last heartbeat (most recent first)
+// Only returns servers that have sent a heartbeat within the last (heartbeat_interval * 3) seconds
+func (db *DB) ListDiscoveredServers(limit uint16) ([]*DiscoveredServer, error) {
+	now := nowMillis()
+
+	rows, err := db.conn.Query(`
+		SELECT id, hostname, port, name, description, max_users, is_public,
+		       user_count, uptime_seconds, last_heartbeat, heartbeat_interval,
+		       discovered_via, source_ip, created_at
+		FROM DiscoveredServer
+		WHERE (? - last_heartbeat) <= (heartbeat_interval * 3 * 1000)
+		ORDER BY last_heartbeat DESC
+		LIMIT ?
+	`, now, limit)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to list discovered servers: %w", err)
+	}
+	defer rows.Close()
+
+	var servers []*DiscoveredServer
+	for rows.Next() {
+		var server DiscoveredServer
+		var sourceIP sql.NullString
+
+		err := rows.Scan(
+			&server.ID, &server.Hostname, &server.Port, &server.Name,
+			&server.Description, &server.MaxUsers, &server.IsPublic,
+			&server.UserCount, &server.UptimeSeconds, &server.LastHeartbeat,
+			&server.HeartbeatInterval, &server.DiscoveredVia, &sourceIP, &server.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan discovered server: %w", err)
+		}
+
+		if sourceIP.Valid {
+			server.SourceIP = sourceIP.String
+		}
+
+		servers = append(servers, &server)
+	}
+
+	return servers, rows.Err()
+}
+
+// GetDiscoveredServer retrieves a server by hostname and port
+func (db *DB) GetDiscoveredServer(hostname string, port uint16) (*DiscoveredServer, error) {
+	var server DiscoveredServer
+	var sourceIP sql.NullString
+
+	err := db.conn.QueryRow(`
+		SELECT id, hostname, port, name, description, max_users, is_public,
+		       user_count, uptime_seconds, last_heartbeat, heartbeat_interval,
+		       discovered_via, source_ip, created_at
+		FROM DiscoveredServer
+		WHERE hostname = ? AND port = ?
+	`, hostname, port).Scan(
+		&server.ID, &server.Hostname, &server.Port, &server.Name,
+		&server.Description, &server.MaxUsers, &server.IsPublic,
+		&server.UserCount, &server.UptimeSeconds, &server.LastHeartbeat,
+		&server.HeartbeatInterval, &server.DiscoveredVia, &sourceIP, &server.CreatedAt,
+	)
+
+	if err != nil {
+		return nil, err // sql.ErrNoRows if not found
+	}
+
+	if sourceIP.Valid {
+		server.SourceIP = sourceIP.String
+	}
+
+	return &server, nil
+}
+
+// DeleteDiscoveredServer removes a server from the directory
+func (db *DB) DeleteDiscoveredServer(hostname string, port uint16) error {
+	_, err := db.writeConn.Exec(`
+		DELETE FROM DiscoveredServer
+		WHERE hostname = ? AND port = ?
+	`, hostname, port)
+
+	if err != nil {
+		return fmt.Errorf("failed to delete discovered server: %w", err)
+	}
+
+	return nil
+}
+
+// CleanupStaleServers removes servers that haven't sent a heartbeat in more than (heartbeat_interval * 3) seconds
+func (db *DB) CleanupStaleServers() (int64, error) {
+	now := nowMillis()
+
+	result, err := db.writeConn.Exec(`
+		DELETE FROM DiscoveredServer
+		WHERE (? - last_heartbeat) > (heartbeat_interval * 3 * 1000)
+	`, now)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup stale servers: %w", err)
+	}
+
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+// CountDiscoveredServers returns the total number of servers in the directory
+func (db *DB) CountDiscoveredServers() (uint32, error) {
+	var count uint32
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM DiscoveredServer").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count discovered servers: %w", err)
+	}
+	return count, nil
 }

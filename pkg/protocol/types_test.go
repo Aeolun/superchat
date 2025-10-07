@@ -392,3 +392,79 @@ func TestBigEndianEncoding(t *testing.T) {
 		assert.Equal(t, byte(0x08), bytes[7])
 	})
 }
+
+func TestOptionalString(t *testing.T) {
+	t.Run("nil value", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		err := WriteOptionalString(buf, nil)
+		require.NoError(t, err)
+
+		result, err := ReadOptionalString(buf)
+		require.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("present value", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		value := "hello world"
+
+		err := WriteOptionalString(buf, &value)
+		require.NoError(t, err)
+
+		result, err := ReadOptionalString(buf)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, value, *result)
+	})
+
+	t.Run("empty string", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		value := ""
+
+		err := WriteOptionalString(buf, &value)
+		require.NoError(t, err)
+
+		result, err := ReadOptionalString(buf)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, value, *result)
+	})
+}
+
+func TestOptionalTimestamp(t *testing.T) {
+	t.Run("nil value", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		err := WriteOptionalTimestamp(buf, nil)
+		require.NoError(t, err)
+
+		result, err := ReadOptionalTimestamp(buf)
+		require.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("present value", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		value := time.Now()
+
+		err := WriteOptionalTimestamp(buf, &value)
+		require.NoError(t, err)
+
+		result, err := ReadOptionalTimestamp(buf)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.WithinDuration(t, value, *result, time.Millisecond)
+	})
+
+	t.Run("zero time", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		value := time.Time{}
+
+		err := WriteOptionalTimestamp(buf, &value)
+		require.NoError(t, err)
+
+		result, err := ReadOptionalTimestamp(buf)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, value.Unix(), result.Unix())
+	})
+}

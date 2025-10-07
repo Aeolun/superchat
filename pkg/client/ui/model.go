@@ -8,6 +8,7 @@ import (
 	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/aeolun/superchat/pkg/updater"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -17,11 +18,9 @@ type ViewState int
 
 const (
 	ViewSplash ViewState = iota
-	ViewNicknameSetup
 	ViewChannelList
 	ViewThreadList
 	ViewThreadView
-	ViewCompose
 	ViewHelp
 )
 
@@ -68,8 +67,16 @@ type Model struct {
 	currentThread  *protocol.Message
 	threadReplies  []protocol.Message // All replies in current thread
 	onlineUsers    uint32
-	loadingMore    bool // True if we're currently loading more threads
-	allThreadsLoaded bool // True if we've reached the end of threads
+
+	// Loading states
+	loadingChannels      bool // True if fetching channel list
+	loadingThreadList    bool // True if fetching initial thread list
+	loadingThreadReplies bool // True if fetching thread replies
+	loadingMore          bool // True if we're currently loading more threads
+	loadingMoreReplies   bool // True if we're currently loading more replies
+	sendingMessage       bool // True if posting/editing a message
+	allThreadsLoaded     bool // True if we've reached the end of threads
+	allRepliesLoaded     bool // True if we've reached the end of replies in current thread
 
 	// UI state
 	width              int
@@ -79,40 +86,25 @@ type Model struct {
 	replyCursor        int
 	threadViewport     viewport.Model  // Viewport for thread view
 	threadListViewport viewport.Model  // Viewport for thread list
+	spinner            spinner.Model   // Loading spinner
 	newMessageIDs      map[uint64]bool // Track new messages in current thread
 	confirmingDelete   bool
 	pendingDeleteID    uint64
 
 	// Input state
-	nickname         string
-	userID           *uint64   // Set when authenticated (V2), nil for anonymous
-	composeInput     string
-	composeCursor    int
-	composeMode      ComposeMode
-	composeParentID  *uint64
-	composeMessageID *uint64   // Message ID when editing
-	returnToView     ViewState // Where to return after nickname setup
+	nickname             string
+	pendingNickname      string  // Nickname we sent to server, waiting for confirmation
+	nicknameIsRegistered bool    // True if current nickname belongs to a registered user
+	userID               *uint64 // Set when authenticated (V2), nil for anonymous
+	composeInput         string  // Temporary storage for compose state
+	composeParentID      *uint64
+	composeMessageID     *uint64 // Message ID when editing
 
 	// Auth state (V2)
 	authState           AuthState
-	passwordInput       []byte    // Temporary, cleared after use
-	passwordCursor      int
-	authAttempts        int
-	authCooldownUntil   time.Time
-	authErrorMessage    string
-
-	// Registration state (V2)
-	registrationMode    bool
-	regPasswordInput    []byte
-	regPasswordCursor   int
-	regConfirmInput     []byte
-	regConfirmCursor    int
-	regErrorMessage     string
-
-	// Nickname change state
-	nicknameChangeMode  bool
-	nicknameChangeInput string
-	nicknameChangeError string
+	authAttempts        int       // For rate limiting
+	authCooldownUntil   time.Time // For rate limiting
+	authErrorMessage    string    // For displaying errors in password modal
 
 	// Error and status
 	errorMessage  string
@@ -134,16 +126,11 @@ type Model struct {
 
 	// Command system
 	commands *commands.Registry
+
+	// Bandwidth optimization
+	threadRepliesCache      map[uint64][]protocol.Message // Cached thread replies
+	threadHighestMessageID  map[uint64]uint64             // Highest message ID seen per thread
 }
-
-// ComposeMode indicates what we're composing
-type ComposeMode int
-
-const (
-	ComposeModeNewThread ComposeMode = iota
-	ComposeModeReply
-	ComposeModeEdit
-)
 
 // NewModel creates a new application model
 func NewModel(conn client.ConnectionInterface, state client.StateInterface, currentVersion string) Model {
@@ -158,24 +145,32 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 	nickname := state.GetLastNickname()
 	userID := state.GetUserID()
 
+	// Create spinner
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = Styles.Spinner
+
 	m := Model{
-		conn:             conn,
-		state:            state,
-		connectionState:  StateConnected,
-		reconnectAttempt: 0,
-		mainView:         initialMainView,
-		modalStack:       modal.ModalStack{},
-		currentView:      initialView, // DEPRECATED
-		firstRun:         firstRun,
-		nickname:         nickname,
-		userID:           userID,
-		currentVersion:   currentVersion,
-		channels:         []protocol.Channel{},
-		threads:          []protocol.Message{},
-		threadReplies:    []protocol.Message{},
-		newMessageIDs:    make(map[uint64]bool),
-		pingInterval:     18 * time.Second, // Send ping every 18 seconds (3 pings within 60s timeout)
-		lastPingSent:     time.Now(),
+		conn:                   conn,
+		state:                  state,
+		connectionState:        StateConnected,
+		reconnectAttempt:       0,
+		mainView:               initialMainView,
+		modalStack:             modal.ModalStack{},
+		currentView:            initialView, // DEPRECATED
+		firstRun:               firstRun,
+		nickname:               nickname,
+		userID:                 userID,
+		currentVersion:         currentVersion,
+		channels:               []protocol.Channel{},
+		threads:                []protocol.Message{},
+		threadReplies:          []protocol.Message{},
+		spinner:                s,
+		newMessageIDs:          make(map[uint64]bool),
+		threadRepliesCache:     make(map[uint64][]protocol.Message),
+		threadHighestMessageID: make(map[uint64]uint64),
+		pingInterval:           18 * time.Second, // Send ping every 18 seconds (3 pings within 60s timeout)
+		lastPingSent:           time.Now(),
 	}
 
 	// Initialize command registry
@@ -195,10 +190,7 @@ func (m *Model) registerCommands() {
 		Name("Quit").
 		Help("Quit the application").
 		Global().
-		When(func(i interface{}) bool {
-			model := i.(*Model)
-			return model.currentView != ViewCompose && model.currentView != ViewNicknameSetup
-		}).
+		InModals(modal.ModalNone). // Only available when no modal is open
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			return i, tea.Quit
 		}).
@@ -212,10 +204,6 @@ func (m *Model) registerCommands() {
 		Help("Toggle help screen").
 		Global().
 		InModals(modal.ModalNone). // Only available when no modal is open
-		When(func(i interface{}) bool {
-			model := i.(*Model)
-			return model.currentView != ViewCompose && model.currentView != ViewNicknameSetup
-		}).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
 			// Generate help content for current context
@@ -263,6 +251,15 @@ func (m *Model) registerCommands() {
 				model.markCurrentMessageAsRead()
 				model.threadViewport.SetContent(model.buildThreadContent())
 				model.scrollToKeepCursorVisible()
+
+				// Load more replies if needed
+				if !model.loadingMoreReplies && !model.allRepliesLoaded && len(model.threadReplies) > 0 {
+					remainingReplies := len(model.threadReplies) - model.replyCursor
+					if remainingReplies <= 3 {
+						model.loadingMoreReplies = true
+						return model, model.loadMoreReplies()
+					}
+				}
 			}
 			return model, nil
 		}).
@@ -286,19 +283,16 @@ func (m *Model) registerCommands() {
 				parentID = model.threadReplies[model.replyCursor-1].ID
 			}
 
+			// Store parent ID for when compose modal sends
+			model.composeParentID = &parentID
+
 			if model.nickname == "" {
-				model.composeMode = ComposeModeReply
-				model.composeParentID = &parentID
-				model.composeInput = ""
-				model.returnToView = ViewCompose
-				model.currentView = ViewNicknameSetup
+				// Need to set nickname first
+				model.showNicknameSetupModal()
 				return model, nil
 			}
 
-			model.currentView = ViewCompose
-			model.composeMode = ComposeModeReply
-			model.composeParentID = &parentID
-			model.composeInput = ""
+			model.showComposeModal(modal.ComposeModeReply, "")
 			return model, nil
 		}).
 		Priority(20).
@@ -334,11 +328,12 @@ func (m *Model) registerCommands() {
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
 			msg, _ := model.selectedMessage()
-			model.currentView = ViewCompose
-			model.composeMode = ComposeModeEdit
-			model.composeInput = msg.Content
+
+			// Store message ID for when compose modal sends
 			model.composeMessageID = &msg.ID
 			model.composeParentID = nil
+
+			model.showComposeModal(modal.ComposeModeEdit, msg.Content)
 			return model, nil
 		}).
 		Priority(30).
@@ -419,6 +414,8 @@ func (m *Model) registerCommands() {
 			model.replyCursor = 0
 			model.confirmingDelete = false
 			model.pendingDeleteID = 0
+			model.allRepliesLoaded = false
+			model.loadingMoreReplies = false
 			return model, cmd
 		}).
 		Priority(800).
@@ -486,12 +483,32 @@ func (m *Model) registerCommands() {
 				model.replyCursor = 0
 				model.newMessageIDs = make(map[uint64]bool)
 				model.confirmingDelete = false
-				model.threadViewport.SetContent(model.buildThreadContent())
-				model.threadViewport.GotoTop()
-				return model, tea.Batch(
-					model.requestThreadReplies(selectedThread.ID),
-					model.sendSubscribeThread(selectedThread.ID),
-				)
+				model.allRepliesLoaded = false // Reset pagination state
+
+				// Check if we have cached data
+				var cmd tea.Cmd
+				if cachedReplies, ok := model.threadRepliesCache[selectedThread.ID]; ok {
+					// Load cached replies immediately
+					model.threadReplies = cachedReplies
+					model.threadViewport.GotoTop()
+
+					// Fetch only new messages since last cache (no loading indicator for incremental)
+					highestID := model.threadHighestMessageID[selectedThread.ID]
+					cmd = tea.Batch(
+						model.requestThreadRepliesAfter(selectedThread.ID, highestID),
+						model.sendSubscribeThread(selectedThread.ID),
+					)
+				} else {
+					// No cache, fetch all from server
+					model.loadingThreadReplies = true
+					model.threadViewport.SetContent(model.buildThreadContent()) // Show initial spinner
+					model.threadViewport.GotoTop()
+					cmd = tea.Batch(
+						model.requestThreadReplies(selectedThread.ID),
+						model.sendSubscribeThread(selectedThread.ID),
+					)
+				}
+				return model, cmd
 			}
 			return model, nil
 		}).
@@ -506,18 +523,17 @@ func (m *Model) registerCommands() {
 		InViews(int(ViewThreadList)).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
+
+			// Clear parent ID for new thread
+			model.composeParentID = nil
+
 			if model.nickname == "" {
-				model.composeMode = ComposeModeNewThread
-				model.composeInput = ""
-				model.composeParentID = nil
-				model.returnToView = ViewCompose
-				model.currentView = ViewNicknameSetup
+				// Need to set nickname first
+				model.showNicknameSetupModal()
 				return model, nil
 			}
-			model.currentView = ViewCompose
-			model.composeMode = ComposeModeNewThread
-			model.composeInput = ""
-			model.composeParentID = nil
+
+			model.showComposeModal(modal.ComposeModeNewThread, "")
 			return model, nil
 		}).
 		Priority(60).
@@ -532,6 +548,9 @@ func (m *Model) registerCommands() {
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
 			if model.currentChannel != nil {
+				model.loadingThreadList = true
+				model.threads = []protocol.Message{} // Clear threads
+				model.threadListViewport.SetContent(model.buildThreadListContent()) // Show initial spinner
 				return model, model.requestThreadList(model.currentChannel.ID)
 			}
 			return model, nil
@@ -614,6 +633,9 @@ func (m *Model) registerCommands() {
 				model.currentView = ViewThreadList
 				model.loadingMore = false
 				model.allThreadsLoaded = false
+				model.loadingThreadList = true
+				model.threads = []protocol.Message{} // Clear threads
+				model.threadListViewport.SetContent(model.buildThreadListContent()) // Show initial spinner
 				return model, tea.Batch(
 					model.sendJoinChannel(selectedChannel.ID),
 					model.requestThreadList(selectedChannel.ID),
@@ -633,150 +655,29 @@ func (m *Model) registerCommands() {
 		InViews(int(ViewChannelList)).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
+			model.loadingChannels = true
 			return model, model.requestChannelList()
 		}).
 		Priority(70).
 		Build())
 
-	// === Password Modal Commands ===
-
-	// Submit password (Enter)
+	// Create new channel
 	m.commands.Register(commands.NewCommand().
-		Keys("enter").
-		Name("Authenticate").
-		Help("Submit password").
-		Global().
+		Keys("c").
+		Name("Create Channel").
+		Help("Create a new channel (registered users only)").
+		InViews(int(ViewChannelList)).
 		When(func(i interface{}) bool {
 			model := i.(*Model)
-			return model.authState == AuthStatePrompting &&
-			       time.Now().After(model.authCooldownUntil)
+			// Only allow channel creation for registered users
+			return model.authState == AuthStateAuthenticated && model.userID != nil
 		}).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
-			if len(model.passwordInput) == 0 {
-				model.authErrorMessage = "Password cannot be empty"
-				return model, nil
-			}
-			model.authState = AuthStateAuthenticating
-			model.authErrorMessage = ""
-			passwordCopy := make([]byte, len(model.passwordInput))
-			copy(passwordCopy, model.passwordInput)
-			return model, model.sendAuthRequest(passwordCopy)
-		}).
-		Priority(1).
-		Build())
-
-	// Cancel password modal (ESC)
-	m.commands.Register(commands.NewCommand().
-		Keys("esc").
-		Name("Cancel").
-		Help("Browse anonymously").
-		Global().
-		When(func(i interface{}) bool {
-			model := i.(*Model)
-			return model.authState == AuthStatePrompting
-		}).
-		Do(func(i interface{}) (interface{}, tea.Cmd) {
-			model := i.(*Model)
-			// Clear password
-			for i := range model.passwordInput {
-				model.passwordInput[i] = 0
-			}
-			model.passwordInput = []byte{}
-			model.authState = AuthStateAnonymous
-			model.authErrorMessage = ""
-			// Set a different nickname to continue as anonymous
-			model.nickname = ""
-			model.currentView = ViewNicknameSetup
+			model.showCreateChannelModal()
 			return model, nil
 		}).
-		Priority(1).
-		Build())
-
-	// === Registration Modal Commands ===
-
-	// Tab to switch fields
-	m.commands.Register(commands.NewCommand().
-		Keys("tab").
-		Name("Next Field").
-		Help("Switch to next field").
-		Global().
-		When(func(i interface{}) bool {
-			model := i.(*Model)
-			return model.registrationMode
-		}).
-		Do(func(i interface{}) (interface{}, tea.Cmd) {
-			model := i.(*Model)
-			if model.regPasswordCursor == 0 {
-				model.regPasswordCursor = 1
-			} else {
-				model.regPasswordCursor = 0
-			}
-			return model, nil
-		}).
-		Priority(1).
-		Build())
-
-	// Submit registration (Enter)
-	m.commands.Register(commands.NewCommand().
-		Keys("enter").
-		Name("Register").
-		Help("Submit registration").
-		Global().
-		When(func(i interface{}) bool {
-			model := i.(*Model)
-			return model.registrationMode
-		}).
-		Do(func(i interface{}) (interface{}, tea.Cmd) {
-			model := i.(*Model)
-
-			// Validate password length
-			if len(model.regPasswordInput) < 8 {
-				model.regErrorMessage = "Password must be at least 8 characters"
-				return model, nil
-			}
-
-			// Validate passwords match
-			if string(model.regPasswordInput) != string(model.regConfirmInput) {
-				model.regErrorMessage = "Passwords do not match"
-				return model, nil
-			}
-
-			model.authState = AuthStateRegistering
-			model.regErrorMessage = ""
-			passwordCopy := make([]byte, len(model.regPasswordInput))
-			copy(passwordCopy, model.regPasswordInput)
-			return model, model.sendRegisterUser(passwordCopy)
-		}).
-		Priority(1).
-		Build())
-
-	// Cancel registration (ESC)
-	m.commands.Register(commands.NewCommand().
-		Keys("esc").
-		Name("Cancel").
-		Help("Cancel registration").
-		Global().
-		When(func(i interface{}) bool {
-			model := i.(*Model)
-			return model.registrationMode
-		}).
-		Do(func(i interface{}) (interface{}, tea.Cmd) {
-			model := i.(*Model)
-			// Clear password inputs
-			for i := range model.regPasswordInput {
-				model.regPasswordInput[i] = 0
-			}
-			for i := range model.regConfirmInput {
-				model.regConfirmInput[i] = 0
-			}
-			model.regPasswordInput = []byte{}
-			model.regConfirmInput = []byte{}
-			model.registrationMode = false
-			model.regErrorMessage = ""
-			return model, nil
-		}).
-		Priority(1).
+		Priority(80).
 		Build())
 
 	// Ctrl+R to open registration modal
@@ -787,18 +688,54 @@ func (m *Model) registerCommands() {
 		Global().
 		When(func(i interface{}) bool {
 			model := i.(*Model)
-			// Allow registration for any anonymous user with a nickname
+			// Allow registration for anonymous users with a nickname that is NOT already registered
 			return model.authState == AuthStateAnonymous &&
 			       model.nickname != "" &&
-			       !model.registrationMode
+			       !model.nicknameIsRegistered
 		}).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
-			model.registrationMode = true
-			model.regPasswordInput = []byte{}
-			model.regConfirmInput = []byte{}
-			model.regPasswordCursor = 0
-			model.regErrorMessage = ""
+			model.showRegistrationModal()
+			return model, nil
+		}).
+		Priority(10).
+		Build())
+
+	// Ctrl+S to sign in (when nickname is registered)
+	m.commands.Register(commands.NewCommand().
+		Keys("ctrl+s").
+		Name("Sign In").
+		Help("Sign in with password").
+		Global().
+		When(func(i interface{}) bool {
+			model := i.(*Model)
+			// Allow sign-in for anonymous users with a registered nickname
+			return model.authState != AuthStateAuthenticated &&
+			       model.nickname != "" &&
+			       model.nicknameIsRegistered
+		}).
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			model.showPasswordModal()
+			return model, nil
+		}).
+		Priority(10).
+		Build())
+
+	// Ctrl+A to go anonymous
+	m.commands.Register(commands.NewCommand().
+		Keys("ctrl+a").
+		Name("Go Anonymous").
+		Help("Post anonymously").
+		Global().
+		When(func(i interface{}) bool {
+			model := i.(*Model)
+			// Only available when authenticated
+			return model.authState == AuthStateAuthenticated
+		}).
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			model.showGoAnonymousModal()
 			return model, nil
 		}).
 		Priority(10).
@@ -813,67 +750,175 @@ func (m *Model) registerCommands() {
 		When(func(i interface{}) bool {
 			model := i.(*Model)
 			// Allow nickname change when user has a nickname set
-			return model.nickname != "" &&
-			       !model.nicknameChangeMode &&
-			       !model.registrationMode &&
-			       model.authState != AuthStatePrompting
+			return model.nickname != ""
 		}).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
-			model.nicknameChangeMode = true
-			model.nicknameChangeInput = model.nickname // Pre-fill with current nickname
-			model.nicknameChangeError = ""
+			model.showNicknameChangeModal()
 			return model, nil
 		}).
 		Priority(10).
 		Build())
+}
 
-	// Submit nickname change (Enter)
-	m.commands.Register(commands.NewCommand().
-		Keys("enter").
-		Name("Change Nickname").
-		Help("Submit nickname change").
-		Global().
-		When(func(i interface{}) bool {
-			model := i.(*Model)
-			return model.nicknameChangeMode
-		}).
-		Do(func(i interface{}) (interface{}, tea.Cmd) {
-			model := i.(*Model)
-			if model.nicknameChangeInput == "" {
-				model.nicknameChangeError = "Nickname cannot be empty"
-				return model, nil
-			}
-			if model.nicknameChangeInput == model.nickname {
-				model.nicknameChangeError = "That's already your nickname"
-				return model, nil
-			}
-			model.nicknameChangeMode = false
-			model.nickname = model.nicknameChangeInput
-			return model, model.sendSetNickname()
-		}).
-		Priority(1).
-		Build())
+// Modal helper methods
 
-	// Cancel nickname change (ESC)
-	m.commands.Register(commands.NewCommand().
-		Keys("esc").
-		Name("Cancel").
-		Help("Cancel nickname change").
-		Global().
-		When(func(i interface{}) bool {
-			model := i.(*Model)
-			return model.nicknameChangeMode
-		}).
-		Do(func(i interface{}) (interface{}, tea.Cmd) {
-			model := i.(*Model)
-			model.nicknameChangeMode = false
-			model.nicknameChangeInput = ""
-			model.nicknameChangeError = ""
-			return model, nil
-		}).
-		Priority(1).
-		Build())
+// showPasswordModal displays the password authentication modal
+func (m *Model) showPasswordModal() {
+	passwordModal := modal.NewPasswordAuthModal(
+		m.nickname,
+		m.authErrorMessage,
+		m.authCooldownUntil,
+		false, // not authenticating initially
+		func(password []byte) tea.Cmd {
+			m.authState = AuthStateAuthenticating
+			m.authErrorMessage = ""
+			return m.sendAuthRequest(password)
+		},
+		func() tea.Cmd {
+			// Browse anonymously - show nickname setup to pick a different name
+			m.authState = AuthStateAnonymous
+			m.nickname = ""
+			m.showNicknameSetupModal()
+			return nil
+		},
+	)
+	m.modalStack.Push(passwordModal)
+}
+
+// showRegistrationModal displays the registration modal
+func (m *Model) showRegistrationModal() {
+	registrationModal := modal.NewRegistrationModal(
+		m.nickname,
+		func(password []byte) tea.Cmd {
+			m.authState = AuthStateRegistering
+			return m.sendRegisterUser(password)
+		},
+		func() tea.Cmd {
+			// Canceled registration
+			return nil
+		},
+	)
+	m.modalStack.Push(registrationModal)
+}
+
+// showNicknameChangeModal displays the nickname change modal
+func (m *Model) showNicknameChangeModal() {
+	nicknameChangeModal := modal.NewNicknameChangeModal(
+		m.nickname,
+		func(newNickname string) tea.Cmd {
+			// Don't modify m.nickname here due to bubbletea value semantics
+			// It will be updated in handleNicknameResponse when server confirms
+			m.state.SetLastNickname(newNickname)
+			return tea.Batch(
+				m.sendSetNicknameWith(newNickname),
+				m.sendGetUserInfo(newNickname),
+			)
+		},
+		func() tea.Cmd {
+			// Canceled nickname change
+			return nil
+		},
+	)
+	m.modalStack.Push(nicknameChangeModal)
+}
+
+// showGoAnonymousModal displays a modal to go anonymous (for registered users)
+func (m *Model) showGoAnonymousModal() {
+	// Create a modal asking for new anonymous nickname
+	nicknameModal := modal.NewNicknameChangeModal(
+		"",  // Don't pre-fill with current nickname
+		func(newNickname string) tea.Cmd {
+			// Clear authentication locally and change nickname
+			// Note: Don't modify m.userID/m.authState here due to bubbletea value semantics
+			// They'll be cleared in the NicknameSentMsg handler
+			m.state.SetLastNickname(newNickname)
+			return m.sendSetNicknameWithAnonymous(newNickname, true)
+		},
+		func() tea.Cmd {
+			// Canceled
+			return nil
+		},
+	)
+	m.modalStack.Push(nicknameModal)
+}
+
+// showComposeModal displays the compose modal
+func (m *Model) showComposeModal(mode modal.ComposeMode, initialContent string) {
+	composeModal := modal.NewComposeModal(
+		mode,
+		initialContent,
+		func(content string) tea.Cmd {
+			// Determine what to do based on mode
+			var cmd tea.Cmd
+			m.sendingMessage = true
+			if mode == modal.ComposeModeEdit {
+				if m.composeMessageID != nil {
+					cmd = m.sendEditMessage(*m.composeMessageID, content)
+				}
+			} else {
+				if m.currentChannel != nil {
+					cmd = m.sendPostMessage(m.currentChannel.ID, m.composeParentID, content)
+				}
+			}
+			// Clear compose state
+			m.composeInput = ""
+			m.composeMessageID = nil
+			m.composeParentID = nil
+			m.statusMessage = m.spinner.View() + " Sending..."
+			return cmd
+		},
+		func() tea.Cmd {
+			// Canceled compose
+			m.composeInput = ""
+			m.composeMessageID = nil
+			m.composeParentID = nil
+			return nil
+		},
+	)
+	m.modalStack.Push(composeModal)
+}
+
+// showNicknameSetupModal displays the nickname setup modal (first run or nickname needed)
+func (m *Model) showNicknameSetupModal() {
+	nicknameSetupModal := modal.NewNicknameSetupModal(
+		m.nickname,
+		func(nickname string) tea.Cmd {
+			m.nickname = nickname
+			m.state.SetLastNickname(nickname)
+			if m.firstRun {
+				m.state.SetFirstRunComplete()
+				m.firstRun = false
+			}
+			return tea.Batch(
+				m.sendSetNickname(),
+				m.sendGetUserInfo(nickname),
+			)
+		},
+		func() tea.Cmd {
+			// Quit if they cancel nickname setup
+			return tea.Quit
+		},
+	)
+	m.modalStack.Push(nicknameSetupModal)
+}
+
+// showCreateChannelModal displays the channel creation modal
+func (m *Model) showCreateChannelModal() {
+	createChannelModal := modal.NewCreateChannelModal(
+		func(name, displayName, description string, channelType uint8) tea.Cmd {
+			m.statusMessage = "Creating channel..."
+			return tea.Batch(
+				listenForServerFrames(m.conn),
+				m.sendCreateChannel(name, displayName, description, channelType),
+			)
+		},
+		func() tea.Cmd {
+			// Canceled channel creation
+			return nil
+		},
+	)
+	m.modalStack.Push(createChannelModal)
 }
 
 // Message types for bubbletea
@@ -921,11 +966,13 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		listenForServerFrames(m.conn),
 		tickCmd(),
+		m.spinner.Tick,
 		checkForUpdates(m.currentVersion), // Check for updates in background
 	}
 
 	// If we're starting directly at channel list (not first run), request channels
 	if m.currentView == ViewChannelList {
+		m.loadingChannels = true
 		cmds = append(cmds, m.requestChannelList())
 		// Also send nickname if we have one
 		if m.nickname != "" {

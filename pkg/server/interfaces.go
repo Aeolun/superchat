@@ -13,8 +13,8 @@ type DatabaseStore interface {
 	SubchannelExists(subchannelID int64) (bool, error)
 
 	// Message operations
-	ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64) ([]*database.Message, error)
-	ListThreadReplies(parentID uint64) ([]*database.Message, error)
+	ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64, afterID *uint64) ([]*database.Message, error)
+	ListThreadReplies(parentID uint64, afterID *uint64) ([]*database.Message, error)
 	PostMessage(channelID int64, subchannelID *int64, parentID *int64, authorUserID *int64, authorNickname, content string) (int64, *database.Message, error)
 	GetMessage(messageID int64) (*database.Message, error)
 	MessageExists(messageID int64) (bool, error)

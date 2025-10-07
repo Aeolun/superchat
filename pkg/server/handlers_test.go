@@ -54,24 +54,11 @@ func testServer(t *testing.T) (*Server, *database.DB) {
 
 // createTestChannel helper - creates a channel via database
 func createTestChannel(t *testing.T, db *database.DB, name, displayName string) int64 {
-	err := db.CreateChannel(name, displayName, nil, 1, 168, nil)
+	channelID, err := db.CreateChannel(name, displayName, nil, 1, 168, nil)
 	if err != nil {
 		t.Fatalf("Failed to create test channel: %v", err)
 	}
-
-	// Get the created channel ID
-	channels, err := db.ListChannels()
-	if err != nil {
-		t.Fatalf("Failed to list channels: %v", err)
-	}
-
-	for _, ch := range channels {
-		if ch.Name == name {
-			return ch.ID
-		}
-	}
-	t.Fatalf("Failed to find created channel %s", name)
-	return 0
+	return channelID
 }
 
 // postTestMessage helper - posts a message via database

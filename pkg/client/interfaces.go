@@ -25,6 +25,11 @@ type ConnectionInterface interface {
 
 	// Configuration
 	DisableAutoReconnect()
+	SetThrottle(bytesPerSec int)
+
+	// Traffic statistics
+	GetBytesSent() uint64
+	GetBytesReceived() uint64
 }
 
 // StateInterface defines the interface for client state persistence

@@ -334,3 +334,225 @@ func TestEncodeMessageError(t *testing.T) {
 		assert.Equal(t, ErrFrameTooLarge, err)
 	})
 }
+
+func TestAuthRequestDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &AuthRequestMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing password", func(t *testing.T) {
+		msg := &AuthRequestMessage{}
+		// Nickname but no password
+		payload := []byte{0x00, 0x05, 'a', 'l', 'i', 'c', 'e'}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestAuthResponseDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &AuthResponseMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing user_id when success", func(t *testing.T) {
+		msg := &AuthResponseMessage{}
+		// Success=true but no user_id
+		payload := []byte{0x01}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing message", func(t *testing.T) {
+		msg := &AuthResponseMessage{}
+		// Success=false but no message
+		payload := []byte{0x00}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestRegisterUserDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &RegisterUserMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - partial string", func(t *testing.T) {
+		msg := &RegisterUserMessage{}
+		// String length says 10 bytes but only provide 2
+		payload := []byte{0x00, 0x0A, 0x41, 0x42}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestRegisterResponseDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &RegisterResponseMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing user_id when success", func(t *testing.T) {
+		msg := &RegisterResponseMessage{}
+		// Success=true but no user_id
+		payload := []byte{0x01}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestCreateChannelDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &CreateChannelMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing display_name", func(t *testing.T) {
+		msg := &CreateChannelMessage{}
+		// Name but no display_name
+		payload := []byte{0x00, 0x07, 'g', 'e', 'n', 'e', 'r', 'a', 'l'}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing optional description", func(t *testing.T) {
+		msg := &CreateChannelMessage{}
+		// Name + display_name but missing optional description
+		payload := []byte{0x00, 0x07, 'g', 'e', 'n', 'e', 'r', 'a', 'l', 0x00, 0x08, '#', 'g', 'e', 'n', 'e', 'r', 'a', 'l'}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestChannelCreatedDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &ChannelCreatedMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - success=true but missing channel_id", func(t *testing.T) {
+		msg := &ChannelCreatedMessage{}
+		// Success=true but no channel_id
+		payload := []byte{0x01}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - success=false but missing message", func(t *testing.T) {
+		msg := &ChannelCreatedMessage{}
+		// Success=false but no message
+		payload := []byte{0x00}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestGetUserInfoDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &GetUserInfoMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - partial string", func(t *testing.T) {
+		msg := &GetUserInfoMessage{}
+		// String length says 10 bytes but only provide 2
+		payload := []byte{0x00, 0x0A, 0x41, 0x42}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestUserInfoDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &UserInfoMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing is_registered", func(t *testing.T) {
+		msg := &UserInfoMessage{}
+		// Nickname but no is_registered
+		payload := []byte{0x00, 0x05, 'a', 'l', 'i', 'c', 'e'}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing user_id optional", func(t *testing.T) {
+		msg := &UserInfoMessage{}
+		// Nickname + is_registered but missing optional user_id
+		payload := []byte{0x00, 0x05, 'a', 'l', 'i', 'c', 'e', 0x01}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing online", func(t *testing.T) {
+		msg := &UserInfoMessage{}
+		// Nickname + is_registered + optional(false) but missing online
+		payload := []byte{0x00, 0x05, 'a', 'l', 'i', 'c', 'e', 0x01, 0x00}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestListUsersDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &ListUsersMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - partial limit", func(t *testing.T) {
+		msg := &ListUsersMessage{}
+		payload := []byte{0x00} // Only 1 byte of uint16
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestUserListDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &UserListMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - incomplete user count", func(t *testing.T) {
+		msg := &UserListMessage{}
+		payload := []byte{0x00} // Only 1 byte of uint16
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - incomplete user data", func(t *testing.T) {
+		msg := &UserListMessage{}
+		// Count says 1 user but data is incomplete
+		payload := []byte{0x00, 0x01, 0x00, 0x05, 'a', 'l', 'i'}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing is_registered", func(t *testing.T) {
+		msg := &UserListMessage{}
+		// Count says 1 user, has nickname but missing is_registered
+		payload := []byte{0x00, 0x01, 0x00, 0x05, 'a', 'l', 'i', 'c', 'e'}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing user_id optional", func(t *testing.T) {
+		msg := &UserListMessage{}
+		// Count says 1 user, has nickname + is_registered but missing optional user_id
+		payload := []byte{0x00, 0x01, 0x00, 0x05, 'a', 'l', 'i', 'c', 'e', 0x01}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
