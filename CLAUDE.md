@@ -47,6 +47,73 @@ Before making ANY changes to the protocol (adding fields, changing message types
 
 When user asks to update the "splash" or "welcome" screen, confirm which one they mean!
 
+## UI Layout Guidelines
+
+**ALWAYS use flexbox layouts from `github.com/76creates/stickers/flexbox` for any UI layout work.**
+
+There is no downside to using flexbox everywhere - it provides:
+- Automatic alignment and spacing
+- Consistent sizing behavior
+- Proper handling of terminal dimensions
+- Clean, maintainable code
+
+**Example: Modal with flexbox layout**
+
+```go
+import "github.com/76creates/stickers/flexbox"
+
+func (m *MyModal) Render(width, height int) string {
+	// Create vertical layout
+	layout := flexbox.New(width, height)
+
+	// Row 1: Title (fixed height)
+	titleRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			lipgloss.NewStyle().Bold(true).Render("My Modal Title"),
+		),
+	)
+
+	// Row 2: Content area (flexible height)
+	contentHeight := height - 4 // Subtract title + footer + spacing
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight).SetContent(buildContent()),
+	)
+
+	// Row 3: Footer (fixed height)
+	footerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			lipgloss.NewStyle().Foreground(lipgloss.Color("240")).
+				Render("[Enter] Confirm  [Esc] Cancel"),
+		),
+	)
+
+	layout.AddRows([]*flexbox.Row{titleRow, contentRow, footerRow})
+	return layout.Render()
+}
+```
+
+**Horizontal layouts (multi-column)**
+
+```go
+// Create horizontal layout for side-by-side content
+contentLayout := flexbox.NewHorizontal(width, height)
+
+// Column 1: Sidebar (ratio 1 = 25%)
+sidebarCol := contentLayout.NewColumn().AddCells(
+	flexbox.NewCell(1, 1).SetContent(sidebarContent),
+)
+
+// Column 2: Main content (ratio 3 = 75%)
+mainCol := contentLayout.NewColumn().AddCells(
+	flexbox.NewCell(1, 1).SetContent(mainContent),
+)
+
+contentLayout.AddColumns([]*flexbox.Column{sidebarCol, mainCol})
+return contentLayout.Render()
+```
+
+See `pkg/client/ui/view/channel_list.go` for a complete real-world example.
+
 ## Build Commands
 
 **IMPORTANT: Always use `make build` to build both client and server together.**
