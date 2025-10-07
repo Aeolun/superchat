@@ -165,9 +165,9 @@ func (m *SSHKeyManagerModal) renderList() string {
 		}
 	}
 
-	// Create flexbox layout
-	modalWidth := 74
-	modalHeight := 18
+	// Create flexbox layout - responsive to terminal size
+	modalWidth := min(74, m.width-4)
+	modalHeight := min(18, m.height-4)
 	layout := flexbox.New(modalWidth, modalHeight)
 
 	// Row 1: Title
@@ -220,8 +220,9 @@ func formatLastUsed(lastUsedAt *time.Time) string {
 }
 
 func (m *SSHKeyManagerModal) renderAddKey() string {
-	modalWidth := 74
-	modalHeight := 20
+	// Responsive to terminal size
+	modalWidth := min(74, m.width-4)
+	modalHeight := min(20, m.height-4)
 	layout := flexbox.New(modalWidth, modalHeight)
 
 	// Row 1: Title
@@ -307,8 +308,9 @@ func (m *SSHKeyManagerModal) renderAddKey() string {
 }
 
 func (m *SSHKeyManagerModal) renderEditLabel() string {
-	modalWidth := 54
-	modalHeight := 10
+	// Responsive to terminal size
+	modalWidth := min(54, m.width-4)
+	modalHeight := min(10, m.height-4)
 	layout := flexbox.New(modalWidth, modalHeight)
 
 	// Row 1: Title
@@ -365,8 +367,9 @@ func (m *SSHKeyManagerModal) renderEditLabel() string {
 }
 
 func (m *SSHKeyManagerModal) renderDeleteConfirm() string {
-	modalWidth := 54
-	modalHeight := 12
+	// Responsive to terminal size
+	modalWidth := min(54, m.width-4)
+	modalHeight := min(12, m.height-4)
 	layout := flexbox.New(modalWidth, modalHeight)
 
 	// Row 1: Title
