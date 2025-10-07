@@ -38,11 +38,12 @@ Download binaries from [GitHub Releases](https://github.com/aeolun/superchat/rel
 # Connect to the default server (superchat.win)
 sc
 
-# Connect to a custom server
-sc --server yourserver.com:6465
+# Connect to a custom server (sc:// protocol, default port 6465)
+sc --server sc://yourserver.com
 
-# Connect over the SSH transport (defaults to port 6466)
-sc --server ssh://user@yourserver.com:6466
+# Connect over SSH (defaults to port 6466)
+# SSH connection automatically signs you in and registers your SSH key
+sc --server ssh://user@yourserver.com
 # On first SSH connect you'll be asked to verify and accept the server's host key
 
 # Check version
@@ -70,9 +71,11 @@ scd --version
 
 ## Configuration
 
+### Client Configuration
+
 Client configuration is stored at `~/.config/superchat/config.toml` (respects `XDG_CONFIG_HOME`).
 
-Example configuration:
+Example client configuration:
 
 ```toml
 [connection]

@@ -65,8 +65,12 @@ curl -fsSL https://raw.githubusercontent.com/aeolun/superchat/main/install.sh | 
             <pre><code># Connect to the default server (superchat.win)
 sc
 
-# Or specify a different server
-sc --server yourserver.com:6465
+# Or specify a different server (sc:// protocol, default port 6465)
+sc --server sc://yourserver.com
+
+# Or connect over SSH (defaults to port 6466)
+# SSH connection automatically signs you in and registers your SSH key
+sc --server ssh://user@yourserver.com
 
 # Or run your own server
 scd --port 6465</code></pre>

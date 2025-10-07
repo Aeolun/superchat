@@ -13,6 +13,27 @@ services:
     restart: unless-stopped
     environment:
       - TZ=UTC
+      # Configuration overrides (optional)
+      # - SUPERCHAT_SERVER_TCP_PORT=6465
+      # - SUPERCHAT_SERVER_SSH_PORT=6466
+      # - SUPERCHAT_LIMITS_MAX_MESSAGE_LENGTH=4096
+      # - SUPERCHAT_LIMITS_MESSAGE_RATE_LIMIT=10
+      # - SUPERCHAT_RETENTION_DEFAULT_RETENTION_HOURS=168
+      # - SUPERCHAT_DISCOVERY_SERVER_NAME=My SuperChat Server
+      # - SUPERCHAT_DISCOVERY_SERVER_DESCRIPTION=Welcome to my community!
+      # - SUPERCHAT_DISCOVERY_PUBLIC_HOSTNAME=superchat.example.com
+      # - SUPERCHAT_DISCOVERY_MAX_USERS=100
+
+  website:
+    image: aeolun/superchat-website:latest
+    build:
+      context: ./website
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80" # Nginx serves on port 80 internally
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
 
 volumes:
   superchat-data:

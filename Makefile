@@ -1,4 +1,4 @@
-.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean build run-server run-client run-website docker-build docker-run docker-push
+.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean build run-server run-client run-website docker-build docker-build-push docker-build-server docker-build-website docker-run docker-push docker-stop
 
 # Run all tests
 test:
@@ -90,13 +90,25 @@ run-website:
 # Docker commands
 docker-build:
 	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
-	echo "Building Docker image with version: $$VERSION"; \
-	depot build --platform linux/amd64,linux/arm64 --build-arg VERSION=$$VERSION -t aeolun/superchat:latest --load .
+	echo "Building Docker images with version: $$VERSION"; \
+	VERSION=$$VERSION depot bake --load
 
 docker-build-push:
 	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
-	echo "Building and pushing Docker image with version: $$VERSION"; \
-	depot build --platform linux/amd64,linux/arm64 --build-arg VERSION=$$VERSION -t aeolun/superchat:latest --push .
+	echo "Building and pushing Docker images with version: $$VERSION"; \
+	VERSION=$$VERSION depot bake --push
+
+# Build only server image
+docker-build-server:
+	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
+	echo "Building server Docker image with version: $$VERSION"; \
+	VERSION=$$VERSION depot bake --load server
+
+# Build only website image
+docker-build-website:
+	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
+	echo "Building website Docker image with version: $$VERSION"; \
+	VERSION=$$VERSION depot bake --load website
 
 docker-run:
 	docker run -d \
