@@ -18,6 +18,7 @@ SuperChat is a terminal-based threaded chat application with a custom binary pro
 Before making ANY changes to the protocol (adding fields, changing message types, modifying encoding):
 
 1. **FIRST**: Update `docs/PROTOCOL.md` with the complete specification
+   - **CHECK FOR DUPLICATES!** Search PROTOCOL.md for your desired message type code (e.g., `0x1C`) to ensure it's not already in use
    - Document the exact wire format
    - Specify field types, sizes, and encoding
    - Include examples of the binary layout
@@ -140,16 +141,20 @@ go run ./cmd/client
 ## Logging
 
 **Server logs:**
-- `server.log` - All server activity (connections, messages, errors). Truncated on each server startup.
-- `errors.log` - Error-level logs only (append mode, persists across restarts).
+- `server.log` - All server activity (connections, messages, errors). Truncated on each server startup. Located in `~/.local/share/superchat/` or `$XDG_DATA_HOME/superchat/`.
+- `errors.log` - Error-level logs only (append mode, persists across restarts). Located in `~/.local/share/superchat/` or `$XDG_DATA_HOME/superchat/`.
+- `debug.log` - Server debug logs (when enabled). Located in `~/.local/share/superchat/` or `$XDG_DATA_HOME/superchat/`.
 
 **Load test logs:**
-- `loadtest.log` - All load test output (same as console output). Truncated on each test run.
+- `loadtest.log` - All load test output (same as console output). Truncated on each test run. Written to the current working directory.
 
 **Client logs:**
-- Client uses bubbletea TUI and does not write to log files by default.
+- `debug.log` - Client debug logs (located in `~/.config/superchat-client/` or `$XDG_CONFIG_HOME/superchat-client/`). Append mode, persists across restarts.
 
-All log files (*.log) are git-ignored and written to the current working directory.
+**Notes:**
+- Server log files are written to the data directory (`~/.local/share/superchat/`) and are git-ignored.
+- Loadtest log files are written to the current working directory and are git-ignored.
+- Client debug.log is written to the config directory and is also git-ignored.
 
 ## Testing
 

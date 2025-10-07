@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"io"
+	"log"
 	"time"
 
 	"github.com/aeolun/superchat/pkg/client"
@@ -13,13 +15,15 @@ func NewTestModel() Model {
 	conn := client.NewMockConnection("localhost:6465")
 	conn.Connect()
 	state := client.NewMockState()
+	logger := log.New(io.Discard, "", 0) // Discard logs in tests
 
-	return NewModel(conn, state, "0.0.0-test")
+	return NewModel(conn, state, "0.0.0-test", false, 0, logger)
 }
 
 // NewTestModelWithMocks creates a Model with provided mocks
 func NewTestModelWithMocks(conn client.ConnectionInterface, state client.StateInterface) Model {
-	return NewModel(conn, state, "0.0.0-test")
+	logger := log.New(io.Discard, "", 0) // Discard logs in tests
+	return NewModel(conn, state, "0.0.0-test", false, 0, logger)
 }
 
 // SetupTestModelWithDimensions creates a test model with window dimensions set

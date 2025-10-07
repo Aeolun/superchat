@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -15,6 +16,7 @@ type TOMLConfig struct {
 	Limits    LimitsSection    `toml:"limits"`
 	Retention RetentionSection `toml:"retention"`
 	Channels  ChannelsSection  `toml:"channels"`
+	Discovery DiscoverySection `toml:"discovery"`
 }
 
 type ServerSection struct {
@@ -46,6 +48,14 @@ type SeedChannel struct {
 	Description string `toml:"description"`
 }
 
+type DiscoverySection struct {
+	DirectoryEnabled bool   `toml:"directory_enabled"`
+	PublicHostname   string `toml:"public_hostname"`
+	ServerName       string `toml:"server_name"`
+	ServerDescription string `toml:"server_description"`
+	MaxUsers         int    `toml:"max_users"`
+}
+
 // DefaultTOMLConfig returns the default TOML configuration
 func DefaultTOMLConfig() TOMLConfig {
 	return TOMLConfig{
@@ -74,10 +84,18 @@ func DefaultTOMLConfig() TOMLConfig {
 				{Name: "feedback", Description: "Bug reports and feature requests"},
 			},
 		},
+		Discovery: DiscoverySection{
+			DirectoryEnabled: true,
+			PublicHostname:   "", // Auto-detect if empty
+			ServerName:       "SuperChat Server",
+			ServerDescription: "A SuperChat community server",
+			MaxUsers:         0, // 0 = unlimited
+		},
 	}
 }
 
-// LoadConfig loads configuration from a TOML file, creates default if not found
+// LoadConfig loads configuration from a TOML file, creates default if not found,
+// and applies environment variable overrides
 func LoadConfig(path string) (TOMLConfig, error) {
 	// Expand ~ in path
 	if strings.HasPrefix(path, "~/") {
@@ -95,8 +113,10 @@ func LoadConfig(path string) (TOMLConfig, error) {
 		if err := writeDefaultConfig(path, config); err != nil {
 			// If we can't write, just return defaults without error
 			// (might be a permissions issue, but we can still run)
+			config = applyEnvOverrides(config)
 			return config, nil
 		}
+		config = applyEnvOverrides(config)
 		return config, nil
 	}
 
@@ -106,7 +126,95 @@ func LoadConfig(path string) (TOMLConfig, error) {
 		return TOMLConfig{}, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	// Apply environment variable overrides
+	config = applyEnvOverrides(config)
+
 	return config, nil
+}
+
+// applyEnvOverrides applies environment variable overrides to the config
+// Environment variables follow the pattern: SUPERCHAT_SECTION_KEY
+// Example: SUPERCHAT_SERVER_TCP_PORT=8080
+func applyEnvOverrides(config TOMLConfig) TOMLConfig {
+	// Server section
+	if val := os.Getenv("SUPERCHAT_SERVER_TCP_PORT"); val != "" {
+		if port, err := strconv.Atoi(val); err == nil {
+			config.Server.TCPPort = port
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_SERVER_SSH_PORT"); val != "" {
+		if port, err := strconv.Atoi(val); err == nil {
+			config.Server.SSHPort = port
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_SERVER_SSH_HOST_KEY"); val != "" {
+		config.Server.SSHHostKey = val
+	}
+	if val := os.Getenv("SUPERCHAT_SERVER_DATABASE_PATH"); val != "" {
+		config.Server.DatabasePath = val
+	}
+
+	// Limits section
+	if val := os.Getenv("SUPERCHAT_LIMITS_MAX_CONNECTIONS_PER_IP"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			config.Limits.MaxConnectionsPerIP = limit
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_LIMITS_MESSAGE_RATE_LIMIT"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			config.Limits.MessageRateLimit = limit
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_LIMITS_MAX_MESSAGE_LENGTH"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			config.Limits.MaxMessageLength = limit
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_LIMITS_MAX_NICKNAME_LENGTH"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			config.Limits.MaxNicknameLength = limit
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_LIMITS_SESSION_TIMEOUT_SECONDS"); val != "" {
+		if timeout, err := strconv.Atoi(val); err == nil {
+			config.Limits.SessionTimeoutSeconds = timeout
+		}
+	}
+
+	// Retention section
+	if val := os.Getenv("SUPERCHAT_RETENTION_DEFAULT_RETENTION_HOURS"); val != "" {
+		if hours, err := strconv.Atoi(val); err == nil {
+			config.Retention.DefaultRetentionHours = hours
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_RETENTION_CLEANUP_INTERVAL_MINUTES"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil {
+			config.Retention.CleanupIntervalMinutes = minutes
+		}
+	}
+
+	// Discovery section
+	if val := os.Getenv("SUPERCHAT_DISCOVERY_DIRECTORY_ENABLED"); val != "" {
+		if enabled, err := strconv.ParseBool(val); err == nil {
+			config.Discovery.DirectoryEnabled = enabled
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_DISCOVERY_PUBLIC_HOSTNAME"); val != "" {
+		config.Discovery.PublicHostname = val
+	}
+	if val := os.Getenv("SUPERCHAT_DISCOVERY_SERVER_NAME"); val != "" {
+		config.Discovery.ServerName = val
+	}
+	if val := os.Getenv("SUPERCHAT_DISCOVERY_SERVER_DESCRIPTION"); val != "" {
+		config.Discovery.ServerDescription = val
+	}
+	if val := os.Getenv("SUPERCHAT_DISCOVERY_MAX_USERS"); val != "" {
+		if maxUsers, err := strconv.Atoi(val); err == nil {
+			config.Discovery.MaxUsers = maxUsers
+		}
+	}
+
+	return config
 }
 
 // writeDefaultConfig writes the default config to a file
@@ -173,6 +281,34 @@ func (c *TOMLConfig) ToServerConfig() ServerConfig {
 
 	if c.Limits.SessionTimeoutSeconds != 0 {
 		cfg.SessionTimeoutSeconds = c.Limits.SessionTimeoutSeconds
+	}
+
+	// Discovery section
+	// Check if Discovery section exists in config file (vs missing in old configs)
+	// If ServerName and ServerDescription are both empty, the section is likely missing
+	// (defaults have non-empty values, so zero values indicate missing section)
+	discoveryExists := c.Discovery.ServerName != "" || c.Discovery.ServerDescription != ""
+
+	if discoveryExists {
+		// Discovery section exists (or env vars set values), honor DirectoryEnabled
+		cfg.DirectoryEnabled = c.Discovery.DirectoryEnabled
+	}
+	// Otherwise: Discovery section missing, keep DirectoryEnabled = true from DefaultConfig()
+
+	if strings.TrimSpace(c.Discovery.PublicHostname) != "" {
+		cfg.PublicHostname = c.Discovery.PublicHostname
+	}
+
+	if strings.TrimSpace(c.Discovery.ServerName) != "" {
+		cfg.ServerName = c.Discovery.ServerName
+	}
+
+	if strings.TrimSpace(c.Discovery.ServerDescription) != "" {
+		cfg.ServerDesc = c.Discovery.ServerDescription
+	}
+
+	if c.Discovery.MaxUsers != 0 {
+		cfg.MaxUsers = uint32(c.Discovery.MaxUsers)
 	}
 
 	return cfg

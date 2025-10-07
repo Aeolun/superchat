@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -64,6 +65,12 @@ type ServerConfig struct {
 	MaxThreadSubscriptions  uint16
 	MaxChannelSubscriptions uint16
 	DirectoryEnabled        bool
+
+	// Server discovery metadata (used when DirectoryEnabled=true)
+	PublicHostname string // Public hostname/IP for clients to connect
+	ServerName     string // Display name in server list
+	ServerDesc     string // Description in server list
+	MaxUsers       uint32 // Max concurrent users (0 = unlimited)
 }
 
 // DefaultConfig returns default server configuration
@@ -81,7 +88,13 @@ func DefaultConfig() ServerConfig {
 		ProtocolVersion:         1,
 		MaxThreadSubscriptions:  50, // max thread subscriptions per session
 		MaxChannelSubscriptions: 10, // max channel subscriptions per session
-		DirectoryEnabled:        false, // Default: regular server (not directory)
+		DirectoryEnabled:        true, // Default: directory mode enabled
+
+		// Server discovery metadata
+		PublicHostname: "localhost",
+		ServerName:     "SuperChat Server",
+		ServerDesc:     "A SuperChat server",
+		MaxUsers:       0, // unlimited
 	}
 }
 
@@ -131,10 +144,38 @@ func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, 
 	return server, nil
 }
 
+// getServerDataDir returns the server data directory, creating it if needed
+func getServerDataDir() (string, error) {
+	var dataDir string
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		dataDir = filepath.Join(xdg, "superchat")
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %w", err)
+		}
+		dataDir = filepath.Join(homeDir, ".local", "share", "superchat")
+	}
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	return dataDir, nil
+}
+
 // initLoggers sets up error and debug loggers
 func initLoggers() error {
+	// Get server data directory
+	dataDir, err := getServerDataDir()
+	if err != nil {
+		return err
+	}
+
 	// Error log goes to stderr and errors.log
-	errorFile, err := os.OpenFile("errors.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	errorLogPath := filepath.Join(dataDir, "errors.log")
+	errorFile, err := os.OpenFile(errorLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return err
 	}
@@ -152,7 +193,8 @@ func initLoggers() error {
 
 	// Redirect standard log (used by database package) to stdout and server.log
 	// Truncate server.log on startup to avoid confusion from multiple runs
-	serverLogFile, err := os.OpenFile("server.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	serverLogPath := filepath.Join(dataDir, "server.log")
+	serverLogFile, err := os.OpenFile(serverLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
 		return err
 	}
@@ -163,8 +205,16 @@ func initLoggers() error {
 
 // EnableDebugLogging enables debug logging to debug.log
 func (s *Server) EnableDebugLogging() {
+	// Get server data directory
+	dataDir, err := getServerDataDir()
+	if err != nil {
+		log.Printf("Failed to get data directory: %v", err)
+		return
+	}
+
 	// Create/truncate debug.log
-	debugLogFile, err := os.OpenFile("debug.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	debugLogPath := filepath.Join(dataDir, "debug.log")
+	debugLogFile, err := os.OpenFile(debugLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
 		log.Printf("Failed to open debug.log: %v", err)
 		return
@@ -405,6 +455,8 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleSetNickname(sess, frame)
 	case protocol.TypeRegisterUser:
 		return s.handleRegisterUser(sess, frame)
+	case protocol.TypeLogout:
+		return s.handleLogout(sess, frame)
 	case protocol.TypeListChannels:
 		return s.handleListChannels(sess, frame)
 	case protocol.TypeJoinChannel:

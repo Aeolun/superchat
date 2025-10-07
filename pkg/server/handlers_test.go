@@ -80,6 +80,12 @@ func reloadMemDB(t *testing.T, srv *Server, db *database.DB) {
 	srv.sessions = NewSessionManager(memDB, 120)
 }
 
+// mockAddr implements net.Addr for testing
+type mockAddr struct{}
+
+func (m *mockAddr) Network() string { return "tcp" }
+func (m *mockAddr) String() string  { return "127.0.0.1:12345" }
+
 // mockConn implements net.Conn for testing
 type mockConn struct {
 	readBuf  *bytes.Buffer
@@ -93,14 +99,14 @@ func newMockConn() *mockConn {
 	}
 }
 
-func (m *mockConn) Read(b []byte) (n int, err error) { return m.readBuf.Read(b) }
-func (m *mockConn) Write(b []byte) (n int, err error) { return m.writeBuf.Write(b) }
-func (m *mockConn) Close() error { return nil }
-func (m *mockConn) LocalAddr() net.Addr { return nil }
-func (m *mockConn) RemoteAddr() net.Addr { return nil }
-func (m *mockConn) SetDeadline(t time.Time) error { return nil }
-func (m *mockConn) SetReadDeadline(t time.Time) error { return nil }
-func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
+func (m *mockConn) Read(b []byte) (n int, err error)         { return m.readBuf.Read(b) }
+func (m *mockConn) Write(b []byte) (n int, err error)        { return m.writeBuf.Write(b) }
+func (m *mockConn) Close() error                             { return nil }
+func (m *mockConn) LocalAddr() net.Addr                      { return &mockAddr{} }
+func (m *mockConn) RemoteAddr() net.Addr                     { return &mockAddr{} }
+func (m *mockConn) SetDeadline(t time.Time) error            { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error        { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error       { return nil }
 
 // testSession creates a test session with a mock connection
 func testSession(srv *Server) *Session {

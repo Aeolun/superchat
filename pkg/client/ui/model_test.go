@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"io"
+	"log"
 	"testing"
 
 	"github.com/aeolun/superchat/pkg/client"
@@ -11,8 +13,9 @@ func TestNewModel(t *testing.T) {
 	conn := client.NewMockConnection("localhost:6465")
 	state := client.NewMockState()
 	state.SetFirstRun(false) // Not first run
+	logger := log.New(io.Discard, "", 0)
 
-	m := NewModel(conn, state, "1.0.0")
+	m := NewModel(conn, state, "1.0.0", false, 0, logger)
 
 	if m.conn == nil {
 		t.Error("NewModel() conn is nil")
@@ -39,8 +42,9 @@ func TestNewModelFirstRun(t *testing.T) {
 	conn := client.NewMockConnection("localhost:6465")
 	state := client.NewMockState()
 	state.SetFirstRun(true)
+	logger := log.New(io.Discard, "", 0)
 
-	m := NewModel(conn, state, "1.0.0")
+	m := NewModel(conn, state, "1.0.0", false, 0, logger)
 
 	if !m.firstRun {
 		t.Error("NewModel() firstRun = false, want true")
@@ -55,8 +59,9 @@ func TestNewModelWithNickname(t *testing.T) {
 	conn := client.NewMockConnection("localhost:6465")
 	state := client.NewMockState()
 	state.SetLastNickname("testuser")
+	logger := log.New(io.Discard, "", 0)
 
-	m := NewModel(conn, state, "1.0.0")
+	m := NewModel(conn, state, "1.0.0", false, 0, logger)
 
 	if m.nickname != "testuser" {
 		t.Errorf("NewModel() nickname = %q, want %q", m.nickname, "testuser")
