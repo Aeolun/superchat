@@ -41,13 +41,13 @@ const (
 type AuthState int
 
 const (
-	AuthStateNone AuthState = iota       // No auth attempted
-	AuthStatePrompting                    // Password modal shown
-	AuthStateAuthenticating               // Waiting for server response
-	AuthStateAuthenticated                // Successfully authenticated
-	AuthStateFailed                       // Last attempt failed
-	AuthStateAnonymous                    // Explicitly chose anonymous
-	AuthStateRegistering                  // Registration in progress
+	AuthStateNone           AuthState = iota // No auth attempted
+	AuthStatePrompting                       // Password modal shown
+	AuthStateAuthenticating                  // Waiting for server response
+	AuthStateAuthenticated                   // Successfully authenticated
+	AuthStateFailed                          // Last attempt failed
+	AuthStateAnonymous                       // Explicitly chose anonymous
+	AuthStateRegistering                     // Registration in progress
 )
 
 // Model represents the application state
@@ -59,11 +59,11 @@ type Model struct {
 	reconnectAttempt int
 
 	// Directory mode (for server discovery)
-	directoryMode        bool
-	throttle             int
-	logger               *log.Logger
-	awaitingServerList   bool              // True when we've requested LIST_SERVERS
-	availableServers     []protocol.ServerInfo // Servers from directory
+	directoryMode      bool
+	throttle           int
+	logger             *log.Logger
+	awaitingServerList bool                  // True when we've requested LIST_SERVERS
+	availableServers   []protocol.ServerInfo // Servers from directory
 
 	// Current view and modals
 	mainView    MainView
@@ -104,11 +104,11 @@ type Model struct {
 	pendingDeleteID    uint64
 
 	// Chat channel state
-	chatMessages     []protocol.Message // Linear list of all messages in chat channel
-	chatInput        string             // Current input in chat channel (deprecated - use chatTextarea)
-	chatTextarea     textarea.Model     // Textarea for chat input
-	loadingChat      bool               // True if loading chat messages
-	allChatLoaded    bool               // True if we've reached the beginning of chat history
+	chatMessages  []protocol.Message // Linear list of all messages in chat channel
+	chatInput     string             // Current input in chat channel (deprecated - use chatTextarea)
+	chatTextarea  textarea.Model     // Textarea for chat input
+	loadingChat   bool               // True if loading chat messages
+	allChatLoaded bool               // True if we've reached the beginning of chat history
 
 	// Input state
 	nickname             string
@@ -120,10 +120,10 @@ type Model struct {
 	composeMessageID     *uint64 // Message ID when editing
 
 	// Auth state (V2)
-	authState           AuthState
-	authAttempts        int       // For rate limiting
-	authCooldownUntil   time.Time // For rate limiting
-	authErrorMessage    string    // For displaying errors in password modal
+	authState         AuthState
+	authAttempts      int       // For rate limiting
+	authCooldownUntil time.Time // For rate limiting
+	authErrorMessage  string    // For displaying errors in password modal
 
 	// Error and status
 	errorMessage  string
@@ -147,8 +147,8 @@ type Model struct {
 	commands *commands.Registry
 
 	// Bandwidth optimization
-	threadRepliesCache      map[uint64][]protocol.Message // Cached thread replies
-	threadHighestMessageID  map[uint64]uint64             // Highest message ID seen per thread
+	threadRepliesCache     map[uint64][]protocol.Message // Cached thread replies
+	threadHighestMessageID map[uint64]uint64             // Highest message ID seen per thread
 }
 
 // NewModel creates a new application model
@@ -618,7 +618,7 @@ func (m *Model) registerCommands() {
 			model := i.(*Model)
 			if model.currentChannel != nil {
 				model.loadingThreadList = true
-				model.threads = []protocol.Message{} // Clear threads
+				model.threads = []protocol.Message{}                                // Clear threads
 				model.threadListViewport.SetContent(model.buildThreadListContent()) // Show initial spinner
 				return model, model.requestThreadList(model.currentChannel.ID)
 			}
@@ -721,7 +721,7 @@ func (m *Model) registerCommands() {
 					model.loadingMore = false
 					model.allThreadsLoaded = false
 					model.loadingThreadList = true
-					model.threads = []protocol.Message{} // Clear threads
+					model.threads = []protocol.Message{}                                // Clear threads
 					model.threadListViewport.SetContent(model.buildThreadListContent()) // Show initial spinner
 					return model, tea.Batch(
 						model.sendJoinChannel(selectedChannel.ID),
@@ -778,8 +778,8 @@ func (m *Model) registerCommands() {
 			model := i.(*Model)
 			// Allow registration for anonymous users with a nickname that is NOT already registered
 			return model.authState == AuthStateAnonymous &&
-			       model.nickname != "" &&
-			       !model.nicknameIsRegistered
+				model.nickname != "" &&
+				!model.nicknameIsRegistered
 		}).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
@@ -799,8 +799,8 @@ func (m *Model) registerCommands() {
 			model := i.(*Model)
 			// Only for anonymous users with registered nickname
 			return model.authState != AuthStateAuthenticated &&
-			       model.nickname != "" &&
-			       model.nicknameIsRegistered
+				model.nickname != "" &&
+				model.nicknameIsRegistered
 		}).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
@@ -861,6 +861,11 @@ func (m *Model) registerCommands() {
 		}).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
+			if model.logger != nil {
+				model.logger.Printf("[DEBUG] Ctrl+K pressed, authState=%d, showing modal and requesting keys", model.authState)
+			}
+			// Show modal immediately with empty keys (loading state)
+			model.showSSHKeyManagerModal(nil)
 			// Request SSH key list from server
 			return model, model.sendListSSHKeys()
 		}).
@@ -934,7 +939,7 @@ func (m *Model) showNicknameChangeModal() {
 func (m *Model) showGoAnonymousModal() {
 	// Create a modal asking for new anonymous nickname
 	nicknameModal := modal.NewNicknameChangeModal(
-		"",  // Don't pre-fill with current nickname
+		"", // Don't pre-fill with current nickname
 		func(newNickname string) tea.Cmd {
 			// Clear authentication locally and change nickname
 			// Note: Don't modify m.userID/m.authState here due to bubbletea value semantics

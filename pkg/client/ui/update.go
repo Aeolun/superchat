@@ -147,6 +147,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// Debug: log ctrl+k specifically
+	if key == "ctrl+k" {
+		if m.logger != nil {
+			m.logger.Printf("[DEBUG] handleKeyPress: Received ctrl+k, authState=%d, modalStack.Top=%v", m.authState, m.modalStack.TopType())
+		}
+	}
+
 	// Special case: ctrl+c always quits immediately
 	if key == "ctrl+c" {
 		return m, tea.Quit
@@ -1380,9 +1387,18 @@ func (m Model) sendCreateChannel(name, displayName, description string, channelT
 
 func (m Model) sendListSSHKeys() tea.Cmd {
 	return func() tea.Msg {
+		if m.logger != nil {
+			m.logger.Printf("[DEBUG] sendListSSHKeys: Sending LIST_SSH_KEYS request")
+		}
 		msg := &protocol.ListSSHKeysRequest{}
 		if err := m.conn.SendMessage(protocol.TypeListSSHKeys, msg); err != nil {
+			if m.logger != nil {
+				m.logger.Printf("[DEBUG] sendListSSHKeys: Error sending: %v", err)
+			}
 			return ErrorMsg{Err: err}
+		}
+		if m.logger != nil {
+			m.logger.Printf("[DEBUG] sendListSSHKeys: Request sent successfully")
 		}
 		return nil
 	}

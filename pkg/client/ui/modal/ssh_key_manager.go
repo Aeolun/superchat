@@ -42,6 +42,7 @@ type SSHKeyManagerModal struct {
 	// List view
 	keys          []SSHKeyInfo
 	selectedIndex int
+	loading       bool // True while waiting for server response
 
 	// Add key view
 	addKeyInput   textinput.Model
@@ -94,6 +95,7 @@ func NewSSHKeyManagerModal(
 		view:           "list",
 		keys:           keys,
 		selectedIndex:  0,
+		loading:        keys == nil, // Loading if keys not provided yet
 		addKeyInput:    addKeyInput,
 		addLabelInput:  addLabelInput,
 		editLabelInput: editLabelInput,
@@ -130,7 +132,9 @@ func (m *SSHKeyManagerModal) Render(width, height int) string {
 func (m *SSHKeyManagerModal) renderList() string {
 	var content strings.Builder
 
-	if len(m.keys) == 0 {
+	if m.loading {
+		content.WriteString(mutedTextStyle.Render("Loading SSH keys...\n\n"))
+	} else if len(m.keys) == 0 {
 		content.WriteString(mutedTextStyle.Render("No SSH keys configured.\n"))
 		content.WriteString(mutedTextStyle.Render("Add a key to enable SSH authentication.\n\n"))
 	} else {
@@ -321,6 +325,23 @@ func (m *SSHKeyManagerModal) IsBlockingInput() bool {
 }
 
 func (m *SSHKeyManagerModal) handleKeyList(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
+	// If still loading, only allow "a" to add a key
+	if m.loading {
+		if msg.String() == "a" {
+			// Allow adding keys even while loading
+			m.view = "add"
+			m.addKeyInput.SetValue("")
+			m.addLabelInput.SetValue("")
+			m.addErrorMsg = ""
+			m.addFocusIndex = 0
+			m.addKeyInput.Focus()
+			m.addLabelInput.Blur()
+			return true, m, nil
+		}
+		// Ignore other keys while loading
+		return true, m, nil
+	}
+
 	switch msg.String() {
 	case "up", "k":
 		if m.selectedIndex > 0 {

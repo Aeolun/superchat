@@ -7,6 +7,16 @@ import (
 	"time"
 )
 
+// ProtocolMessage interface - all protocol messages must implement this
+type ProtocolMessage interface {
+	// Encode serializes the message to bytes (convenience wrapper)
+	Encode() ([]byte, error)
+	// EncodeTo serializes the message directly to a writer (efficient)
+	EncodeTo(w io.Writer) error
+	// Decode deserializes the message from bytes
+	Decode(payload []byte) error
+}
+
 // Message type constants (Client → Server)
 const (
 	TypeAuthRequest        = 0x01
@@ -2480,6 +2490,14 @@ func (m *AddSSHKeyRequest) EncodeTo(w io.Writer) error {
 	return WriteString(w, m.Label)
 }
 
+func (m *AddSSHKeyRequest) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (m *AddSSHKeyRequest) Decode(payload []byte) error {
 	buf := bytes.NewReader(payload)
 	publicKey, err := ReadString(buf)
@@ -2518,6 +2536,14 @@ func (m *SSHKeyAddedResponse) EncodeTo(w io.Writer) error {
 	return WriteString(w, m.ErrorMessage)
 }
 
+func (m *SSHKeyAddedResponse) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (m *SSHKeyAddedResponse) Decode(payload []byte) error {
 	buf := bytes.NewReader(payload)
 	success, err := ReadBool(buf)
@@ -2553,6 +2579,14 @@ type ListSSHKeysRequest struct {
 func (m *ListSSHKeysRequest) EncodeTo(w io.Writer) error {
 	// No data to encode
 	return nil
+}
+
+func (m *ListSSHKeysRequest) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (m *ListSSHKeysRequest) Decode(payload []byte) error {
@@ -2605,6 +2639,14 @@ func (m *SSHKeyListResponse) EncodeTo(w io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func (m *SSHKeyListResponse) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (m *SSHKeyListResponse) Decode(payload []byte) error {
@@ -2672,6 +2714,14 @@ func (m *UpdateSSHKeyLabelRequest) EncodeTo(w io.Writer) error {
 	return WriteString(w, m.NewLabel)
 }
 
+func (m *UpdateSSHKeyLabelRequest) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (m *UpdateSSHKeyLabelRequest) Decode(payload []byte) error {
 	buf := bytes.NewReader(payload)
 	keyID, err := ReadInt64(buf)
@@ -2702,6 +2752,14 @@ func (m *SSHKeyLabelUpdatedResponse) EncodeTo(w io.Writer) error {
 	return WriteString(w, m.ErrorMessage)
 }
 
+func (m *SSHKeyLabelUpdatedResponse) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (m *SSHKeyLabelUpdatedResponse) Decode(payload []byte) error {
 	buf := bytes.NewReader(payload)
 	success, err := ReadBool(buf)
@@ -2726,6 +2784,14 @@ type DeleteSSHKeyRequest struct {
 
 func (m *DeleteSSHKeyRequest) EncodeTo(w io.Writer) error {
 	return WriteInt64(w, m.KeyID)
+}
+
+func (m *DeleteSSHKeyRequest) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (m *DeleteSSHKeyRequest) Decode(payload []byte) error {
@@ -2753,6 +2819,14 @@ func (m *SSHKeyDeletedResponse) EncodeTo(w io.Writer) error {
 	return WriteString(w, m.ErrorMessage)
 }
 
+func (m *SSHKeyDeletedResponse) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (m *SSHKeyDeletedResponse) Decode(payload []byte) error {
 	buf := bytes.NewReader(payload)
 	success, err := ReadBool(buf)
@@ -2767,3 +2841,17 @@ func (m *SSHKeyDeletedResponse) Decode(payload []byte) error {
 	m.ErrorMessage = errorMessage
 	return nil
 }
+
+// Compile-time checks to ensure all message types implement the ProtocolMessage interface
+// This will cause a compile error if any message type is missing Encode(), EncodeTo(), or Decode()
+var (
+	// SSH-related messages
+	_ ProtocolMessage = (*AddSSHKeyRequest)(nil)
+	_ ProtocolMessage = (*SSHKeyAddedResponse)(nil)
+	_ ProtocolMessage = (*ListSSHKeysRequest)(nil)
+	_ ProtocolMessage = (*SSHKeyListResponse)(nil)
+	_ ProtocolMessage = (*UpdateSSHKeyLabelRequest)(nil)
+	_ ProtocolMessage = (*SSHKeyLabelUpdatedResponse)(nil)
+	_ ProtocolMessage = (*DeleteSSHKeyRequest)(nil)
+	_ ProtocolMessage = (*SSHKeyDeletedResponse)(nil)
+)
