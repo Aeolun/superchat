@@ -38,6 +38,7 @@ type Server struct {
 	shutdown    chan struct{}
 	wg          sync.WaitGroup
 	metrics     *Metrics
+	startTime   time.Time // Server start time for uptime calculation
 
 	// Connection deltas for periodic reporting
 	connectionsSinceReport    atomic.Int64
@@ -54,6 +55,7 @@ type Server struct {
 type ServerConfig struct {
 	TCPPort                 int
 	SSHPort                 int
+	HTTPPort                int    // Public HTTP port for /servers.json (default: 8080, 0 = disabled)
 	SSHHostKeyPath          string
 	MaxConnectionsPerIP     uint8
 	MessageRateLimit        uint16
@@ -78,6 +80,7 @@ func DefaultConfig() ServerConfig {
 	return ServerConfig{
 		TCPPort:                 6465,
 		SSHPort:                 6466,
+		HTTPPort:                8080, // Public HTTP server for /servers.json
 		SSHHostKeyPath:          "~/.superchat/ssh_host_key",
 		MaxConnectionsPerIP:     10,
 		MessageRateLimit:        10,   // per minute
@@ -137,6 +140,7 @@ func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, 
 		configPath:             configPath,
 		shutdown:               make(chan struct{}),
 		metrics:                metrics,
+		startTime:              time.Now(),
 		verificationChallenges: make(map[uint64]uint64),
 		discoveryRateLimits:    make(map[string]*discoveryRateLimiter),
 	}
@@ -265,14 +269,29 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to start SSH server: %w", err)
 	}
 
-	// Start Prometheus metrics HTTP server
+	// Start metrics HTTP server (internal only - never expose publicly!)
 	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		log.Printf("Metrics server listening on :9090")
-		if err := http.ListenAndServe(":9090", nil); err != nil {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", promhttp.Handler())
+		metricsMux.HandleFunc("/health", s.HealthHandler)
+		log.Printf("Metrics server listening on :9090 (/metrics, /health) - INTERNAL ONLY")
+		if err := http.ListenAndServe(":9090", metricsMux); err != nil {
 			log.Printf("Metrics server error: %v", err)
 		}
 	}()
+
+	// Start public HTTP server for /servers.json (safe to expose publicly)
+	if s.config.HTTPPort > 0 {
+		go func() {
+			publicMux := http.NewServeMux()
+			publicMux.HandleFunc("/servers.json", s.ServersJSONHandler)
+			addr := fmt.Sprintf(":%d", s.config.HTTPPort)
+			log.Printf("Public HTTP server listening on %s (/servers.json)", addr)
+			if err := http.ListenAndServe(addr, publicMux); err != nil {
+				log.Printf("Public HTTP server error: %v", err)
+			}
+		}()
+	}
 
 	// Start metrics logging goroutine (log metrics every 5 seconds)
 	s.wg.Add(1)

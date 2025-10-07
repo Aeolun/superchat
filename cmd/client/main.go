@@ -202,20 +202,22 @@ func main() {
 		}
 	}
 
-	// Connect to server
+	// Connect to server (don't fail if connection fails - let UI handle it)
+	var initialConnErr error
 	if err := c.Connect(); err != nil {
 		if logger != nil {
-			logger.Printf("Failed to connect: %v", err)
+			logger.Printf("Initial connection failed: %v", err)
 		}
-		log.Fatalf("Failed to connect to %s: %v", c.GetAddress(), err)
+		// Don't exit - let UI show error and offer recovery options
+		initialConnErr = err
 	}
 	defer c.Close()
 
 	// Now assign to interface
 	conn = c
 
-	// Create bubbletea program
-	model := ui.NewModel(conn, state, Version, useDirectory, *throttle, logger)
+	// Create bubbletea program (pass connection error if any)
+	model := ui.NewModel(conn, state, Version, useDirectory, *throttle, logger, initialConnErr)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	// Run the program

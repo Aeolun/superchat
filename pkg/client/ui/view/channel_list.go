@@ -169,8 +169,10 @@ func buildChannelListInstructions(updateAvailable bool, currentVersion, latestVe
 		"• Anonymous: Post as ~username (no password)",
 		"• Registered: Post as username (press [Ctrl+R] to register)",
 		"",
-		"Press [n] to create a new thread once in a channel.",
-		"Press [h] or [?] for help.",
+		"Useful shortcuts:",
+		"• [n] to create a new thread once in a channel",
+		"• [Ctrl+L] to switch servers",
+		"• [h] or [?] for help",
 	)
 
 	return lipgloss.NewStyle().

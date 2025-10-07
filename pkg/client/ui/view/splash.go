@@ -24,6 +24,7 @@ func RenderSplash(width, height int, currentVersion string) string {
 • Press [Enter] to select channels and threads
 • Press [h] or [?] anytime for help
 • Press [n] to start a new thread
+• Press [Ctrl+L] to switch servers
 
 Anonymous vs Registered:
 • Anonymous: Post as ~username (no password required)

@@ -20,6 +20,7 @@ const (
 	ModalServerSelector
 	ModalTypePasswordChange
 	ModalTypeSSHKeyManager
+	ModalConnectionFailed
 )
 
 // String returns the string representation of the modal type
@@ -49,6 +50,8 @@ func (m ModalType) String() string {
 		return "PasswordChange"
 	case ModalTypeSSHKeyManager:
 		return "SSHKeyManager"
+	case ModalConnectionFailed:
+		return "ConnectionFailed"
 	default:
 		return "Unknown"
 	}

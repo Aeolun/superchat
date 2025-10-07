@@ -22,6 +22,7 @@ type TOMLConfig struct {
 type ServerSection struct {
 	TCPPort      int    `toml:"tcp_port"`
 	SSHPort      int    `toml:"ssh_port"`
+	HTTPPort     int    `toml:"http_port"`
 	SSHHostKey   string `toml:"ssh_host_key"`
 	DatabasePath string `toml:"database_path"`
 }
@@ -62,6 +63,7 @@ func DefaultTOMLConfig() TOMLConfig {
 		Server: ServerSection{
 			TCPPort:      6465,
 			SSHPort:      6466,
+			HTTPPort:     8080,
 			SSHHostKey:   "~/.superchat/ssh_host_key",
 			DatabasePath: "~/.superchat/superchat.db",
 		},
@@ -261,6 +263,10 @@ func (c *TOMLConfig) ToServerConfig() ServerConfig {
 
 	if c.Server.SSHPort != 0 {
 		cfg.SSHPort = c.Server.SSHPort
+	}
+
+	if c.Server.HTTPPort != 0 {
+		cfg.HTTPPort = c.Server.HTTPPort
 	}
 
 	if strings.TrimSpace(c.Server.SSHHostKey) != "" {

@@ -1,0 +1,185 @@
+package modal
+
+import (
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// ConnectionFailedRetryMsg is sent when user wants to retry connection
+type ConnectionFailedRetryMsg struct{}
+
+// ConnectionFailedSwitchServerMsg is sent when user wants to switch to server selector
+type ConnectionFailedSwitchServerMsg struct{}
+
+// ConnectionFailedModal displays connection failure with recovery options
+type ConnectionFailedModal struct {
+	serverAddr   string
+	errorMessage string
+	cursor       int // 0 = Retry, 1 = Switch Server, 2 = Quit
+}
+
+// NewConnectionFailedModal creates a new connection failed modal
+func NewConnectionFailedModal(serverAddr string, errorMessage string) *ConnectionFailedModal {
+	return &ConnectionFailedModal{
+		serverAddr:   serverAddr,
+		errorMessage: errorMessage,
+		cursor:       0,
+	}
+}
+
+// Type returns the modal type
+func (m *ConnectionFailedModal) Type() ModalType {
+	return ModalConnectionFailed
+}
+
+// HandleKey processes keyboard input
+func (m *ConnectionFailedModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		return true, m, nil
+
+	case "down", "j":
+		if m.cursor < 2 {
+			m.cursor++
+		}
+		return true, m, nil
+
+	case "r":
+		// Retry connection (shortcut)
+		return true, nil, func() tea.Msg {
+			return ConnectionFailedRetryMsg{}
+		}
+
+	case "s", "ctrl+l":
+		// Switch to server selector (shortcut)
+		return true, nil, func() tea.Msg {
+			return ConnectionFailedSwitchServerMsg{}
+		}
+
+	case "q", "esc":
+		// Quit (shortcut)
+		return true, nil, tea.Quit
+
+	case "enter":
+		// Select current option
+		switch m.cursor {
+		case 0: // Retry
+			return true, nil, func() tea.Msg {
+				return ConnectionFailedRetryMsg{}
+			}
+		case 1: // Switch Server
+			return true, nil, func() tea.Msg {
+				return ConnectionFailedSwitchServerMsg{}
+			}
+		case 2: // Quit
+			return true, nil, tea.Quit
+		}
+		return true, m, nil
+
+	default:
+		// Consume all other keys
+		return true, m, nil
+	}
+}
+
+// Render returns the modal content
+func (m *ConnectionFailedModal) Render(width, height int) string {
+	primaryColor := lipgloss.Color("#FF6B6B") // Red for error
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(primaryColor).
+		MarginBottom(1).
+		Align(lipgloss.Center)
+
+	errorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FF6B6B")).
+		MarginBottom(1)
+
+	serverStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true).
+		MarginBottom(1)
+
+	optionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	selectedStyle := lipgloss.NewStyle().
+		Foreground(primaryColor).
+		Bold(true)
+
+	keyHintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240"))
+
+	// Build content
+	var content string
+
+	// Title
+	content += titleStyle.Render("⚠ Connection Failed") + "\n\n"
+
+	// Server address
+	content += serverStyle.Render("Server: "+m.serverAddr) + "\n"
+
+	// Error message
+	content += errorStyle.Render("Error: "+m.errorMessage) + "\n\n"
+
+	// Options
+	content += "What would you like to do?\n\n"
+
+	// Option 0: Retry
+	if m.cursor == 0 {
+		content += selectedStyle.Render("→ Retry connection") + " " + keyHintStyle.Render("[R]") + "\n"
+	} else {
+		content += optionStyle.Render("  Retry connection") + " " + keyHintStyle.Render("[R]") + "\n"
+	}
+
+	// Option 1: Switch Server
+	if m.cursor == 1 {
+		content += selectedStyle.Render("→ Switch to different server") + " " + keyHintStyle.Render("[S]") + "\n"
+	} else {
+		content += optionStyle.Render("  Switch to different server") + " " + keyHintStyle.Render("[S]") + "\n"
+	}
+
+	// Option 2: Quit
+	if m.cursor == 2 {
+		content += selectedStyle.Render("→ Quit") + " " + keyHintStyle.Render("[Q]") + "\n"
+	} else {
+		content += optionStyle.Render("  Quit") + " " + keyHintStyle.Render("[Q]") + "\n"
+	}
+
+	// Navigation hint
+	content += "\n"
+	content += keyHintStyle.Render("[↑/↓] Navigate  [Enter] Select  [Esc] Quit")
+
+	// Create border style
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(primaryColor).
+		Padding(1, 2)
+
+	// Calculate modal size (fixed width, auto height)
+	modalWidth := 60
+	if width < modalWidth+4 {
+		modalWidth = width - 4
+	}
+
+	// Render in bordered box
+	box := borderStyle.Width(modalWidth - 4).Render(content)
+
+	// Center the modal
+	return lipgloss.Place(
+		width,
+		height,
+		lipgloss.Center,
+		lipgloss.Center,
+		box,
+	)
+}
+
+// IsBlockingInput returns whether this modal blocks input to the main view
+func (m *ConnectionFailedModal) IsBlockingInput() bool {
+	return true
+}

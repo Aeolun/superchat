@@ -157,7 +157,7 @@ type Model struct {
 }
 
 // NewModel creates a new application model
-func NewModel(conn client.ConnectionInterface, state client.StateInterface, currentVersion string, directoryMode bool, throttle int, logger *log.Logger) Model {
+func NewModel(conn client.ConnectionInterface, state client.StateInterface, currentVersion string, directoryMode bool, throttle int, logger *log.Logger, initialConnErr error) Model {
 
 	firstRun := state.GetFirstRun()
 	initialView := ViewChannelList
@@ -233,8 +233,13 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 	m.commands = commands.NewRegistry()
 	m.registerCommands()
 
-	// If in directory mode, show server selector immediately
-	if directoryMode {
+	// If initial connection failed, show connection failed modal
+	if initialConnErr != nil {
+		// Show connection failed modal with retry/switch/quit options
+		m.modalStack.Push(modal.NewConnectionFailedModal(conn.GetAddress(), initialConnErr.Error()))
+		m.connectionState = StateDisconnected
+	} else if directoryMode {
+		// If in directory mode, show server selector immediately
 		m.modalStack.Push(modal.NewServerSelectorLoading())
 		m.awaitingServerList = true
 	}

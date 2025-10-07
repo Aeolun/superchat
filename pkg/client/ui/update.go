@@ -157,6 +157,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// User just closed the server selector, continue normally
 		return m, nil
 
+	case modal.ConnectionFailedRetryMsg:
+		// User wants to retry connection
+		return m.handleConnectionRetry()
+
+	case modal.ConnectionFailedSwitchServerMsg:
+		// User wants to switch to server selector
+		return m.handleSwitchToServerSelector()
+
 	default:
 		// Always update spinner (it manages its own tick messages)
 		var cmd tea.Cmd
@@ -1989,6 +1997,63 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 	m.loadingChannels = true
 
 	return m, tea.Batch(cmds...)
+}
+
+// handleConnectionRetry attempts to reconnect to the same server
+func (m Model) handleConnectionRetry() (tea.Model, tea.Cmd) {
+	// Close the connection failed modal
+	m.modalStack.Pop()
+
+	// Try to reconnect
+	if err := m.conn.Connect(); err != nil {
+		// Connection still failing - show modal again
+		m.modalStack.Push(modal.NewConnectionFailedModal(m.conn.GetAddress(), err.Error()))
+		m.connectionState = StateDisconnected
+		if m.logger != nil {
+			m.logger.Printf("Retry connection failed: %v", err)
+		}
+		return m, nil
+	}
+
+	// Connection successful!
+	m.connectionState = StateConnected
+	m.statusMessage = "Connected successfully"
+	if m.logger != nil {
+		m.logger.Printf("Retry connection succeeded")
+	}
+
+	// Start normal operation
+	cmds := []tea.Cmd{
+		listenForServerFrames(m.conn),
+		m.requestChannelList(),
+	}
+
+	// Send nickname if we have one (but not if already authenticated)
+	if m.nickname != "" && m.authState != AuthStateAuthenticated {
+		cmds = append(cmds, m.sendSetNickname())
+	}
+
+	m.loadingChannels = true
+
+	return m, tea.Batch(cmds...)
+}
+
+// handleSwitchToServerSelector switches to the server selector modal
+func (m Model) handleSwitchToServerSelector() (tea.Model, tea.Cmd) {
+	// Close the connection failed modal
+	m.modalStack.Pop()
+
+	// Show server selector loading modal
+	m.modalStack.Push(modal.NewServerSelectorLoading())
+	m.awaitingServerList = true
+	m.directoryMode = true
+
+	if m.logger != nil {
+		m.logger.Printf("Switching to server selector")
+	}
+
+	// Request server list
+	return m, m.requestServerList()
 }
 
 // SSH Key Management Handlers

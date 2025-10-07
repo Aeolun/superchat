@@ -1681,7 +1681,7 @@ func (s *Server) handleListServers(sess *Session, frame *protocol.Frame) error {
 		Description:   s.config.ServerDesc,
 		UserCount:     s.sessions.CountOnlineUsers(),
 		MaxUsers:      s.config.MaxUsers,
-		UptimeSeconds: 0, // TODO: Track server start time for uptime
+		UptimeSeconds: uint64(time.Since(s.startTime).Seconds()),
 		IsPublic:      true,
 		ChannelCount:  s.db.CountChannels(),
 	}
