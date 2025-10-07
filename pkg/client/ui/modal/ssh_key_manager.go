@@ -167,7 +167,7 @@ func (m *SSHKeyManagerModal) renderList() string {
 
 	// Create flexbox layout
 	modalWidth := 74
-	modalHeight := 25
+	modalHeight := 18
 	layout := flexbox.New(modalWidth, modalHeight)
 
 	// Row 1: Title
@@ -221,7 +221,7 @@ func formatLastUsed(lastUsedAt *time.Time) string {
 
 func (m *SSHKeyManagerModal) renderAddKey() string {
 	modalWidth := 74
-	modalHeight := 28
+	modalHeight := 20
 	layout := flexbox.New(modalWidth, modalHeight)
 
 	// Row 1: Title
