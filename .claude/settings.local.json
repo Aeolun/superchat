@@ -12,7 +12,9 @@
       "Bash(go tool pprof:*)",
       "Bash(cat:*)",
       "Bash(go tool cover:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Read(//home/bart/.local/share/superchat/**)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
     "ask": []
