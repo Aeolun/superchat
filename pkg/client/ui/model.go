@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"log"
 	"time"
 
 	"github.com/aeolun/superchat/pkg/client"
@@ -56,6 +57,13 @@ type Model struct {
 	state            client.StateInterface
 	connectionState  ConnectionState
 	reconnectAttempt int
+
+	// Directory mode (for server discovery)
+	directoryMode        bool
+	throttle             int
+	logger               *log.Logger
+	awaitingServerList   bool              // True when we've requested LIST_SERVERS
+	availableServers     []protocol.ServerInfo // Servers from directory
 
 	// Current view and modals
 	mainView    MainView
@@ -144,7 +152,8 @@ type Model struct {
 }
 
 // NewModel creates a new application model
-func NewModel(conn client.ConnectionInterface, state client.StateInterface, currentVersion string) Model {
+func NewModel(conn client.ConnectionInterface, state client.StateInterface, currentVersion string, directoryMode bool, throttle int, logger *log.Logger) Model {
+
 	firstRun := state.GetFirstRun()
 	initialView := ViewChannelList
 	initialMainView := MainViewChannelList
@@ -185,8 +194,13 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 	m := Model{
 		conn:                   conn,
 		state:                  state,
-		connectionState:        StateConnected,
+		connectionState:        StateConnected, // Always connected (either to directory or chat server)
 		reconnectAttempt:       0,
+		directoryMode:          directoryMode,
+		throttle:               throttle,
+		logger:                 logger,
+		awaitingServerList:     false,
+		availableServers:       nil,
 		mainView:               initialMainView,
 		modalStack:             modal.ModalStack{},
 		currentView:            initialView, // DEPRECATED
@@ -783,7 +797,7 @@ func (m *Model) registerCommands() {
 		Global().
 		When(func(i interface{}) bool {
 			model := i.(*Model)
-			// Allow sign-in for anonymous users with a registered nickname
+			// Only for anonymous users with registered nickname
 			return model.authState != AuthStateAuthenticated &&
 			       model.nickname != "" &&
 			       model.nicknameIsRegistered
@@ -830,6 +844,25 @@ func (m *Model) registerCommands() {
 			model := i.(*Model)
 			model.showNicknameChangeModal()
 			return model, nil
+		}).
+		Priority(10).
+		Build())
+
+	// Ctrl+K to manage SSH keys
+	m.commands.Register(commands.NewCommand().
+		Keys("ctrl+k").
+		Name("SSH Keys").
+		Help("Manage SSH keys").
+		Global().
+		When(func(i interface{}) bool {
+			model := i.(*Model)
+			// Only available when authenticated
+			return model.authState == AuthStateAuthenticated
+		}).
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			// Request SSH key list from server
+			return model, model.sendListSSHKeys()
 		}).
 		Priority(10).
 		Build())
@@ -977,6 +1010,30 @@ func (m *Model) showNicknameSetupModal() {
 	m.modalStack.Push(nicknameSetupModal)
 }
 
+// showSSHKeyManagerModal displays the SSH key manager modal
+func (m *Model) showSSHKeyManagerModal(keys []modal.SSHKeyInfo) {
+	sshKeyManagerModal := modal.NewSSHKeyManagerModal(
+		keys,
+		func(publicKey, label string) tea.Cmd {
+			// Send ADD_SSH_KEY request
+			return m.sendAddSSHKey(publicKey, label)
+		},
+		func(keyID uint64, newLabel string) tea.Cmd {
+			// Send UPDATE_SSH_KEY_LABEL request
+			return m.sendUpdateSSHKeyLabel(keyID, newLabel)
+		},
+		func(keyID uint64) tea.Cmd {
+			// Send DELETE_SSH_KEY request
+			return m.sendDeleteSSHKey(keyID)
+		},
+		func() tea.Cmd {
+			// Close modal
+			return nil
+		},
+	)
+	m.modalStack.Push(sshKeyManagerModal)
+}
+
 // showCreateChannelModal displays the channel creation modal
 func (m *Model) showCreateChannelModal() {
 	createChannelModal := modal.NewCreateChannelModal(
@@ -1038,12 +1095,23 @@ type WindowSizeMsg struct {
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		listenForServerFrames(m.conn),
+		listenForServerFrames(m.conn), // Always listen for frames
 		tickCmd(),
 		m.spinner.Tick,
 		checkForUpdates(m.currentVersion), // Check for updates in background
 	}
 
+	// If in directory mode, request server list and show selector
+	if m.directoryMode {
+		// Show server selector in loading state
+		m.modalStack.Push(modal.NewServerSelectorLoading())
+		m.awaitingServerList = true
+		// Send LIST_SERVERS request
+		cmds = append(cmds, m.requestServerList())
+		return tea.Batch(cmds...)
+	}
+
+	// Normal mode: proceed with channel list
 	// If we're starting directly at channel list (not first run), request channels
 	if m.currentView == ViewChannelList {
 		m.loadingChannels = true

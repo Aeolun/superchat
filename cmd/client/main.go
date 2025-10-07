@@ -64,6 +64,7 @@ func main() {
 	defaultConfig := getDefaultConfigPath()
 	configPath := flag.String("config", defaultConfig, "Path to config file")
 	server := flag.String("server", "", "Server address (host:port, overrides config)")
+	directory := flag.String("directory", "", "Directory server address (host:port) to fetch server list from")
 	profile := flag.String("profile", "", "Profile name for separate configuration (default: none)")
 	statePath := flag.String("state", "", "Path to state database (overrides config)")
 	throttle := flag.Int("throttle", 0, "Bandwidth limit in bytes/sec (e.g., 3600 for 28.8kbps dial-up, 0=unlimited)")
@@ -91,12 +92,6 @@ func main() {
 	config, err := client.LoadClientConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Command-line flags override config
-	serverAddr := config.GetServerAddress()
-	if *server != "" {
-		serverAddr = *server
 	}
 
 	// Determine state path
@@ -130,6 +125,43 @@ func main() {
 	}
 	defer state.Close()
 
+	// Determine connection mode:
+	// - If --server flag: connect directly to that server
+	// - If --directory flag: connect to directory server to fetch server list
+	// - If saved server exists: connect directly to that server
+	// - Otherwise: use directory mode with default/config directory server
+	var serverAddr string
+	var directoryServerAddr string
+	useDirectory := false
+
+	if *server != "" {
+		// Explicit --server flag: direct connection
+		serverAddr = *server
+	} else if *directory != "" {
+		// Explicit --directory flag: use directory mode
+		directoryServerAddr = *directory
+		useDirectory = true
+	} else {
+		// Check if we have a saved server from previous directory selection
+		savedServer, err := state.GetConfig("directory_selected_server")
+		if err == nil && savedServer != "" {
+			serverAddr = savedServer
+		} else {
+			// Fall back to config
+			serverAddr = config.GetServerAddress()
+		}
+
+		// If still no server, trigger directory mode
+		if serverAddr == "" {
+			// Get directory server from config or use default
+			directoryServerAddr = config.GetServerAddress()
+			if directoryServerAddr == "" {
+				log.Fatalf("No server configured. Use --server to connect directly or --directory to fetch server list.")
+			}
+			useDirectory = true
+		}
+	}
+
 	// Set up debug logger
 	logger, logFile, err := setupLogger(state.GetStateDir())
 	if err != nil {
@@ -140,35 +172,54 @@ func main() {
 		defer logFile.Close()
 	}
 
-	// Create connection
-	conn, err := client.NewConnection(serverAddr)
-	if err != nil {
-		log.Fatalf("Invalid server address %q: %v", serverAddr, err)
+	// Create connection - either to chat server directly or to directory server
+	var conn client.ConnectionInterface
+	var connectAddr string
+	if useDirectory {
+		connectAddr = directoryServerAddr
+		if logger != nil {
+			logger.Printf("Directory mode: connecting to directory server: %s", connectAddr)
+		}
+	} else {
+		connectAddr = serverAddr
+		if logger != nil {
+			logger.Printf("Direct mode: connecting to server: %s", connectAddr)
+		}
 	}
+
+	// Create connection (returns concrete type)
+	c, err := client.NewConnection(connectAddr)
+	if err != nil {
+		log.Fatalf("Invalid server address %q: %v", connectAddr, err)
+	}
+
+	// Configure connection using concrete type methods
 	if logger != nil {
-		conn.SetLogger(logger)
-		logger.Printf("Connecting to server: %s", conn.GetAddress())
+		c.SetLogger(logger)
 	}
 
 	// Apply bandwidth throttling if requested
 	if *throttle > 0 {
-		conn.SetThrottle(*throttle)
+		c.SetThrottle(*throttle)
 		if logger != nil {
 			logger.Printf("Bandwidth throttling enabled: %d bytes/sec", *throttle)
 		}
 	}
 
 	// Connect to server
-	if err := conn.Connect(); err != nil {
+	if err := c.Connect(); err != nil {
 		if logger != nil {
 			logger.Printf("Failed to connect: %v", err)
 		}
-		log.Fatalf("Failed to connect to %s: %v", conn.GetAddress(), err)
+		log.Fatalf("Failed to connect to %s: %v", c.GetAddress(), err)
 	}
-	defer conn.Close()
+	defer c.Close()
+
+	// Now assign to interface
+	conn = c
 
 	// Create bubbletea program
-	model := ui.NewModel(conn, state, Version)
+	model := ui.NewModel(conn, state, Version, useDirectory, *throttle, logger)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	// Run the program

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -573,6 +574,14 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleSubscribeOk(frame)
 	case protocol.TypeError:
 		return m.handleError(frame)
+	case protocol.TypeSSHKeyList:
+		return m.handleSSHKeyList(frame)
+	case protocol.TypeSSHKeyAdded:
+		return m.handleSSHKeyAdded(frame)
+	case protocol.TypeSSHKeyLabelUpdated:
+		return m.handleSSHKeyLabelUpdated(frame)
+	case protocol.TypeSSHKeyDeleted:
+		return m.handleSSHKeyDeleted(frame)
 	}
 
 	// Continue listening
@@ -1367,6 +1376,56 @@ func (m Model) sendCreateChannel(name, displayName, description string, channelT
 	}
 }
 
+// SSH Key Management Functions
+
+func (m Model) sendListSSHKeys() tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.ListSSHKeysRequest{}
+		if err := m.conn.SendMessage(protocol.TypeListSSHKeys, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendAddSSHKey(publicKey, label string) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.AddSSHKeyRequest{
+			PublicKey: publicKey,
+			Label:     label,
+		}
+		if err := m.conn.SendMessage(protocol.TypeAddSSHKey, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendUpdateSSHKeyLabel(keyID uint64, newLabel string) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.UpdateSSHKeyLabelRequest{
+			KeyID:    int64(keyID),
+			NewLabel: newLabel,
+		}
+		if err := m.conn.SendMessage(protocol.TypeUpdateSSHKeyLabel, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendDeleteSSHKey(keyID uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.DeleteSSHKeyRequest{
+			KeyID: int64(keyID),
+		}
+		if err := m.conn.SendMessage(protocol.TypeDeleteSSHKey, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
 func (m Model) requestThreadList(channelID uint64) tea.Cmd {
 	return func() tea.Msg {
 		limit := uint16(m.height - 6)
@@ -1711,14 +1770,177 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 	// Store server info for connection
 	serverAddr := fmt.Sprintf("%s:%d", server.Hostname, server.Port)
 
-	// Save to state for next startup
-	if err := m.state.SetConfig("server_address", serverAddr); err != nil {
+	// Save to state for next startup (using directory-specific key)
+	if err := m.state.SetConfig("directory_selected_server", serverAddr); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to save server address: %v", err)
 		return m, nil
 	}
 
-	// Show message that user needs to restart
-	m.statusMessage = fmt.Sprintf("Server %s selected. Please restart the client to connect.", server.Name)
+	// Check if selected server is the same as current connection
+	// If so, we can reuse the connection (directory server is also a chat server)
+	currentAddr := m.conn.GetAddress()
+	if currentAddr == serverAddr {
+		if m.logger != nil {
+			m.logger.Printf("Selected server is same as directory server, reusing connection")
+		}
+		// Just update state and proceed with normal chat flow
+		m.directoryMode = false
+		m.statusMessage = fmt.Sprintf("Connected to %s", server.Name)
+		m.modalStack.Pop()
 
-	return m, nil
+		// Start normal operation
+		cmds := []tea.Cmd{
+			m.requestChannelList(),
+		}
+
+		// Send nickname if we have one
+		if m.nickname != "" {
+			cmds = append(cmds, m.sendSetNickname())
+		}
+
+		m.loadingChannels = true
+		return m, tea.Batch(cmds...)
+	}
+
+	// Different server - need to reconnect
+	if m.logger != nil {
+		m.logger.Printf("Switching from %s to %s", currentAddr, serverAddr)
+	}
+
+	// Disconnect from directory server
+	m.conn.Disconnect()
+
+	// Create connection to new server (returns concrete *Connection type)
+	conn, err := client.NewConnection(serverAddr)
+	if err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to create connection: %v", err)
+		return m, nil
+	}
+
+	// Set logger if we have one (using concrete type methods)
+	if m.logger != nil {
+		conn.SetLogger(m.logger)
+		m.logger.Printf("Connecting to server: %s", conn.GetAddress())
+	}
+
+	// Apply bandwidth throttling if requested (using concrete type methods)
+	if m.throttle > 0 {
+		conn.SetThrottle(m.throttle)
+		if m.logger != nil {
+			m.logger.Printf("Bandwidth throttling enabled: %d bytes/sec", m.throttle)
+		}
+	}
+
+	// Connect to server
+	if err := conn.Connect(); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to connect to %s: %v", server.Name, err)
+		return m, nil
+	}
+
+	// Update model state
+	m.conn = conn
+	m.connectionState = StateConnected
+	m.directoryMode = false
+	m.statusMessage = fmt.Sprintf("Connected to %s", server.Name)
+
+	// Close the server selector modal
+	m.modalStack.Pop()
+
+	// Start normal operation
+	cmds := []tea.Cmd{
+		listenForServerFrames(m.conn),
+		m.requestChannelList(),
+	}
+
+	// Send nickname if we have one
+	if m.nickname != "" {
+		cmds = append(cmds, m.sendSetNickname())
+	}
+
+	m.loadingChannels = true
+
+	return m, tea.Batch(cmds...)
+}
+
+// SSH Key Management Handlers
+
+func (m Model) handleSSHKeyList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.SSHKeyListResponse{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode SSH_KEY_LIST: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	// Convert to modal.SSHKeyInfo format
+	keys := make([]modal.SSHKeyInfo, len(msg.Keys))
+	for i, key := range msg.Keys {
+		keys[i] = modal.SSHKeyInfo{
+			ID:          uint64(key.ID),
+			Fingerprint: key.Fingerprint,
+			KeyType:     key.KeyType,
+			Label:       key.Label,
+			AddedAt:     time.UnixMilli(key.AddedAt),
+			LastUsedAt:  nil,
+		}
+		if key.LastUsedAt > 0 {
+			t := time.UnixMilli(key.LastUsedAt)
+			keys[i].LastUsedAt = &t
+		}
+	}
+
+	// Show SSH key manager modal
+	m.showSSHKeyManagerModal(keys)
+
+	return m, listenForServerFrames(m.conn)
+}
+
+func (m Model) handleSSHKeyAdded(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.SSHKeyAddedResponse{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode SSH_KEY_ADDED: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	if msg.Success {
+		m.statusMessage = fmt.Sprintf("SSH key added: %s", msg.Fingerprint)
+		// Refresh the key list
+		return m, tea.Batch(listenForServerFrames(m.conn), m.sendListSSHKeys())
+	} else {
+		m.errorMessage = msg.ErrorMessage
+		return m, listenForServerFrames(m.conn)
+	}
+}
+
+func (m Model) handleSSHKeyLabelUpdated(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.SSHKeyLabelUpdatedResponse{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode SSH_KEY_LABEL_UPDATED: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	if msg.Success {
+		m.statusMessage = "SSH key label updated"
+		// Refresh the key list
+		return m, tea.Batch(listenForServerFrames(m.conn), m.sendListSSHKeys())
+	} else {
+		m.errorMessage = msg.ErrorMessage
+		return m, listenForServerFrames(m.conn)
+	}
+}
+
+func (m Model) handleSSHKeyDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.SSHKeyDeletedResponse{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode SSH_KEY_DELETED: %v", err)
+		return m, listenForServerFrames(m.conn)
+	}
+
+	if msg.Success {
+		m.statusMessage = "SSH key deleted"
+		// Refresh the key list
+		return m, tea.Batch(listenForServerFrames(m.conn), m.sendListSSHKeys())
+	} else {
+		m.errorMessage = msg.ErrorMessage
+		return m, listenForServerFrames(m.conn)
+	}
 }
