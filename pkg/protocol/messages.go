@@ -2430,6 +2430,14 @@ func (m *ChangePasswordRequest) EncodeTo(w io.Writer) error {
 	return WriteString(w, m.NewPassword)
 }
 
+func (m *ChangePasswordRequest) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (m *ChangePasswordRequest) Decode(payload []byte) error {
 	buf := bytes.NewReader(payload)
 	oldPassword, err := ReadString(buf)
@@ -2458,6 +2466,14 @@ func (m *PasswordChangedResponse) EncodeTo(w io.Writer) error {
 		return err
 	}
 	return WriteString(w, m.ErrorMessage)
+}
+
+func (m *PasswordChangedResponse) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (m *PasswordChangedResponse) Decode(payload []byte) error {
@@ -2845,13 +2861,59 @@ func (m *SSHKeyDeletedResponse) Decode(payload []byte) error {
 // Compile-time checks to ensure all message types implement the ProtocolMessage interface
 // This will cause a compile error if any message type is missing Encode(), EncodeTo(), or Decode()
 var (
-	// SSH-related messages
+	// Client → Server messages
+	_ ProtocolMessage = (*AuthRequestMessage)(nil)
+	_ ProtocolMessage = (*SetNicknameMessage)(nil)
+	_ ProtocolMessage = (*RegisterUserMessage)(nil)
+	_ ProtocolMessage = (*ListChannelsMessage)(nil)
+	_ ProtocolMessage = (*JoinChannelMessage)(nil)
+	_ ProtocolMessage = (*CreateChannelMessage)(nil)
+	_ ProtocolMessage = (*ListMessagesMessage)(nil)
+	_ ProtocolMessage = (*PostMessageMessage)(nil)
+	_ ProtocolMessage = (*EditMessageMessage)(nil)
+	_ ProtocolMessage = (*DeleteMessageMessage)(nil)
+	_ ProtocolMessage = (*PingMessage)(nil)
+	_ ProtocolMessage = (*DisconnectMessage)(nil)
+	_ ProtocolMessage = (*SubscribeThreadMessage)(nil)
+	_ ProtocolMessage = (*UnsubscribeThreadMessage)(nil)
+	_ ProtocolMessage = (*SubscribeChannelMessage)(nil)
+	_ ProtocolMessage = (*UnsubscribeChannelMessage)(nil)
+	_ ProtocolMessage = (*GetUserInfoMessage)(nil)
+	_ ProtocolMessage = (*ListUsersMessage)(nil)
+	_ ProtocolMessage = (*ListServersMessage)(nil)
+	_ ProtocolMessage = (*RegisterServerMessage)(nil)
+	_ ProtocolMessage = (*VerifyRegistrationMessage)(nil)
+	_ ProtocolMessage = (*HeartbeatMessage)(nil)
+	_ ProtocolMessage = (*ChangePasswordRequest)(nil)
 	_ ProtocolMessage = (*AddSSHKeyRequest)(nil)
-	_ ProtocolMessage = (*SSHKeyAddedResponse)(nil)
 	_ ProtocolMessage = (*ListSSHKeysRequest)(nil)
-	_ ProtocolMessage = (*SSHKeyListResponse)(nil)
 	_ ProtocolMessage = (*UpdateSSHKeyLabelRequest)(nil)
-	_ ProtocolMessage = (*SSHKeyLabelUpdatedResponse)(nil)
 	_ ProtocolMessage = (*DeleteSSHKeyRequest)(nil)
+
+	// Server → Client messages
+	_ ProtocolMessage = (*AuthResponseMessage)(nil)
+	_ ProtocolMessage = (*NicknameResponseMessage)(nil)
+	_ ProtocolMessage = (*RegisterResponseMessage)(nil)
+	_ ProtocolMessage = (*ChannelListMessage)(nil)
+	_ ProtocolMessage = (*JoinResponseMessage)(nil)
+	_ ProtocolMessage = (*ChannelCreatedMessage)(nil)
+	_ ProtocolMessage = (*MessageListMessage)(nil)
+	_ ProtocolMessage = (*MessagePostedMessage)(nil)
+	_ ProtocolMessage = (*MessageEditedMessage)(nil)
+	_ ProtocolMessage = (*MessageDeletedMessage)(nil)
+	_ ProtocolMessage = (*PongMessage)(nil)
+	_ ProtocolMessage = (*ErrorMessage)(nil)
+	_ ProtocolMessage = (*ServerConfigMessage)(nil)
+	_ ProtocolMessage = (*SubscribeOkMessage)(nil)
+	_ ProtocolMessage = (*UserInfoMessage)(nil)
+	_ ProtocolMessage = (*UserListMessage)(nil)
+	_ ProtocolMessage = (*ServerListMessage)(nil)
+	_ ProtocolMessage = (*RegisterAckMessage)(nil)
+	_ ProtocolMessage = (*VerifyResponseMessage)(nil)
+	_ ProtocolMessage = (*HeartbeatAckMessage)(nil)
+	_ ProtocolMessage = (*PasswordChangedResponse)(nil)
+	_ ProtocolMessage = (*SSHKeyAddedResponse)(nil)
+	_ ProtocolMessage = (*SSHKeyListResponse)(nil)
+	_ ProtocolMessage = (*SSHKeyLabelUpdatedResponse)(nil)
 	_ ProtocolMessage = (*SSHKeyDeletedResponse)(nil)
 )
