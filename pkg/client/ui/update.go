@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -108,21 +107,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// No-op message just to trigger a re-render
 		return m, nil
 
+	case InitTimeoutCheckMsg:
+		// Check if initialization timeout has been reached
+		if m.initStateMachine.OnTimeout() {
+			// Timeout reached - assume TCP connection, send SET_NICKNAME
+			if m.logger != nil {
+				m.logger.Printf("[InitStateMachine] AUTH_RESPONSE timeout, assuming TCP connection")
+			}
+			if m.nickname != "" {
+				return m, tea.Batch(
+					m.sendSetNickname(),
+					m.sendGetUserInfo(m.nickname),
+				)
+			}
+			return m, nil
+		}
+
+		// Not timed out yet, check if we're still waiting
+		if m.initStateMachine.State() == InitStateAwaitingAuth {
+			// Still waiting for AUTH_RESPONSE, schedule another check with exponential backoff
+			delay := m.initStateMachine.NextCheckDelay()
+			if m.logger != nil {
+				m.logger.Printf("[InitStateMachine] Next timeout check in %v", delay)
+			}
+			return m, checkInitTimeout(delay)
+		}
+
+		// Already transitioned (e.g., AUTH_RESPONSE arrived), stop checking
+		return m, nil
+
 	case NicknameSentMsg:
 		// Store the nickname we sent so we can use it when server confirms
 		m.pendingNickname = msg.Nickname
-
-		// If going anonymous, clear authentication locally
-		if msg.GoAnonymous {
-			m.userID = nil
-			m.authState = AuthStateAnonymous
-			m.state.SetUserID(nil)
-		}
 		return m, nil
 
 	case modal.ServerSelectedMsg:
 		// User selected a server to connect to
 		return m.handleServerSelected(msg.Server)
+
+	case modal.ServerSelectorCancelledMsg:
+		// User cancelled server selection
+		// If we're in directory mode with no saved server (first run), exit the app
+		// Otherwise (user pressed Ctrl+L to switch), just continue with current connection
+		savedServer, _ := m.state.GetConfig("directory_selected_server")
+		if m.directoryMode && savedServer == "" {
+			// First run, user declined to choose a server - exit
+			return m, tea.Quit
+		}
+		// User just closed the server selector, continue normally
+		return m, nil
 
 	default:
 		// Always update spinner (it manages its own tick messages)
@@ -147,10 +180,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Debug: log ctrl+k specifically
+	// Debug: log ctrl+k and ctrl+l specifically
 	if key == "ctrl+k" {
 		if m.logger != nil {
 			m.logger.Printf("[DEBUG] handleKeyPress: Received ctrl+k, authState=%d, modalStack.Top=%v", m.authState, m.modalStack.TopType())
+		}
+	}
+	if key == "ctrl+l" {
+		if m.logger != nil {
+			m.logger.Printf("[DEBUG] handleKeyPress: Received ctrl+l, view=%d, modalStack.Top=%v", m.currentView, m.modalStack.TopType())
 		}
 	}
 
@@ -204,11 +242,19 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Route through command registry based on main view and active modal
 	activeModalType := m.modalStack.TopType()
 	if cmd := m.commands.GetCommand(key, int(m.currentView), activeModalType, &m); cmd != nil {
+		if key == "ctrl+l" && m.logger != nil {
+			m.logger.Printf("[DEBUG] Found ctrl+l command in registry, executing...")
+		}
 		newModel, teaCmd := cmd.Execute(&m)
 		if model, ok := newModel.(*Model); ok {
 			return *model, teaCmd
 		}
 		return m, teaCmd
+	}
+
+	// Debug: log if ctrl+l command not found
+	if key == "ctrl+l" && m.logger != nil {
+		m.logger.Printf("[DEBUG] ctrl+l command NOT found in registry")
 	}
 
 	// Fall back to existing key handlers (during migration period)
@@ -241,16 +287,8 @@ func (m Model) handleSplashKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.currentView = ViewChannelList
 	m.loadingChannels = true
 
-	// Send SET_NICKNAME if we have one from last time
-	if m.nickname != "" {
-		return m, tea.Batch(
-			m.sendSetNickname(),
-			m.sendGetUserInfo(m.nickname),
-			m.requestChannelList(),
-		)
-	}
-
-	// No nickname - browse anonymously
+	// Don't auto-send SET_NICKNAME here - wait for AUTH_RESPONSE to arrive first (if SSH)
+	// We'll send it from handleServerConfig after a short delay
 	return m, m.requestChannelList()
 }
 
@@ -595,6 +633,9 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	return m, listenForServerFrames(m.conn)
 }
 
+// InitTimeoutCheckMsg triggers periodic checking of initialization timeout
+type InitTimeoutCheckMsg struct{}
+
 // handleServerConfig processes SERVER_CONFIG
 func (m Model) handleServerConfig(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.ServerConfigMessage{}
@@ -606,7 +647,38 @@ func (m Model) handleServerConfig(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	m.serverConfig = msg
 	m.statusMessage = fmt.Sprintf("Connected (protocol v%d)", msg.ProtocolVersion)
 
-	return m, listenForServerFrames(m.conn)
+	// Transition state machine based on connection type
+	m.initStateMachine.OnServerConfig()
+
+	if m.logger != nil {
+		m.logger.Printf("[InitStateMachine] State after SERVER_CONFIG: %s", m.initStateMachine.State())
+	}
+
+	// If TCP connection (not SSH), send SET_NICKNAME immediately
+	if m.initStateMachine.NeedsNickname() && m.nickname != "" {
+		if m.logger != nil {
+			m.logger.Printf("[InitStateMachine] TCP connection, sending SET_NICKNAME")
+		}
+		return m, tea.Batch(
+			listenForServerFrames(m.conn),
+			m.sendSetNickname(),
+			m.sendGetUserInfo(m.nickname),
+		)
+	}
+
+	// SSH connection - wait for AUTH_RESPONSE, check timeout with exponential backoff
+	return m, tea.Batch(
+		listenForServerFrames(m.conn),
+		checkInitTimeout(m.initStateMachine.NextCheckDelay()),
+	)
+}
+
+// checkInitTimeout returns a command that checks initialization timeout after a delay
+func checkInitTimeout(delay time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(delay)
+		return InitTimeoutCheckMsg{}
+	}
 }
 
 // handleNicknameResponse processes NICKNAME_RESPONSE
@@ -664,15 +736,19 @@ func (m Model) handleUserInfo(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m, listenForServerFrames(m.conn)
 	}
 
-	// Debug: log the response
-	fmt.Fprintf(os.Stderr, "[DEBUG] USER_INFO response: nickname=%s, isRegistered=%v, online=%v\n", msg.Nickname, msg.IsRegistered, msg.Online)
-	fmt.Fprintf(os.Stderr, "[DEBUG] Current nickname=%s, pending=%s\n", m.nickname, m.pendingNickname)
+	// Log the response for debugging
+	if m.logger != nil {
+		m.logger.Printf("[DEBUG] USER_INFO response: nickname=%s, isRegistered=%v, online=%v", msg.Nickname, msg.IsRegistered, msg.Online)
+		m.logger.Printf("[DEBUG] Current nickname=%s, pending=%s", m.nickname, m.pendingNickname)
+	}
 
 	// Update our tracking of whether this nickname is registered
 	// Only update if this is info about our current or pending nickname
 	if msg.Nickname == m.nickname || msg.Nickname == m.pendingNickname {
 		m.nicknameIsRegistered = msg.IsRegistered
-		fmt.Fprintf(os.Stderr, "[DEBUG] Updated nicknameIsRegistered=%v\n", m.nicknameIsRegistered)
+		if m.logger != nil {
+			m.logger.Printf("[DEBUG] Updated nicknameIsRegistered=%v", m.nicknameIsRegistered)
+		}
 	}
 
 	// Force a re-render so the UI updates (footer commands change based on nicknameIsRegistered)
@@ -689,8 +765,15 @@ type ForceRenderMsg struct{}
 func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.AuthResponseMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
+		if m.logger != nil {
+			m.logger.Printf("[ERROR] Failed to decode AUTH_RESPONSE: %v", err)
+		}
 		m.errorMessage = fmt.Sprintf("Failed to decode AUTH_RESPONSE: %v", err)
 		return m, listenForServerFrames(m.conn)
+	}
+
+	if m.logger != nil {
+		m.logger.Printf("[DEBUG] AUTH_RESPONSE: Success=%v, UserID=%d, Nickname='%s', Message='%s'", msg.Success, msg.UserID, msg.Nickname, msg.Message)
 	}
 
 	if msg.Success {
@@ -699,6 +782,23 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.userID = &msg.UserID
 		m.authAttempts = 0
 		m.authErrorMessage = ""
+
+		// Transition state machine to Ready
+		if m.initStateMachine.OnAuthResponse() {
+			if m.logger != nil {
+				m.logger.Printf("[InitStateMachine] Transitioned to Ready after AUTH_RESPONSE")
+			}
+		}
+
+		// Update nickname from server (especially important for SSH auth)
+		if msg.Nickname != "" {
+			if m.logger != nil {
+				m.logger.Printf("[DEBUG] AUTH_RESPONSE: setting nickname to '%s' (was '%s')", msg.Nickname, m.nickname)
+			}
+			m.nickname = msg.Nickname
+			m.state.SetLastNickname(msg.Nickname)
+		}
+
 		m.statusMessage = fmt.Sprintf("Authenticated as %s", m.nickname)
 
 		// Save user ID to state
@@ -1272,6 +1372,16 @@ func (m Model) sendSetNicknameWithAnonymous(nickname string, goAnonymous bool) t
 	}
 }
 
+func (m Model) sendLogout() tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.LogoutMessage{}
+		if err := m.conn.SendMessage(protocol.TypeLogout, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
 func (m Model) sendAuthRequest(password []byte) tea.Cmd {
 	return func() tea.Msg {
 		msg := &protocol.AuthRequestMessage{
@@ -1745,9 +1855,12 @@ func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
 	// Re-request data based on current view
 	cmds := []tea.Cmd{listenForServerFrames(m.conn)}
 
-	// Re-send nickname if we have one
-	if m.nickname != "" {
+	// Re-send nickname if we have one (but not if already authenticated - SSH already set it)
+	if m.nickname != "" && m.authState != AuthStateAuthenticated {
 		cmds = append(cmds, m.sendSetNickname())
+		cmds = append(cmds, m.sendGetUserInfo(m.nickname))
+	} else if m.authState == AuthStateAuthenticated {
+		// Already authenticated (e.g., SSH), just query user info
 		cmds = append(cmds, m.sendGetUserInfo(m.nickname))
 	}
 
@@ -1809,8 +1922,8 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 			m.requestChannelList(),
 		}
 
-		// Send nickname if we have one
-		if m.nickname != "" {
+		// Send nickname if we have one (but not if already authenticated)
+		if m.nickname != "" && m.authState != AuthStateAuthenticated {
 			cmds = append(cmds, m.sendSetNickname())
 		}
 
@@ -1868,8 +1981,8 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 		m.requestChannelList(),
 	}
 
-	// Send nickname if we have one
-	if m.nickname != "" {
+	// Send nickname if we have one (but not if already authenticated)
+	if m.nickname != "" && m.authState != AuthStateAuthenticated {
 		cmds = append(cmds, m.sendSetNickname())
 	}
 

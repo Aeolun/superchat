@@ -9,17 +9,18 @@ import (
 
 	"github.com/76creates/stickers/flexbox"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 // Styles for SSH key manager
 var (
-	primaryColor    = lipgloss.Color("#00D0D0")
-	mutedTextStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	boldStyle       = lipgloss.NewStyle().Bold(true)
-	highlightStyle  = lipgloss.NewStyle().Background(lipgloss.Color("236"))
-	errorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
+	primaryColor   = lipgloss.Color("#00D0D0")
+	mutedTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	boldStyle      = lipgloss.NewStyle().Bold(true)
+	highlightStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
 )
 
 // SSHKeyInfo represents an SSH key from the server
@@ -44,6 +45,8 @@ type SSHKeyManagerModal struct {
 	keys          []SSHKeyInfo
 	selectedIndex int
 	loading       bool // True while waiting for server response
+	viewport      viewport.Model
+	viewportReady bool
 
 	// Add key view
 	addKeyInput   textinput.Model
@@ -58,10 +61,10 @@ type SSHKeyManagerModal struct {
 	editErrorMsg   string
 
 	// Delete confirm view
-	deleteKeyID     uint64
-	deleteKeyLabel  string
-	deleteErrorMsg  string
-	deleteFocusYes  bool
+	deleteKeyID    uint64
+	deleteKeyLabel string
+	deleteErrorMsg string
+	deleteFocusYes bool
 
 	// Callbacks
 	onAddKey    func(publicKey, label string) tea.Cmd
@@ -131,6 +134,9 @@ func (m *SSHKeyManagerModal) Render(width, height int) string {
 }
 
 func (m *SSHKeyManagerModal) renderList() string {
+	// Create flexbox layout - responsive to terminal size
+	modalWidth := min(74, m.width-4)
+
 	// Build key list content
 	var keyListItems []string
 
@@ -149,25 +155,50 @@ func (m *SSHKeyManagerModal) renderList() string {
 				indicator = lipgloss.NewStyle().Foreground(primaryColor).Render("► ")
 			}
 
+			// First line: label with type right-aligned
+			labelWidth := modalWidth - 2
+			labelText := boldStyle.Render(key.Label)
+			typeText := mutedTextStyle.Render(key.KeyType)
+			spacing := labelWidth - lipgloss.Width(key.Label) - lipgloss.Width(key.KeyType)
+			if spacing < 1 {
+				spacing = 1
+			}
+			firstLine := labelText + strings.Repeat(" ", spacing) + typeText
+
 			keyInfo := lipgloss.JoinVertical(lipgloss.Left,
-				boldStyle.Render(key.Label),
-				mutedTextStyle.Render("  Type: "+key.KeyType),
+				firstLine,
 				mutedTextStyle.Render("  Fingerprint: "+truncateFingerprint(key.Fingerprint)),
 				mutedTextStyle.Render("  "+formatLastUsed(key.LastUsedAt)),
 			)
 
 			item := indicator + keyInfo
-			if i == m.selectedIndex {
-				item = highlightStyle.Render(item)
-			}
-
 			keyListItems = append(keyListItems, item)
+
+			// Add blank line between keys (except last)
+			if i < len(m.keys)-1 {
+				keyListItems = append(keyListItems, "")
+			}
 		}
 	}
 
-	// Create flexbox layout - responsive to terminal size
-	modalWidth := min(74, m.width-4)
 	modalHeight := min(18, m.height-4)
+	contentHeight := modalHeight - 4 // title(1) + separator(1) + footer(1) + margin(1)
+
+	// Build key list string
+	keyListContent := lipgloss.JoinVertical(lipgloss.Left, keyListItems...)
+
+	// Initialize or update viewport
+	viewportWidth := modalWidth
+	if !m.viewportReady {
+		m.viewport = viewport.New(viewportWidth, contentHeight)
+		m.viewport.SetContent(keyListContent)
+		m.viewportReady = true
+	} else {
+		m.viewport.Width = viewportWidth
+		m.viewport.Height = contentHeight
+		m.viewport.SetContent(keyListContent)
+	}
+
 	layout := flexbox.New(modalWidth, modalHeight)
 
 	// Row 1: Title
@@ -178,18 +209,17 @@ func (m *SSHKeyManagerModal) renderList() string {
 		),
 	)
 
-	// Row 2: Key list (flexible height)
-	contentHeight := modalHeight - 4 // title(1) + separator(1) + footer(1) + margin(1)
+	// Row 2: Key list viewport (flexible height)
 	contentRow := layout.NewRow().AddCells(
 		flexbox.NewCell(1, contentHeight).SetContent(
-			lipgloss.JoinVertical(lipgloss.Left, keyListItems...),
+			m.viewport.View(),
 		),
 	)
 
-	// Row 3: Separator
+	// Row 3: Separator (match viewport width)
 	separatorRow := layout.NewRow().AddCells(
 		flexbox.NewCell(1, 1).SetContent(
-			mutedTextStyle.Render(strings.Repeat("─", modalWidth-4)),
+			mutedTextStyle.Render(strings.Repeat("─", viewportWidth)),
 		),
 	)
 
@@ -206,7 +236,7 @@ func (m *SSHKeyManagerModal) renderList() string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryColor).
-		Padding(1, 2).
+		Padding(1, 1). // Reduced horizontal padding from 2 to 1
 		Render(layout.Render())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -238,21 +268,24 @@ func (m *SSHKeyManagerModal) renderAddKey() string {
 
 	// Public key input
 	keyInputView := m.addKeyInput.View()
+	keyInputStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240"))
 	if m.addFocusIndex == 0 {
-		keyInputView = highlightStyle.Render(keyInputView)
+		keyInputStyle = keyInputStyle.BorderForeground(primaryColor)
 	}
 	contentItems = append(contentItems,
 		boldStyle.Render("Public Key:"),
-		keyInputView,
+		keyInputStyle.Render(keyInputView),
 		"",
 	)
 
 	// Quick select files
 	if len(m.pubKeyFiles) > 0 {
-		contentItems = append(contentItems, mutedTextStyle.Render("Quick select from ~/.ssh/:"))
+		contentItems = append(contentItems, "Quick select from ~/.ssh/:")
 		for i, file := range m.pubKeyFiles {
 			contentItems = append(contentItems,
-				mutedTextStyle.Render(fmt.Sprintf("  [%d] %s", i+1, filepath.Base(file))),
+				fmt.Sprintf("  [%d] %s", i+1, filepath.Base(file)),
 			)
 		}
 		contentItems = append(contentItems, "")
@@ -260,12 +293,15 @@ func (m *SSHKeyManagerModal) renderAddKey() string {
 
 	// Label input
 	labelInputView := m.addLabelInput.View()
+	labelInputStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240"))
 	if m.addFocusIndex == 1 {
-		labelInputView = highlightStyle.Render(labelInputView)
+		labelInputStyle = labelInputStyle.BorderForeground(primaryColor)
 	}
 	contentItems = append(contentItems,
 		boldStyle.Render("Label:"),
-		labelInputView,
+		labelInputStyle.Render(labelInputView),
 	)
 
 	// Error message
@@ -301,7 +337,7 @@ func (m *SSHKeyManagerModal) renderAddKey() string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryColor).
-		Padding(1, 2).
+		Padding(1, 1).
 		Render(layout.Render())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -322,10 +358,14 @@ func (m *SSHKeyManagerModal) renderEditLabel() string {
 	)
 
 	// Build content items
+	editInputStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(primaryColor)
+
 	contentItems := []string{
 		"Enter new label for this key:",
 		"",
-		m.editLabelInput.View(),
+		editInputStyle.Render(m.editLabelInput.View()),
 	}
 
 	if m.editErrorMsg != "" {
@@ -360,7 +400,7 @@ func (m *SSHKeyManagerModal) renderEditLabel() string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryColor).
-		Padding(1, 2).
+		Padding(1, 1).
 		Render(layout.Render())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -435,7 +475,7 @@ func (m *SSHKeyManagerModal) renderDeleteConfirm() string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryColor).
-		Padding(1, 2).
+		Padding(1, 1).
 		Render(layout.Render())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -493,10 +533,12 @@ func (m *SSHKeyManagerModal) handleKeyList(msg tea.KeyMsg) (bool, Modal, tea.Cmd
 	case "up", "k":
 		if m.selectedIndex > 0 {
 			m.selectedIndex--
+			m.scrollToSelectedKey()
 		}
 	case "down", "j":
 		if m.selectedIndex < len(m.keys)-1 {
 			m.selectedIndex++
+			m.scrollToSelectedKey()
 		}
 	case "a":
 		// Switch to add view
@@ -549,10 +591,14 @@ func (m *SSHKeyManagerModal) handleKeyAddKey(msg tea.KeyMsg) (bool, Modal, tea.C
 		if idx < len(m.pubKeyFiles) {
 			content, err := os.ReadFile(m.pubKeyFiles[idx])
 			if err == nil {
-				m.addKeyInput.SetValue(strings.TrimSpace(string(content)))
-				// Auto-set label from filename
-				baseName := filepath.Base(m.pubKeyFiles[idx])
-				label := strings.TrimSuffix(baseName, ".pub")
+				publicKey := strings.TrimSpace(string(content))
+				m.addKeyInput.SetValue(publicKey)
+				// Auto-set label from key comment (or filename as fallback)
+				label := extractSSHKeyComment(publicKey)
+				if label == "" {
+					baseName := filepath.Base(m.pubKeyFiles[idx])
+					label = strings.TrimSuffix(baseName, ".pub")
+				}
 				m.addLabelInput.SetValue(label)
 			}
 		}
@@ -672,5 +718,36 @@ func formatTimeAgo(t time.Time) string {
 			return "1 day ago"
 		}
 		return fmt.Sprintf("%d days ago", days)
+	}
+}
+
+func extractSSHKeyComment(publicKey string) string {
+	// SSH public keys have format: <type> <base64-data> <comment>
+	// Example: ssh-rsa AAAAB3NzaC1yc2EA... user@hostname
+	parts := strings.Fields(publicKey)
+	if len(parts) >= 3 {
+		// Return everything after the key data (handles multi-word comments)
+		return strings.Join(parts[2:], " ")
+	}
+	return ""
+}
+
+// scrollToSelectedKey scrolls the viewport to keep the selected key visible
+func (m *SSHKeyManagerModal) scrollToSelectedKey() {
+	if !m.viewportReady || len(m.keys) == 0 {
+		return
+	}
+
+	// Each key takes 4 lines (label + fingerprint + last used + blank line spacing)
+	lineHeight := 4
+	selectedLine := m.selectedIndex * lineHeight
+
+	// Scroll viewport to show selected item
+	if selectedLine < m.viewport.YOffset {
+		// Selected item is above viewport, scroll up
+		m.viewport.SetYOffset(selectedLine)
+	} else if selectedLine+lineHeight > m.viewport.YOffset+m.viewport.Height {
+		// Selected item is below viewport, scroll down
+		m.viewport.SetYOffset(selectedLine + lineHeight - m.viewport.Height)
 	}
 }

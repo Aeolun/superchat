@@ -63,7 +63,7 @@ func main() {
 	// Command line flags
 	defaultConfig := getDefaultConfigPath()
 	configPath := flag.String("config", defaultConfig, "Path to config file")
-	server := flag.String("server", "", "Server address (host:port, overrides config)")
+	server := flag.String("server", "", "Server address (sc://host:port or host:port, default port 6465, overrides config)")
 	directory := flag.String("directory", "", "Directory server address (host:port) to fetch server list from")
 	profile := flag.String("profile", "", "Profile name for separate configuration (default: none)")
 	statePath := flag.String("state", "", "Path to state database (overrides config)")
@@ -145,18 +145,14 @@ func main() {
 		// Check if we have a saved server from previous directory selection
 		savedServer, err := state.GetConfig("directory_selected_server")
 		if err == nil && savedServer != "" {
+			// User has previously selected a server, connect directly to it
 			serverAddr = savedServer
 		} else {
-			// Fall back to config
-			serverAddr = config.GetServerAddress()
-		}
-
-		// If still no server, trigger directory mode
-		if serverAddr == "" {
-			// Get directory server from config or use default
+			// No saved server (first run or reset) - use directory mode
+			// This shows the server selector and lets user choose
 			directoryServerAddr = config.GetServerAddress()
 			if directoryServerAddr == "" {
-				log.Fatalf("No server configured. Use --server to connect directly or --directory to fetch server list.")
+				directoryServerAddr = "superchat.win:6465" // Default directory server
 			}
 			useDirectory = true
 		}

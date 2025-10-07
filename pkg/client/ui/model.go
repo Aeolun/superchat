@@ -2,6 +2,7 @@ package ui
 
 import (
 	"log"
+	"strings"
 	"time"
 
 	"github.com/aeolun/superchat/pkg/client"
@@ -98,6 +99,7 @@ type Model struct {
 	threadViewport     viewport.Model  // Viewport for thread view
 	threadListViewport viewport.Model  // Viewport for thread list
 	chatViewport       viewport.Model  // Viewport for chat channel view
+	splashViewport     viewport.Model  // Viewport for splash screen
 	spinner            spinner.Model   // Loading spinner
 	newMessageIDs      map[uint64]bool // Track new messages in current thread
 	confirmingDelete   bool
@@ -124,6 +126,9 @@ type Model struct {
 	authAttempts      int       // For rate limiting
 	authCooldownUntil time.Time // For rate limiting
 	authErrorMessage  string    // For displaying errors in password modal
+
+	// Initialization state machine
+	initStateMachine *InitStateMachine
 
 	// Error and status
 	errorMessage  string
@@ -220,9 +225,19 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 		lastPingSent:           time.Now(),
 	}
 
+	// Initialize state machine - detect SSH connection by address prefix
+	isSSH := strings.HasPrefix(conn.GetAddress(), "ssh://")
+	m.initStateMachine = NewInitStateMachine(isSSH)
+
 	// Initialize command registry
 	m.commands = commands.NewRegistry()
 	m.registerCommands()
+
+	// If in directory mode, show server selector immediately
+	if directoryMode {
+		m.modalStack.Push(modal.NewServerSelectorLoading())
+		m.awaitingServerList = true
+	}
 
 	return m
 }
@@ -262,7 +277,7 @@ func (m *Model) registerCommands() {
 		Priority(950).
 		Build())
 
-	// Server selector (only if directory is enabled)
+	// Server selector
 	m.commands.Register(commands.NewCommand().
 		Keys("ctrl+l").
 		Name("Server List").
@@ -271,12 +286,8 @@ func (m *Model) registerCommands() {
 		InModals(modal.ModalNone). // Only available when no modal is open
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
-			// Only show if server has directory capability
-			if model.serverConfig == nil || !model.serverConfig.DirectoryEnabled {
-				model.statusMessage = "Server does not support server discovery"
-				return model, nil
-			}
-			// Show loading modal and request server list
+			// Show loading modal immediately and request server list
+			// If server doesn't support directory, error will show in modal
 			serverModal := modal.NewServerSelectorLoading()
 			model.modalStack.Push(serverModal)
 			return model, model.requestServerList()
@@ -941,11 +952,18 @@ func (m *Model) showGoAnonymousModal() {
 	nicknameModal := modal.NewNicknameChangeModal(
 		"", // Don't pre-fill with current nickname
 		func(newNickname string) tea.Cmd {
-			// Clear authentication locally and change nickname
-			// Note: Don't modify m.userID/m.authState here due to bubbletea value semantics
-			// They'll be cleared in the NicknameSentMsg handler
+			// Clear authentication locally first
+			m.userID = nil
+			m.authState = AuthStateAnonymous
+			m.state.SetUserID(nil)
 			m.state.SetLastNickname(newNickname)
-			return m.sendSetNicknameWithAnonymous(newNickname, true)
+
+			// Send LOGOUT first, then SET_NICKNAME
+			// TCP guarantees these arrive in order, so server will process LOGOUT before SET_NICKNAME
+			return tea.Batch(
+				m.sendLogout(),
+				m.sendSetNicknameWith(newNickname),
+			)
 		},
 		func() tea.Cmd {
 			// Canceled
@@ -1106,11 +1124,8 @@ func (m Model) Init() tea.Cmd {
 		checkForUpdates(m.currentVersion), // Check for updates in background
 	}
 
-	// If in directory mode, request server list and show selector
+	// If in directory mode, request server list (selector modal already shown in NewModel)
 	if m.directoryMode {
-		// Show server selector in loading state
-		m.modalStack.Push(modal.NewServerSelectorLoading())
-		m.awaitingServerList = true
 		// Send LIST_SERVERS request
 		cmds = append(cmds, m.requestServerList())
 		return tea.Batch(cmds...)
@@ -1121,10 +1136,7 @@ func (m Model) Init() tea.Cmd {
 	if m.currentView == ViewChannelList {
 		m.loadingChannels = true
 		cmds = append(cmds, m.requestChannelList())
-		// Also send nickname if we have one
-		if m.nickname != "" {
-			cmds = append(cmds, m.sendSetNickname())
-		}
+		// Don't send SET_NICKNAME here - wait for DelayedNicknameMsg after SERVER_CONFIG
 	}
 
 	return tea.Batch(cmds...)

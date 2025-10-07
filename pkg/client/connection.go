@@ -18,6 +18,7 @@ import (
 
 	"github.com/aeolun/superchat/pkg/protocol"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
@@ -635,7 +636,7 @@ func parseServerAddress(raw string) (*dialConfig, error) {
 	}
 
 	switch scheme {
-	case "tcp", "":
+	case "tcp", "sc", "":
 		host, port, err := splitHostPortWithDefault(hostPort, defaultTCPPort)
 		if err != nil {
 			return nil, err
@@ -924,7 +925,7 @@ func dialSSH(user, host, port string, verifier *hostKeyVerifier) (net.Conn, erro
 
 	if len(authMethods) == 0 {
 		netConn.Close()
-		return nil, errors.New("no SSH keys found - generate one with: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519")
+		return nil, errors.New("no SSH keys found - add your key to ssh-agent with: ssh-add ~/.ssh/id_rsa\nOr generate a new unencrypted key with: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ''")
 	}
 
 	config := &ssh.ClientConfig{
@@ -968,24 +969,54 @@ func dialSSH(user, host, port string, verifier *hostKeyVerifier) (net.Conn, erro
 	}, nil
 }
 
-// loadSSHAuthMethods loads SSH private keys from standard locations
+// loadSSHAuthMethods loads SSH private keys from SSH agent and standard locations
 func loadSSHAuthMethods() ([]ssh.AuthMethod, error) {
-	homeDir := defaultSSHUser() // Reuse this to get home dir
-	if homeDir == "" {
-		homeDir = os.Getenv("HOME")
+	var authMethods []ssh.AuthMethod
+
+	// Try SSH agent first (handles encrypted keys automatically)
+	if agentAuth := trySSHAgent(); agentAuth != nil {
+		authMethods = append(authMethods, agentAuth)
 	}
-	if homeDir == "" {
-		return nil, errors.New("cannot determine home directory")
+
+	// Also try loading unencrypted keys from disk as fallback
+	if diskAuth := tryLoadKeysFromDisk(); diskAuth != nil {
+		authMethods = append(authMethods, diskAuth)
+	}
+
+	return authMethods, nil
+}
+
+// trySSHAgent attempts to connect to SSH agent and use its keys
+func trySSHAgent() ssh.AuthMethod {
+	socket := os.Getenv("SSH_AUTH_SOCK")
+	if socket == "" {
+		return nil
+	}
+
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		return nil
+	}
+
+	agentClient := agent.NewClient(conn)
+	return ssh.PublicKeysCallback(agentClient.Signers)
+}
+
+// tryLoadKeysFromDisk loads unencrypted SSH keys from standard locations
+func tryLoadKeysFromDisk() ssh.AuthMethod {
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		return nil
 	}
 
 	sshDir := filepath.Join(homeDir, ".ssh")
 
 	// Try common key file names in order of preference
 	keyFiles := []string{
-		"id_ed25519",     // Modern default
-		"id_ecdsa",       // Modern ECDSA
-		"id_rsa",         // Traditional RSA
-		"id_dsa",         // Legacy DSA (still check for compatibility)
+		"id_ed25519", // Modern default
+		"id_ecdsa",   // Modern ECDSA
+		"id_rsa",     // Traditional RSA
+		"id_dsa",     // Legacy DSA (still check for compatibility)
 	}
 
 	var signers []ssh.Signer
@@ -993,18 +1024,14 @@ func loadSSHAuthMethods() ([]ssh.AuthMethod, error) {
 	for _, keyFile := range keyFiles {
 		keyPath := filepath.Join(sshDir, keyFile)
 
-		// Read private key file
 		keyBytes, err := os.ReadFile(keyPath)
 		if err != nil {
-			// File doesn't exist or can't be read - skip
 			continue
 		}
 
-		// Try parsing without passphrase first
 		signer, err := ssh.ParsePrivateKey(keyBytes)
 		if err != nil {
-			// TODO: If err is ssh.PassphraseMissingError, prompt for passphrase
-			// For now, skip encrypted keys
+			// Skip encrypted keys - user should use SSH agent for those
 			continue
 		}
 
@@ -1012,10 +1039,10 @@ func loadSSHAuthMethods() ([]ssh.AuthMethod, error) {
 	}
 
 	if len(signers) == 0 {
-		return nil, nil // No keys found, but not an error
+		return nil
 	}
 
-	return []ssh.AuthMethod{ssh.PublicKeys(signers...)}, nil
+	return ssh.PublicKeys(signers...)
 }
 
 func promptAcceptHostKey(hostname string, remote net.Addr, fingerprint string, key ssh.PublicKey, paths []string) (bool, error) {
