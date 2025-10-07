@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/aeolun/superchat/pkg/database"
 	"github.com/aeolun/superchat/pkg/protocol"
@@ -681,6 +682,316 @@ func (s *Server) handleDeleteMessage(sess *Session, frame *protocol.Frame) error
 	return nil
 }
 
+// handleChangePassword handles CHANGE_PASSWORD message (V2 feature)
+func (s *Server) handleChangePassword(sess *Session, frame *protocol.Frame) error {
+	// Must be authenticated
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	if userID == nil {
+		return s.sendError(sess, protocol.ErrCodeAuthRequired, "Must be authenticated to change password")
+	}
+
+	// Decode request
+	req := &protocol.ChangePasswordRequest{}
+	if err := req.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid change password request")
+	}
+
+	// Get user from database
+	user, err := s.db.GetUserByID(*userID)
+	if err != nil {
+		log.Printf("Failed to get user %d for password change: %v", *userID, err)
+		return s.sendPasswordChanged(sess, false, "User not found")
+	}
+
+	// Verify old password (skip if user has no password set - SSH-registered)
+	if user.PasswordHash != "" && req.OldPassword != "" {
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.OldPassword)); err != nil {
+			return s.sendPasswordChanged(sess, false, "Incorrect current password")
+		}
+	}
+
+	// Validate new password
+	if len(req.NewPassword) < 8 {
+		return s.sendPasswordChanged(sess, false, "Password must be at least 8 characters")
+	}
+
+	// Hash new password
+	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("Failed to hash password for user %d: %v", *userID, err)
+		return s.sendError(sess, protocol.ErrCodeInternalError, "Failed to hash password")
+	}
+
+	// Update password
+	if err := s.db.UpdateUserPassword(*userID, string(newHash)); err != nil {
+		log.Printf("Failed to update password for user %d: %v", *userID, err)
+		return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to update password")
+	}
+
+	sess.mu.RLock()
+	nickname := sess.Nickname
+	sess.mu.RUnlock()
+
+	log.Printf("User %s (ID: %d) changed password", nickname, *userID)
+	return s.sendPasswordChanged(sess, true, "")
+}
+
+// sendPasswordChanged sends a PASSWORD_CHANGED response
+func (s *Server) sendPasswordChanged(sess *Session, success bool, errorMessage string) error {
+	resp := &protocol.PasswordChangedResponse{
+		Success:      success,
+		ErrorMessage: errorMessage,
+	}
+	return s.sendMessage(sess, protocol.TypePasswordChanged, resp)
+}
+
+// handleAddSSHKey handles ADD_SSH_KEY message
+func (s *Server) handleAddSSHKey(sess *Session, frame *protocol.Frame) error {
+	// Must be authenticated
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	if userID == nil {
+		return s.sendError(sess, protocol.ErrCodeAuthRequired, "Must be authenticated to add SSH key")
+	}
+
+	// Decode request
+	req := &protocol.AddSSHKeyRequest{}
+	if err := req.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid request format")
+	}
+
+	// Validate public key format
+	if req.PublicKey == "" {
+		return s.sendSSHKeyAdded(sess, false, 0, "", "Public key cannot be empty")
+	}
+
+	// Parse SSH public key
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(req.PublicKey))
+	if err != nil {
+		return s.sendSSHKeyAdded(sess, false, 0, "", fmt.Sprintf("Invalid SSH public key: %v", err))
+	}
+
+	// Compute fingerprint
+	fingerprint := ssh.FingerprintSHA256(pubKey)
+
+	// Check for duplicate
+	existing, err := s.db.GetSSHKeyByFingerprint(fingerprint)
+	if err == nil && existing != nil {
+		return s.sendSSHKeyAdded(sess, false, 0, "", "SSH key already exists")
+	}
+
+	// Create SSH key record
+	sshKey := &database.SSHKey{
+		UserID:      *userID,
+		Fingerprint: fingerprint,
+		PublicKey:   req.PublicKey,
+		KeyType:     pubKey.Type(),
+		AddedAt:     time.Now().UnixMilli(),
+	}
+	if req.Label != "" {
+		sshKey.Label = &req.Label
+	}
+
+	// Store in database
+	if err := s.db.CreateSSHKey(sshKey); err != nil {
+		log.Printf("Failed to create SSH key for user %d: %v", *userID, err)
+		return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to add SSH key")
+	}
+
+	log.Printf("User %d added SSH key %s", *userID, fingerprint)
+	return s.sendSSHKeyAdded(sess, true, sshKey.ID, fingerprint, "")
+}
+
+// sendSSHKeyAdded sends SSH_KEY_ADDED response
+func (s *Server) sendSSHKeyAdded(sess *Session, success bool, keyID int64, fingerprint, errorMessage string) error {
+	resp := &protocol.SSHKeyAddedResponse{
+		Success:      success,
+		KeyID:        keyID,
+		Fingerprint:  fingerprint,
+		ErrorMessage: errorMessage,
+	}
+	return s.sendMessage(sess, protocol.TypeSSHKeyAdded, resp)
+}
+
+// handleListSSHKeys handles LIST_SSH_KEYS message
+func (s *Server) handleListSSHKeys(sess *Session, frame *protocol.Frame) error {
+	// Must be authenticated
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	if userID == nil {
+		return s.sendError(sess, protocol.ErrCodeAuthRequired, "Must be authenticated to list SSH keys")
+	}
+
+	// Decode request (no payload, but need to decode for consistency)
+	req := &protocol.ListSSHKeysRequest{}
+	if err := req.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid request format")
+	}
+
+	// Get SSH keys from database
+	keys, err := s.db.GetSSHKeysByUserID(*userID)
+	if err != nil {
+		log.Printf("Failed to get SSH keys for user %d: %v", *userID, err)
+		return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to retrieve SSH keys")
+	}
+
+	// Convert to protocol format
+	keyInfos := make([]protocol.SSHKeyInfo, len(keys))
+	for i, key := range keys {
+		label := ""
+		if key.Label != nil {
+			label = *key.Label
+		}
+		lastUsed := int64(0)
+		if key.LastUsedAt != nil {
+			lastUsed = *key.LastUsedAt
+		}
+
+		keyInfos[i] = protocol.SSHKeyInfo{
+			ID:          key.ID,
+			Fingerprint: key.Fingerprint,
+			KeyType:     key.KeyType,
+			Label:       label,
+			AddedAt:     key.AddedAt,
+			LastUsedAt:  lastUsed,
+		}
+	}
+
+	resp := &protocol.SSHKeyListResponse{
+		Keys: keyInfos,
+	}
+	return s.sendMessage(sess, protocol.TypeSSHKeyList, resp)
+}
+
+// handleUpdateSSHKeyLabel handles UPDATE_SSH_KEY_LABEL message
+func (s *Server) handleUpdateSSHKeyLabel(sess *Session, frame *protocol.Frame) error {
+	// Must be authenticated
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	if userID == nil {
+		return s.sendError(sess, protocol.ErrCodeAuthRequired, "Must be authenticated to update SSH key")
+	}
+
+	// Decode request
+	req := &protocol.UpdateSSHKeyLabelRequest{}
+	if err := req.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid request format")
+	}
+
+	// Verify key belongs to user
+	keys, err := s.db.GetSSHKeysByUserID(*userID)
+	if err != nil {
+		log.Printf("Failed to get SSH keys for user %d: %v", *userID, err)
+		return s.sendSSHKeyLabelUpdated(sess, false, "Failed to retrieve SSH keys")
+	}
+
+	found := false
+	for _, key := range keys {
+		if key.ID == req.KeyID {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return s.sendSSHKeyLabelUpdated(sess, false, "SSH key not found or does not belong to you")
+	}
+
+	// Update label
+	if err := s.db.UpdateSSHKeyLabel(req.KeyID, *userID, req.NewLabel); err != nil {
+		log.Printf("Failed to update SSH key label for key %d: %v", req.KeyID, err)
+		return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to update SSH key label")
+	}
+
+	log.Printf("User %d updated label for SSH key %d", *userID, req.KeyID)
+	return s.sendSSHKeyLabelUpdated(sess, true, "")
+}
+
+// sendSSHKeyLabelUpdated sends SSH_KEY_LABEL_UPDATED response
+func (s *Server) sendSSHKeyLabelUpdated(sess *Session, success bool, errorMessage string) error {
+	resp := &protocol.SSHKeyLabelUpdatedResponse{
+		Success:      success,
+		ErrorMessage: errorMessage,
+	}
+	return s.sendMessage(sess, protocol.TypeSSHKeyLabelUpdated, resp)
+}
+
+// handleDeleteSSHKey handles DELETE_SSH_KEY message
+func (s *Server) handleDeleteSSHKey(sess *Session, frame *protocol.Frame) error {
+	// Must be authenticated
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	if userID == nil {
+		return s.sendError(sess, protocol.ErrCodeAuthRequired, "Must be authenticated to delete SSH key")
+	}
+
+	// Decode request
+	req := &protocol.DeleteSSHKeyRequest{}
+	if err := req.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid request format")
+	}
+
+	// Get user's SSH keys
+	keys, err := s.db.GetSSHKeysByUserID(*userID)
+	if err != nil {
+		log.Printf("Failed to get SSH keys for user %d: %v", *userID, err)
+		return s.sendSSHKeyDeleted(sess, false, "Failed to retrieve SSH keys")
+	}
+
+	// Verify key belongs to user
+	found := false
+	for _, key := range keys {
+		if key.ID == req.KeyID {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return s.sendSSHKeyDeleted(sess, false, "SSH key not found or does not belong to you")
+	}
+
+	// Check if user has password (can't delete last SSH key if no password)
+	user, err := s.db.GetUserByID(*userID)
+	if err != nil {
+		log.Printf("Failed to get user %d: %v", *userID, err)
+		return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to verify user")
+	}
+
+	if len(keys) == 1 && user.PasswordHash == "" {
+		return s.sendSSHKeyDeleted(sess, false, "Cannot delete last SSH key when no password is set")
+	}
+
+	// Delete SSH key
+	if err := s.db.DeleteSSHKey(req.KeyID, *userID); err != nil {
+		log.Printf("Failed to delete SSH key %d: %v", req.KeyID, err)
+		return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to delete SSH key")
+	}
+
+	log.Printf("User %d deleted SSH key %d", *userID, req.KeyID)
+	return s.sendSSHKeyDeleted(sess, true, "")
+}
+
+// sendSSHKeyDeleted sends SSH_KEY_DELETED response
+func (s *Server) sendSSHKeyDeleted(sess *Session, success bool, errorMessage string) error {
+	resp := &protocol.SSHKeyDeletedResponse{
+		Success:      success,
+		ErrorMessage: errorMessage,
+	}
+	return s.sendMessage(sess, protocol.TypeSSHKeyDeleted, resp)
+}
+
 // handlePing handles PING message
 func (s *Server) handlePing(sess *Session, frame *protocol.Frame) error {
 	// Decode message
@@ -1299,7 +1610,7 @@ func (s *Server) broadcastChannelCreated(ch *database.Channel, creatorSessionID 
 // handleListServers handles LIST_SERVERS message (request server directory)
 func (s *Server) handleListServers(sess *Session, frame *protocol.Frame) error {
 	// Only respond if directory mode is enabled
-	if !s.directoryEnabled {
+	if !s.config.DirectoryEnabled {
 		// Return empty list for non-directory servers
 		resp := &protocol.ServerListMessage{
 			Servers: []protocol.ServerInfo{},
@@ -1353,7 +1664,7 @@ func (s *Server) handleListServers(sess *Session, frame *protocol.Frame) error {
 // handleRegisterServer handles REGISTER_SERVER message (server registration)
 func (s *Server) handleRegisterServer(sess *Session, frame *protocol.Frame) error {
 	// Only accept if directory mode is enabled
-	if !s.directoryEnabled {
+	if !s.config.DirectoryEnabled {
 		return s.sendError(sess, 1001, "Directory mode not enabled on this server")
 	}
 
@@ -1433,7 +1744,7 @@ func (s *Server) handleVerifyResponse(sess *Session, frame *protocol.Frame) erro
 // handleHeartbeat handles HEARTBEAT message (periodic keepalive from registered servers)
 func (s *Server) handleHeartbeat(sess *Session, frame *protocol.Frame) error {
 	// Only accept if directory mode is enabled
-	if !s.directoryEnabled {
+	if !s.config.DirectoryEnabled {
 		return s.sendError(sess, 1001, "Directory mode not enabled on this server")
 	}
 

@@ -20,7 +20,12 @@ const (
 	TypePostMessage        = 0x0A
 	TypeEditMessage        = 0x0B
 	TypeDeleteMessage      = 0x0C
+	TypeAddSSHKey          = 0x0D
+	TypeChangePassword     = 0x0E
 	TypeGetUserInfo        = 0x0F
+	TypeUpdateSSHKeyLabel  = 0x12
+	TypeDeleteSSHKey       = 0x13
+	TypeListSSHKeys        = 0x14
 	TypePing               = 0x10
 	TypeDisconnect         = 0x11
 	TypeListUsers          = 0x16
@@ -49,9 +54,14 @@ const (
 	TypeMessageEdited     = 0x8B
 	TypeMessageDeleted    = 0x8C
 	TypeNewMessage        = 0x8D
+	TypePasswordChanged   = 0x8E
 	TypeUserInfo          = 0x8F
 	TypePong              = 0x90
 	TypeError             = 0x91
+	TypeSSHKeyLabelUpdated = 0x92
+	TypeSSHKeyDeleted     = 0x93
+	TypeSSHKeyList        = 0x94
+	TypeSSHKeyAdded       = 0x95
 	TypeServerConfig       = 0x98
 	TypeSubscribeOk        = 0x99
 	TypeUserList           = 0x9A
@@ -1429,6 +1439,7 @@ type ServerConfigMessage struct {
 	MaxMessageLength        uint32
 	MaxThreadSubscriptions  uint16
 	MaxChannelSubscriptions uint16
+	DirectoryEnabled        bool
 }
 
 func (m *ServerConfigMessage) EncodeTo(w io.Writer) error {
@@ -1453,7 +1464,10 @@ func (m *ServerConfigMessage) EncodeTo(w io.Writer) error {
 	if err := WriteUint16(w, m.MaxThreadSubscriptions); err != nil {
 		return err
 	}
-	return WriteUint16(w, m.MaxChannelSubscriptions)
+	if err := WriteUint16(w, m.MaxChannelSubscriptions); err != nil {
+		return err
+	}
+	return WriteBool(w, m.DirectoryEnabled)
 }
 
 func (m *ServerConfigMessage) Encode() ([]byte, error) {
@@ -1507,6 +1521,13 @@ func (m *ServerConfigMessage) Decode(payload []byte) error {
 	m.MaxMessageLength = maxMsgLen
 	m.MaxThreadSubscriptions = maxThreadSubs
 	m.MaxChannelSubscriptions = maxChannelSubs
+
+	directoryEnabled, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	m.DirectoryEnabled = directoryEnabled
+
 	return nil
 }
 
@@ -2381,5 +2402,368 @@ func (m *HeartbeatAckMessage) Decode(payload []byte) error {
 		return err
 	}
 	m.HeartbeatInterval = heartbeatInterval
+	return nil
+}
+
+// ===== CHANGE_PASSWORD (0x0E) - Client → Server =====
+
+// ChangePasswordRequest is sent by clients to change their password
+type ChangePasswordRequest struct {
+	OldPassword string // Empty for SSH-registered users changing password for first time
+	NewPassword string
+}
+
+func (m *ChangePasswordRequest) EncodeTo(w io.Writer) error {
+	if err := WriteString(w, m.OldPassword); err != nil {
+		return err
+	}
+	return WriteString(w, m.NewPassword)
+}
+
+func (m *ChangePasswordRequest) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	oldPassword, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	newPassword, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.OldPassword = oldPassword
+	m.NewPassword = newPassword
+	return nil
+}
+
+// ===== PASSWORD_CHANGED (0x8E) - Server → Client =====
+
+// PasswordChangedResponse is sent by server after password change attempt
+type PasswordChangedResponse struct {
+	Success      bool
+	ErrorMessage string // Empty if success=true
+}
+
+func (m *PasswordChangedResponse) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	return WriteString(w, m.ErrorMessage)
+}
+
+func (m *PasswordChangedResponse) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	errorMessage, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Success = success
+	m.ErrorMessage = errorMessage
+	return nil
+}
+
+// ===== ADD_SSH_KEY (0x0D) - Client → Server =====
+
+// AddSSHKeyRequest is sent by clients to add a new SSH public key to their account
+type AddSSHKeyRequest struct {
+	PublicKey string // Full SSH public key (e.g., "ssh-rsa AAAA... user@host")
+	Label     string // Optional user-friendly label (e.g., "Work Laptop")
+}
+
+func (m *AddSSHKeyRequest) EncodeTo(w io.Writer) error {
+	if err := WriteString(w, m.PublicKey); err != nil {
+		return err
+	}
+	return WriteString(w, m.Label)
+}
+
+func (m *AddSSHKeyRequest) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	publicKey, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	label, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.PublicKey = publicKey
+	m.Label = label
+	return nil
+}
+
+// ===== SSH_KEY_ADDED (0x95) - Server → Client =====
+
+// SSHKeyAddedResponse is sent by server after adding an SSH key
+type SSHKeyAddedResponse struct {
+	Success      bool
+	KeyID        int64  // Database ID of the added key
+	Fingerprint  string // SHA256 fingerprint
+	ErrorMessage string // Empty if success=true
+}
+
+func (m *SSHKeyAddedResponse) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if err := WriteInt64(w, m.KeyID); err != nil {
+		return err
+	}
+	if err := WriteString(w, m.Fingerprint); err != nil {
+		return err
+	}
+	return WriteString(w, m.ErrorMessage)
+}
+
+func (m *SSHKeyAddedResponse) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	keyID, err := ReadInt64(buf)
+	if err != nil {
+		return err
+	}
+	fingerprint, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	errorMessage, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Success = success
+	m.KeyID = keyID
+	m.Fingerprint = fingerprint
+	m.ErrorMessage = errorMessage
+	return nil
+}
+
+// ===== LIST_SSH_KEYS (0x14) - Client → Server =====
+
+// ListSSHKeysRequest is sent by clients to retrieve their SSH keys
+type ListSSHKeysRequest struct {
+	// No fields - user is identified from session
+}
+
+func (m *ListSSHKeysRequest) EncodeTo(w io.Writer) error {
+	// No data to encode
+	return nil
+}
+
+func (m *ListSSHKeysRequest) Decode(payload []byte) error {
+	// No data to decode
+	return nil
+}
+
+// ===== SSH_KEY_LIST (0x94) - Server → Client =====
+
+// SSHKeyInfo represents a single SSH key in the list
+type SSHKeyInfo struct {
+	ID          int64
+	Fingerprint string
+	KeyType     string // ssh-rsa, ssh-ed25519, etc.
+	Label       string // May be empty
+	AddedAt     int64  // Unix milliseconds
+	LastUsedAt  int64  // Unix milliseconds (0 if never used)
+}
+
+// SSHKeyListResponse is sent by server with list of user's SSH keys
+type SSHKeyListResponse struct {
+	Keys []SSHKeyInfo
+}
+
+func (m *SSHKeyListResponse) EncodeTo(w io.Writer) error {
+	// Write number of keys
+	if err := WriteUint32(w, uint32(len(m.Keys))); err != nil {
+		return err
+	}
+
+	// Write each key
+	for _, key := range m.Keys {
+		if err := WriteInt64(w, key.ID); err != nil {
+			return err
+		}
+		if err := WriteString(w, key.Fingerprint); err != nil {
+			return err
+		}
+		if err := WriteString(w, key.KeyType); err != nil {
+			return err
+		}
+		if err := WriteString(w, key.Label); err != nil {
+			return err
+		}
+		if err := WriteInt64(w, key.AddedAt); err != nil {
+			return err
+		}
+		if err := WriteInt64(w, key.LastUsedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *SSHKeyListResponse) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+
+	// Read number of keys
+	count, err := ReadUint32(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Keys = make([]SSHKeyInfo, count)
+
+	// Read each key
+	for i := uint32(0); i < count; i++ {
+		id, err := ReadInt64(buf)
+		if err != nil {
+			return err
+		}
+		fingerprint, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		keyType, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		label, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		addedAt, err := ReadInt64(buf)
+		if err != nil {
+			return err
+		}
+		lastUsedAt, err := ReadInt64(buf)
+		if err != nil {
+			return err
+		}
+
+		m.Keys[i] = SSHKeyInfo{
+			ID:          id,
+			Fingerprint: fingerprint,
+			KeyType:     keyType,
+			Label:       label,
+			AddedAt:     addedAt,
+			LastUsedAt:  lastUsedAt,
+		}
+	}
+	return nil
+}
+
+// ===== UPDATE_SSH_KEY_LABEL (0x12) - Client → Server =====
+
+// UpdateSSHKeyLabelRequest is sent by clients to update an SSH key's label
+type UpdateSSHKeyLabelRequest struct {
+	KeyID    int64
+	NewLabel string
+}
+
+func (m *UpdateSSHKeyLabelRequest) EncodeTo(w io.Writer) error {
+	if err := WriteInt64(w, m.KeyID); err != nil {
+		return err
+	}
+	return WriteString(w, m.NewLabel)
+}
+
+func (m *UpdateSSHKeyLabelRequest) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	keyID, err := ReadInt64(buf)
+	if err != nil {
+		return err
+	}
+	newLabel, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.KeyID = keyID
+	m.NewLabel = newLabel
+	return nil
+}
+
+// ===== SSH_KEY_LABEL_UPDATED (0x92) - Server → Client =====
+
+// SSHKeyLabelUpdatedResponse is sent by server after updating an SSH key label
+type SSHKeyLabelUpdatedResponse struct {
+	Success      bool
+	ErrorMessage string // Empty if success=true
+}
+
+func (m *SSHKeyLabelUpdatedResponse) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	return WriteString(w, m.ErrorMessage)
+}
+
+func (m *SSHKeyLabelUpdatedResponse) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	errorMessage, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Success = success
+	m.ErrorMessage = errorMessage
+	return nil
+}
+
+// ===== DELETE_SSH_KEY (0x13) - Client → Server =====
+
+// DeleteSSHKeyRequest is sent by clients to delete an SSH key
+type DeleteSSHKeyRequest struct {
+	KeyID int64
+}
+
+func (m *DeleteSSHKeyRequest) EncodeTo(w io.Writer) error {
+	return WriteInt64(w, m.KeyID)
+}
+
+func (m *DeleteSSHKeyRequest) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	keyID, err := ReadInt64(buf)
+	if err != nil {
+		return err
+	}
+	m.KeyID = keyID
+	return nil
+}
+
+// ===== SSH_KEY_DELETED (0x93) - Server → Client =====
+
+// SSHKeyDeletedResponse is sent by server after deleting an SSH key
+type SSHKeyDeletedResponse struct {
+	Success      bool
+	ErrorMessage string // Empty if success=true
+}
+
+func (m *SSHKeyDeletedResponse) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	return WriteString(w, m.ErrorMessage)
+}
+
+func (m *SSHKeyDeletedResponse) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	errorMessage, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Success = success
+	m.ErrorMessage = errorMessage
 	return nil
 }

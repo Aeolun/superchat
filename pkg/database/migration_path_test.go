@@ -187,7 +187,146 @@ func TestMigrationPath(t *testing.T) {
 			},
 		},
 
-		// WHEN ADDING MIGRATION 003:
+		{
+			name:        "v3 → v5: Add SSH keys",
+			fromVersion: 3,
+			toVersion:   5,
+			setupData: func(db *sql.DB) error {
+				// No data setup needed - we'll create user after migration
+				return nil
+			},
+			validateData: func(db *sql.DB, t *testing.T) {
+				// Test that we can insert a user with SSH key (v2 + v5 features)
+				now := time.Now().UnixMilli()
+				result, err := db.Exec(`
+					INSERT INTO User (nickname, user_flags, password_hash, created_at, last_seen)
+					VALUES ('testuser', 0, 'hash123', ?, ?)
+				`, now, now)
+				if err != nil {
+					t.Fatalf("Failed to insert user in v5: %v", err)
+				}
+
+				userID, err := result.LastInsertId()
+				if err != nil {
+					t.Fatalf("Failed to get user ID: %v", err)
+				}
+
+				// Test that we can insert an SSH key for this user
+				_, err = db.Exec(`
+					INSERT INTO SSHKey (user_id, fingerprint, public_key, key_type, label, added_at)
+					VALUES (?, 'SHA256:testkey', 'ssh-rsa AAAA...', 'ssh-rsa', 'test', ?)
+				`, userID, now)
+				if err != nil {
+					t.Fatalf("Failed to insert SSH key in v5: %v", err)
+				}
+
+				// Verify the key was inserted
+				var keyID int64
+				err = db.QueryRow("SELECT id FROM SSHKey WHERE fingerprint = 'SHA256:testkey'").Scan(&keyID)
+				if err != nil {
+					t.Fatalf("Failed to query inserted SSH key: %v", err)
+				}
+			},
+			validateSchema: func(db *sql.DB, t *testing.T) {
+				// Verify SSHKey table was created
+				var count int
+				err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='SSHKey'").Scan(&count)
+				if err != nil {
+					t.Fatalf("Failed to check SSHKey table: %v", err)
+				}
+				if count != 1 {
+					t.Errorf("SSHKey table not found after migration to v5")
+				}
+
+				// Verify SSHKey table has correct columns
+				columns := []string{"id", "user_id", "fingerprint", "public_key", "key_type", "label", "added_at", "last_used_at"}
+				for _, col := range columns {
+					var colCount int
+					err := db.QueryRow(`
+						SELECT COUNT(*) FROM pragma_table_info('SSHKey')
+						WHERE name = ?
+					`, col).Scan(&colCount)
+					if err != nil {
+						t.Fatalf("Failed to check column %s: %v", col, err)
+					}
+					if colCount != 1 {
+						t.Errorf("Column %s not found in SSHKey table", col)
+					}
+				}
+
+				// Verify indexes exist
+				indexes := []string{"idx_ssh_fingerprint", "idx_ssh_user"}
+				for _, index := range indexes {
+					var idxCount int
+					err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", index).Scan(&idxCount)
+					if err != nil {
+						t.Fatalf("Failed to check index %s: %v", index, err)
+					}
+					if idxCount != 1 {
+						t.Errorf("Index %s not found after migration to v5", index)
+					}
+				}
+
+				// Create a test user for constraint validation
+				now := time.Now().UnixMilli()
+				result, err := db.Exec(`
+					INSERT INTO User (nickname, user_flags, password_hash, created_at, last_seen)
+					VALUES ('schematest', 0, 'hash123', ?, ?)
+				`, now, now)
+				if err != nil {
+					t.Fatalf("Failed to create test user: %v", err)
+				}
+
+				userID, err := result.LastInsertId()
+				if err != nil {
+					t.Fatalf("Failed to get test user ID: %v", err)
+				}
+
+				// Verify foreign key constraint (user_id → User.id)
+				// Try inserting an SSH key with invalid user_id (should fail)
+				_, err = db.Exec(`
+					INSERT INTO SSHKey (user_id, fingerprint, public_key, key_type, label, added_at)
+					VALUES (999999, 'SHA256:test', 'ssh-rsa AAAA...', 'ssh-rsa', 'test', ?)
+				`, now)
+				if err == nil {
+					t.Error("Expected foreign key constraint violation for invalid user_id, got none")
+				}
+
+				// Verify fingerprint uniqueness constraint
+				_, err = db.Exec(`
+					INSERT INTO SSHKey (user_id, fingerprint, public_key, key_type, label, added_at)
+					VALUES (?, 'SHA256:unique', 'ssh-rsa AAAA...', 'ssh-rsa', 'first', ?)
+				`, userID, now)
+				if err != nil {
+					t.Fatalf("Failed to insert first SSH key: %v", err)
+				}
+
+				_, err = db.Exec(`
+					INSERT INTO SSHKey (user_id, fingerprint, public_key, key_type, label, added_at)
+					VALUES (?, 'SHA256:unique', 'ssh-rsa BBBB...', 'ssh-rsa', 'duplicate', ?)
+				`, userID, now)
+				if err == nil {
+					t.Error("Expected unique constraint violation for duplicate fingerprint, got none")
+				}
+
+				// Verify CASCADE delete behavior
+				_, err = db.Exec(`DELETE FROM User WHERE id = ?`, userID)
+				if err != nil {
+					t.Fatalf("Failed to delete user: %v", err)
+				}
+
+				var keyCount int
+				err = db.QueryRow("SELECT COUNT(*) FROM SSHKey WHERE user_id = ?", userID).Scan(&keyCount)
+				if err != nil {
+					t.Fatalf("Failed to count SSH keys: %v", err)
+				}
+				if keyCount != 0 {
+					t.Errorf("Expected 0 SSH keys after user deletion (CASCADE), got %d", keyCount)
+				}
+			},
+		},
+
+		// WHEN ADDING MIGRATION 006:
 		/*
 		{
 			name:        "v2 → v3: Add subchannels",

@@ -17,6 +17,8 @@ const (
 	ModalCompose
 	ModalNicknameSetup
 	ModalCreateChannel
+	ModalServerSelector
+	ModalTypePasswordChange
 )
 
 // String returns the string representation of the modal type
@@ -40,6 +42,10 @@ func (m ModalType) String() string {
 		return "NicknameSetup"
 	case ModalCreateChannel:
 		return "CreateChannel"
+	case ModalServerSelector:
+		return "ServerSelector"
+	case ModalTypePasswordChange:
+		return "PasswordChange"
 	default:
 		return "Unknown"
 	}

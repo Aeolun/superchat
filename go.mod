@@ -5,7 +5,9 @@ go 1.24.4
 require github.com/stretchr/testify v1.11.1
 
 require (
+	github.com/76creates/stickers v1.5.0 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

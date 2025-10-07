@@ -247,6 +247,18 @@ type User struct {
 	LastSeen     int64  // Unix timestamp in milliseconds
 }
 
+// SSHKey represents an SSH public key for user authentication (V2 feature)
+type SSHKey struct {
+	ID          int64
+	UserID      int64
+	Fingerprint string  // SHA256:base64 format (e.g., SHA256:abc123...)
+	PublicKey   string  // Full SSH public key in authorized_keys format
+	KeyType     string  // Key algorithm: 'ssh-rsa', 'ssh-ed25519', 'ecdsa-sha2-nistp256'
+	Label       *string // Optional user-friendly name (e.g., "laptop", "work")
+	AddedAt     int64   // Unix timestamp in milliseconds
+	LastUsedAt  *int64  // Unix timestamp in milliseconds of last successful auth
+}
+
 // Message represents a message record
 type Message struct {
 	ID             int64
@@ -281,18 +293,21 @@ func nowMillis() int64 {
 // SeedDefaultChannels creates the default channels if they don't exist
 func (db *DB) SeedDefaultChannels() error {
 	defaultChannels := []struct {
-		name        string
-		displayName string
-		description string
+		name           string
+		displayName    string
+		description    string
+		channelType    uint8  // 0=chat, 1=forum
+		retentionHours uint32 // hours
 	}{
-		{"general", "#general", "General discussion"},
-		{"tech", "#tech", "Technical topics"},
-		{"random", "#random", "Off-topic chat"},
-		{"feedback", "#feedback", "Bug reports and feature requests"},
+		{"chat", ">chat", "General chat (linear conversation)", 0, 24},        // Chat channel, 24h retention
+		{"general", "#general", "General discussion", 1, 168},                  // Forum, 7 days
+		{"tech", "#tech", "Technical topics", 1, 168},                          // Forum, 7 days
+		{"random", "#random", "Off-topic chat", 1, 168},                        // Forum, 7 days
+		{"feedback", "#feedback", "Bug reports and feature requests", 1, 168}, // Forum, 7 days
 	}
 
 	for _, ch := range defaultChannels {
-		if _, err := db.CreateChannel(ch.name, ch.displayName, &ch.description, 1, 168, nil); err != nil {
+		if _, err := db.CreateChannel(ch.name, ch.displayName, &ch.description, ch.channelType, ch.retentionHours, nil); err != nil {
 			return fmt.Errorf("failed to seed channel %s: %w", ch.name, err)
 		}
 	}
@@ -1120,6 +1135,136 @@ func (db *DB) UpdateSessionUserID(sessionID, userID int64) error {
 		UPDATE Session SET user_id = ? WHERE id = ?
 	`, userID, sessionID)
 	return err
+}
+
+// UpdateUserPassword updates a user's password hash
+func (db *DB) UpdateUserPassword(userID int64, newPasswordHash string) error {
+	_, err := db.writeConn.Exec(`
+		UPDATE User SET password_hash = ? WHERE id = ?
+	`, newPasswordHash, userID)
+	return err
+}
+
+// ===== SSH Key Methods (V2 SSH Authentication) =====
+
+// CreateSSHKey adds a new SSH public key for a user
+func (db *DB) CreateSSHKey(key *SSHKey) error {
+	result, err := db.writeConn.Exec(`
+		INSERT INTO SSHKey (user_id, fingerprint, public_key, key_type, label, added_at, last_used_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, key.UserID, key.Fingerprint, key.PublicKey, key.KeyType, key.Label, key.AddedAt, key.LastUsedAt)
+
+	if err != nil {
+		return err // UNIQUE constraint violation if fingerprint already exists
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	key.ID = id
+	return nil
+}
+
+// GetSSHKeyByFingerprint retrieves an SSH key by its fingerprint
+func (db *DB) GetSSHKeyByFingerprint(fingerprint string) (*SSHKey, error) {
+	var key SSHKey
+	err := db.conn.QueryRow(`
+		SELECT id, user_id, fingerprint, public_key, key_type, label, added_at, last_used_at
+		FROM SSHKey
+		WHERE fingerprint = ?
+	`, fingerprint).Scan(&key.ID, &key.UserID, &key.Fingerprint, &key.PublicKey, &key.KeyType, &key.Label, &key.AddedAt, &key.LastUsedAt)
+
+	if err != nil {
+		return nil, err // sql.ErrNoRows if not found
+	}
+
+	return &key, nil
+}
+
+// GetSSHKeysByUserID retrieves all SSH keys for a user
+func (db *DB) GetSSHKeysByUserID(userID int64) ([]SSHKey, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, user_id, fingerprint, public_key, key_type, label, added_at, last_used_at
+		FROM SSHKey
+		WHERE user_id = ?
+		ORDER BY added_at DESC
+	`, userID)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []SSHKey
+	for rows.Next() {
+		var key SSHKey
+		if err := rows.Scan(&key.ID, &key.UserID, &key.Fingerprint, &key.PublicKey, &key.KeyType, &key.Label, &key.AddedAt, &key.LastUsedAt); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return keys, nil
+}
+
+// DeleteSSHKey deletes an SSH key by ID
+// Only allows deletion if the key belongs to the specified user
+func (db *DB) DeleteSSHKey(keyID, userID int64) error {
+	result, err := db.writeConn.Exec(`
+		DELETE FROM SSHKey WHERE id = ? AND user_id = ?
+	`, keyID, userID)
+
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("key not found or not owned by user")
+	}
+
+	return nil
+}
+
+// UpdateSSHKeyLastUsed updates the last_used_at timestamp for an SSH key
+func (db *DB) UpdateSSHKeyLastUsed(fingerprint string) error {
+	_, err := db.writeConn.Exec(`
+		UPDATE SSHKey SET last_used_at = ? WHERE fingerprint = ?
+	`, nowMillis(), fingerprint)
+	return err
+}
+
+// UpdateSSHKeyLabel updates the user-friendly label for an SSH key
+// Only allows update if the key belongs to the specified user
+func (db *DB) UpdateSSHKeyLabel(keyID, userID int64, label string) error {
+	result, err := db.writeConn.Exec(`
+		UPDATE SSHKey SET label = ? WHERE id = ? AND user_id = ?
+	`, label, keyID, userID)
+
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("key not found or not owned by user")
+	}
+
+	return nil
 }
 
 // ===== DiscoveredServer Methods (Server Discovery Protocol) =====

@@ -1034,3 +1034,35 @@ func (m *MemDB) CleanupStaleServers() (int64, error) {
 func (m *MemDB) CountDiscoveredServers() (uint32, error) {
 	return m.sqliteDB.CountDiscoveredServers()
 }
+
+// ===== User Password Method (V2 SSH feature) =====
+
+func (m *MemDB) UpdateUserPassword(userID int64, newPasswordHash string) error {
+	return m.sqliteDB.UpdateUserPassword(userID, newPasswordHash)
+}
+
+// ===== SSH Key Methods (V2 feature) =====
+
+func (m *MemDB) CreateSSHKey(key *SSHKey) error {
+	return m.sqliteDB.CreateSSHKey(key)
+}
+
+func (m *MemDB) GetSSHKeyByFingerprint(fingerprint string) (*SSHKey, error) {
+	return m.sqliteDB.GetSSHKeyByFingerprint(fingerprint)
+}
+
+func (m *MemDB) GetSSHKeysByUserID(userID int64) ([]SSHKey, error) {
+	return m.sqliteDB.GetSSHKeysByUserID(userID)
+}
+
+func (m *MemDB) DeleteSSHKey(keyID, userID int64) error {
+	return m.sqliteDB.DeleteSSHKey(keyID, userID)
+}
+
+func (m *MemDB) UpdateSSHKeyLastUsed(fingerprint string) error {
+	return m.sqliteDB.UpdateSSHKeyLastUsed(fingerprint)
+}
+
+func (m *MemDB) UpdateSSHKeyLabel(keyID, userID int64, label string) error {
+	return m.sqliteDB.UpdateSSHKeyLabel(keyID, userID, label)
+}

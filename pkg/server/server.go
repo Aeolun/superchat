@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -42,7 +43,6 @@ type Server struct {
 	disconnectionsSinceReport atomic.Int64
 
 	// Server discovery
-	directoryEnabled        bool
 	verificationMu          sync.Mutex
 	verificationChallenges  map[uint64]uint64 // sessionID -> challenge
 	discoveryRateLimits     map[string]*discoveryRateLimiter
@@ -63,6 +63,7 @@ type ServerConfig struct {
 	ProtocolVersion         uint8
 	MaxThreadSubscriptions  uint16
 	MaxChannelSubscriptions uint16
+	DirectoryEnabled        bool
 }
 
 // DefaultConfig returns default server configuration
@@ -80,6 +81,7 @@ func DefaultConfig() ServerConfig {
 		ProtocolVersion:         1,
 		MaxThreadSubscriptions:  50, // max thread subscriptions per session
 		MaxChannelSubscriptions: 10, // max channel subscriptions per session
+		DirectoryEnabled:        false, // Default: regular server (not directory)
 	}
 }
 
@@ -122,7 +124,6 @@ func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, 
 		configPath:             configPath,
 		shutdown:               make(chan struct{}),
 		metrics:                metrics,
-		directoryEnabled:       true, // Default enabled - servers can opt-out via --disable-directory
 		verificationChallenges: make(map[uint64]uint64),
 		discoveryRateLimits:    make(map[string]*discoveryRateLimiter),
 	}
@@ -420,6 +421,16 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleEditMessage(sess, frame)
 	case protocol.TypeDeleteMessage:
 		return s.handleDeleteMessage(sess, frame)
+	case protocol.TypeChangePassword:
+		return s.handleChangePassword(sess, frame)
+	case protocol.TypeAddSSHKey:
+		return s.handleAddSSHKey(sess, frame)
+	case protocol.TypeListSSHKeys:
+		return s.handleListSSHKeys(sess, frame)
+	case protocol.TypeUpdateSSHKeyLabel:
+		return s.handleUpdateSSHKeyLabel(sess, frame)
+	case protocol.TypeDeleteSSHKey:
+		return s.handleDeleteSSHKey(sess, frame)
 	case protocol.TypeGetUserInfo:
 		return s.handleGetUserInfo(sess, frame)
 	case protocol.TypeListUsers:
@@ -461,6 +472,7 @@ func (s *Server) sendServerConfig(sess *Session) error {
 		MaxMessageLength:        s.config.MaxMessageLength,
 		MaxThreadSubscriptions:  s.config.MaxThreadSubscriptions,
 		MaxChannelSubscriptions: s.config.MaxChannelSubscriptions,
+		DirectoryEnabled:        s.config.DirectoryEnabled,
 	}
 
 	payload, err := msg.Encode()
@@ -620,16 +632,26 @@ func (s *Server) cleanupExpiredMessages() {
 
 // DisableDirectory disables directory mode (server won't accept registrations)
 func (s *Server) DisableDirectory() {
-	s.directoryEnabled = false
+	s.config.DirectoryEnabled = false
 }
 
 // EnableDirectory enables directory mode (server will accept registrations)
 func (s *Server) EnableDirectory() {
-	s.directoryEnabled = true
+	s.config.DirectoryEnabled = true
 }
 
 // AnnounceToDirectory announces this server to a directory server and maintains heartbeat
 func (s *Server) AnnounceToDirectory(directoryAddr, serverName, serverDescription string) {
+	// Check if we're listening on localhost only
+	if s.listener != nil {
+		addr := s.listener.Addr().String()
+		// Check if listening on localhost/127.0.0.1
+		if strings.HasPrefix(addr, "127.0.0.1:") || strings.HasPrefix(addr, "[::1]:") || strings.HasPrefix(addr, "localhost:") {
+			log.Printf("WARNING: Server is listening on localhost only (%s) - not announcing to public directory %s", addr, directoryAddr)
+			return
+		}
+	}
+
 	// Parse directory address
 	host, portStr, err := net.SplitHostPort(directoryAddr)
 	if err != nil {

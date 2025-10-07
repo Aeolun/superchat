@@ -915,8 +915,21 @@ func dialSSH(user, host, port string, verifier *hostKeyVerifier) (net.Conn, erro
 		return nil, err
 	}
 
+	// Load SSH keys for authentication
+	authMethods, err := loadSSHAuthMethods()
+	if err != nil {
+		netConn.Close()
+		return nil, fmt.Errorf("failed to load SSH keys: %w", err)
+	}
+
+	if len(authMethods) == 0 {
+		netConn.Close()
+		return nil, errors.New("no SSH keys found - generate one with: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519")
+	}
+
 	config := &ssh.ClientConfig{
 		User:            user,
+		Auth:            authMethods,
 		HostKeyCallback: verifier.callback,
 		Timeout:         10 * time.Second,
 	}
@@ -953,6 +966,56 @@ func dialSSH(user, host, port string, verifier *hostKeyVerifier) (net.Conn, erro
 		localAddr:  localAddr,
 		remoteAddr: remoteAddr,
 	}, nil
+}
+
+// loadSSHAuthMethods loads SSH private keys from standard locations
+func loadSSHAuthMethods() ([]ssh.AuthMethod, error) {
+	homeDir := defaultSSHUser() // Reuse this to get home dir
+	if homeDir == "" {
+		homeDir = os.Getenv("HOME")
+	}
+	if homeDir == "" {
+		return nil, errors.New("cannot determine home directory")
+	}
+
+	sshDir := filepath.Join(homeDir, ".ssh")
+
+	// Try common key file names in order of preference
+	keyFiles := []string{
+		"id_ed25519",     // Modern default
+		"id_ecdsa",       // Modern ECDSA
+		"id_rsa",         // Traditional RSA
+		"id_dsa",         // Legacy DSA (still check for compatibility)
+	}
+
+	var signers []ssh.Signer
+
+	for _, keyFile := range keyFiles {
+		keyPath := filepath.Join(sshDir, keyFile)
+
+		// Read private key file
+		keyBytes, err := os.ReadFile(keyPath)
+		if err != nil {
+			// File doesn't exist or can't be read - skip
+			continue
+		}
+
+		// Try parsing without passphrase first
+		signer, err := ssh.ParsePrivateKey(keyBytes)
+		if err != nil {
+			// TODO: If err is ssh.PassphraseMissingError, prompt for passphrase
+			// For now, skip encrypted keys
+			continue
+		}
+
+		signers = append(signers, signer)
+	}
+
+	if len(signers) == 0 {
+		return nil, nil // No keys found, but not an error
+	}
+
+	return []ssh.AuthMethod{ssh.PublicKeys(signers...)}, nil
 }
 
 func promptAcceptHostKey(hostname string, remote net.Addr, fingerprint string, key ssh.PublicKey, paths []string) (bool, error) {

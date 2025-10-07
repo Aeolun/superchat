@@ -146,16 +146,21 @@ All messages use a simple frame-based format:
 | 0x0A | POST_MESSAGE | Post a new message |
 | 0x0B | EDIT_MESSAGE | Edit an existing message |
 | 0x0C | DELETE_MESSAGE | Delete a message (soft-delete) |
-| 0x0D | UPDATE_READ_STATE | Update last read position |
-| 0x0E | GET_UNREAD_COUNTS | Request unread counts for specific channels |
+| 0x0D | ADD_SSH_KEY | Add SSH public key to account |
+| 0x0E | CHANGE_PASSWORD | Change user password |
 | 0x0F | GET_USER_INFO | Get info about a user |
 | 0x10 | PING | Keepalive ping |
 | 0x11 | DISCONNECT | Graceful disconnect notification |
-| 0x12 | START_DM | Initiate a direct message conversation |
-| 0x13 | PROVIDE_PUBLIC_KEY | Upload public key for encryption |
-| 0x14 | ALLOW_UNENCRYPTED | Explicitly allow unencrypted DMs |
+| 0x12 | UPDATE_SSH_KEY_LABEL | Update SSH key label |
+| 0x13 | DELETE_SSH_KEY | Delete SSH key from account |
+| 0x14 | LIST_SSH_KEYS | Request list of user's SSH keys |
 | 0x15 | GET_SUBCHANNELS | Request subchannels for a channel |
 | 0x16 | LIST_USERS | Request list of online users |
+| 0x17 | UPDATE_READ_STATE | Update last read position |
+| 0x18 | GET_UNREAD_COUNTS | Request unread counts for specific channels |
+| 0x19 | START_DM | Initiate a direct message conversation |
+| 0x1A | PROVIDE_PUBLIC_KEY | Upload public key for encryption |
+| 0x1B | ALLOW_UNENCRYPTED | Explicitly allow unencrypted DMs |
 | 0x51 | SUBSCRIBE_THREAD | Subscribe to thread updates |
 | 0x52 | UNSUBSCRIBE_THREAD | Unsubscribe from thread updates |
 | 0x53 | SUBSCRIBE_CHANNEL | Subscribe to new threads in channel |
@@ -182,16 +187,16 @@ All messages use a simple frame-based format:
 | 0x8B | MESSAGE_EDITED | Edit confirmation |
 | 0x8C | MESSAGE_DELETED | Delete confirmation |
 | 0x8D | NEW_MESSAGE | Real-time message notification |
-| 0x8E | UNREAD_COUNTS | Unread message counts response |
+| 0x8E | PASSWORD_CHANGED | Password change result |
 | 0x8F | USER_INFO | User information response |
 | 0x90 | PONG | Ping response |
 | 0x91 | ERROR | Error response |
-| 0x92 | SERVER_STATS | Server statistics (user counts, etc.) |
-| 0x93 | KEY_REQUIRED | Server needs encryption key before proceeding |
-| 0x94 | DM_READY | DM channel is ready to use |
-| 0x95 | DM_PENDING | Waiting for other party to complete key setup |
-| 0x96 | DM_REQUEST | Incoming DM request from another user |
-| 0x97 | SUBCHANNEL_LIST | List of subchannels for a channel |
+| 0x92 | SSH_KEY_LABEL_UPDATED | SSH key label update result |
+| 0x93 | SSH_KEY_DELETED | SSH key deletion result |
+| 0x94 | SSH_KEY_LIST | List of user's SSH keys |
+| 0x95 | SSH_KEY_ADDED | SSH key addition result |
+| 0x96 | SUBCHANNEL_LIST | List of subchannels for a channel |
+| 0x97 | UNREAD_COUNTS | Unread message counts response |
 | 0x98 | SERVER_CONFIG | Server configuration and limits (sent on connect) |
 | 0x99 | SUBSCRIBE_OK | Subscription confirmation |
 | 0x9A | USER_LIST | List of online users |
@@ -199,6 +204,11 @@ All messages use a simple frame-based format:
 | 0x9C | REGISTER_ACK | Server registration acknowledgment |
 | 0x9D | HEARTBEAT_ACK | Heartbeat acknowledgment |
 | 0x9E | VERIFY_REGISTRATION | Verification challenge for new servers |
+| 0xA0 | SERVER_STATS | Server statistics (user counts, etc.) |
+| 0xA1 | KEY_REQUIRED | Server needs encryption key before proceeding |
+| 0xA2 | DM_READY | DM channel is ready to use |
+| 0xA3 | DM_PENDING | Waiting for other party to complete key setup |
+| 0xA4 | DM_REQUEST | Incoming DM request from another user |
 
 ## Message Payloads
 
@@ -579,7 +589,33 @@ Confirmation of deletion + real-time notification to all users.
 +---------------------------------------------------------------+
 ```
 
-### 0x0D - UPDATE_READ_STATE (Client → Server)
+### 0x0D - ADD_SSH_KEY (Client → Server)
+
+Add an SSH public key to the authenticated user's account.
+
+```
++----------------------+-------------------+
+| public_key (String)  | label (String)    |
++----------------------+-------------------+
+```
+
+**Notes:**
+- User must be authenticated
+- `public_key`: Full SSH public key (e.g., "ssh-rsa AAAA... user@host")
+- `label`: Optional user-friendly name (e.g., "Work Laptop") - can be empty string
+- Server parses key, computes SHA256 fingerprint, stores in SSHKey table
+- Duplicate keys (same fingerprint) return error
+
+### 0x95 - SSH_KEY_ADDED (Server → Client)
+
+```
++-------------------+-------------------+------------------------+------------------------+
+| success (bool)    | key_id (i64)      | fingerprint (String)   | error_message (String) |
+|                   | (if success)      | (if success)           | (if !success)          |
++-------------------+-------------------+------------------------+------------------------+
+```
+
+### 0x17 - UPDATE_READ_STATE (Client → Server)
 
 Update last read position (registered users only).
 
@@ -609,7 +645,104 @@ Update last read position (registered users only).
 - Handle this locally in client-side database
 - Same flexibility applies
 
-### 0x0E - GET_UNREAD_COUNTS (Client → Server)
+### 0x0E - CHANGE_PASSWORD (Client → Server)
+
+Change the authenticated user's password.
+
+```
++------------------------+------------------------+
+| old_password (String)  | new_password (String)  |
++------------------------+------------------------+
+```
+
+**Notes:**
+- User must be authenticated
+- `old_password`: Current password (empty string for SSH-registered users changing password for first time)
+- `new_password`: New password (minimum 8 characters)
+- Server validates old password with bcrypt, hashes new password
+
+### 0x8E - PASSWORD_CHANGED (Server → Client)
+
+```
++-------------------+------------------------+
+| success (bool)    | error_message (String) |
+|                   | (empty if success)     |
++-------------------+------------------------+
+```
+
+### 0x12 - UPDATE_SSH_KEY_LABEL (Client → Server)
+
+Update the label for an SSH key.
+
+```
++-------------------+----------------------+
+| key_id (i64)      | new_label (String)   |
++-------------------+----------------------+
+```
+
+### 0x92 - SSH_KEY_LABEL_UPDATED (Server → Client)
+
+```
++-------------------+------------------------+
+| success (bool)    | error_message (String) |
+|                   | (empty if success)     |
++-------------------+------------------------+
+```
+
+### 0x13 - DELETE_SSH_KEY (Client → Server)
+
+Delete an SSH key from the user's account.
+
+```
++-------------------+
+| key_id (i64)      |
++-------------------+
+```
+
+**Notes:**
+- User must be authenticated
+- Cannot delete last SSH key if user has no password set
+- Deletion cascades in database (ON DELETE CASCADE)
+
+### 0x93 - SSH_KEY_DELETED (Server → Client)
+
+```
++-------------------+------------------------+
+| success (bool)    | error_message (String) |
+|                   | (empty if success)     |
++-------------------+------------------------+
+```
+
+### 0x14 - LIST_SSH_KEYS (Client → Server)
+
+Request list of all SSH keys for the authenticated user.
+
+```
+(No payload - user identified from session)
+```
+
+### 0x94 - SSH_KEY_LIST (Server → Client)
+
+```
++-------------------+----------------+
+| key_count (u32)   | keys []        |
++-------------------+----------------+
+
+Each key:
++-------------------+------------------------+----------------------+-------------------+
+| key_id (i64)      | fingerprint (String)   | key_type (String)    | label (String)    |
++-------------------+------------------------+----------------------+-------------------+
+| added_at (Timestamp) | last_used_at (Timestamp)                                      |
++----------------------+-------------------------------------------------------------------+
+```
+
+**Notes:**
+- `key_type`: e.g., "ssh-rsa", "ssh-ed25519"
+- `label`: May be empty string
+- `last_used_at`: 0 if never used
+- `fingerprint`: SHA256 format (e.g., "SHA256:abc123...")
+
+### 0x18 - GET_UNREAD_COUNTS (Client → Server)
 
 Request unread counts for specific channels/subchannels (registered users only).
 
@@ -632,7 +765,7 @@ Client specifies which channels/subchannels they want unread counts for. Server 
 - Uses indexed lookup on `(channel_id, subchannel_id, created_at)` - very fast
 - Avoids expensive full-table scans
 
-### 0x8E - UNREAD_COUNTS (Server → Client)
+### 0x97 - UNREAD_COUNTS (Server → Client)
 
 Response with unread message counts (registered users only).
 
@@ -1060,6 +1193,8 @@ Server configuration and limits. Sent automatically after successful connection 
 +---------------------------+---------------------------+
 | max_thread_subs (u16)     | max_channel_subs (u16)    |
 +---------------------------+---------------------------+
+| directory_enabled (bool)  |                           |
++---------------------------+---------------------------+
 ```
 
 **Fields:**
@@ -1071,6 +1206,7 @@ Server configuration and limits. Sent automatically after successful connection 
 - `max_message_length`: Maximum length of message content in bytes
 - `max_thread_subs`: Maximum thread subscriptions per session (default: 50)
 - `max_channel_subs`: Maximum channel subscriptions per session (default: 10)
+- `directory_enabled`: Whether this server can provide a list of discoverable servers via LIST_SERVERS request (false = regular server, true = directory server)
 
 **Delivery:**
 - Sent once automatically after connection is established

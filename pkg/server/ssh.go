@@ -12,10 +12,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/aeolun/superchat/pkg/database"
 	"github.com/aeolun/superchat/pkg/protocol"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -32,12 +35,11 @@ func (s *Server) startSSHServer() error {
 		return fmt.Errorf("failed to load host key: %w", err)
 	}
 
-	// Configure SSH server
+	// Configure SSH server with public key authentication (V2)
 	config := &ssh.ServerConfig{
-		// No authentication required for V1 (anonymous users)
-		NoClientAuth: true,
+		PublicKeyCallback: s.authenticateSSHKey,
+		ServerVersion:     "SSH-2.0-SuperChat",
 	}
-	config.ServerVersion = "SSH-2.0-SuperChat"
 	config.AddHostKey(hostKey)
 
 	// Listen on SSH port
@@ -116,8 +118,8 @@ func (s *Server) handleSSHConnection(conn net.Conn, config *ssh.ServerConfig) {
 		go func() {
 			defer s.wg.Done()
 			go s.handleSSHChannelRequests(requests)
-			// Use the existing connection handler with the SSH channel
-			s.handleSSHSession(channel)
+			// Pass SSH permissions (contains authenticated user info)
+			s.handleSSHSession(channel, sshConn.Permissions)
 		}()
 	}
 }
@@ -138,17 +140,32 @@ func (s *Server) handleSSHChannelRequests(requests <-chan *ssh.Request) {
 }
 
 // handleSSHSession wraps an SSH channel and uses the existing protocol handler
-func (s *Server) handleSSHSession(channel ssh.Channel) {
+func (s *Server) handleSSHSession(channel ssh.Channel, permissions *ssh.Permissions) {
 	defer channel.Close()
 
 	// Wrap the SSH channel as a net.Conn-like interface
 	conn := &sshChannelConn{channel: channel}
 
-	// Disable Nagle's algorithm equivalent for SSH (not applicable, but keep pattern)
-	// SSH channels don't have TCP-specific settings
+	// Extract authenticated user info from SSH permissions (V2 feature)
+	var userID *int64
+	var nickname string
+	var userFlags uint8
+	if permissions != nil && permissions.Extensions != nil {
+		if uidStr := permissions.Extensions["user_id"]; uidStr != "" {
+			if uid, err := strconv.ParseInt(uidStr, 10, 64); err == nil {
+				userID = &uid
+			}
+		}
+		nickname = permissions.Extensions["nickname"]
+		if flagsStr := permissions.Extensions["user_flags"]; flagsStr != "" {
+			if flags, err := strconv.ParseUint(flagsStr, 10, 8); err == nil {
+				userFlags = uint8(flags)
+			}
+		}
+	}
 
-	// Create session
-	sess, err := s.sessions.CreateSession(nil, "", "ssh", conn)
+	// Create authenticated session
+	sess, err := s.sessions.CreateSession(userID, nickname, "ssh", conn)
 	if err != nil {
 		log.Printf("Failed to create SSH session: %v", err)
 		return
@@ -163,6 +180,25 @@ func (s *Server) handleSSHSession(channel ssh.Channel) {
 	if err := s.sendServerConfig(sess); err != nil {
 		// Debug log already shows the send attempt, just return on error
 		return
+	}
+
+	// Automatically send AUTH_RESPONSE for SSH-authenticated users (V2 feature)
+	if userID != nil {
+		// Update session with user flags (already has UserID and Nickname from CreateSession)
+		sess.mu.Lock()
+		sess.UserFlags = userFlags
+		sess.mu.Unlock()
+
+		authResp := &protocol.AuthResponseMessage{
+			Success: true,
+			UserID:  uint64(*userID),
+			Message: fmt.Sprintf("Authenticated via SSH as %s", nickname),
+		}
+		if err := s.sendMessage(sess, protocol.TypeAuthResponse, authResp); err != nil {
+			log.Printf("Failed to send AUTH_RESPONSE for SSH user %s: %v", nickname, err)
+			return
+		}
+		debugLog.Printf("Session %d: Auto-authenticated SSH user %s (ID: %d)", sess.ID, nickname, *userID)
 	}
 
 	// Message loop
@@ -312,4 +348,118 @@ func (s *Server) loadOrGenerateHostKey() (ssh.Signer, error) {
 
 	log.Printf("Generated and saved new SSH host key")
 	return key, nil
+}
+
+// authenticateSSHKey validates SSH public keys and auto-registers new users (V2 feature)
+func (s *Server) authenticateSSHKey(conn ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+	// Compute fingerprint (SHA256 format like OpenSSH)
+	fingerprint := ssh.FingerprintSHA256(pubKey)
+
+	// Look up key in database
+	sshKey, err := s.db.GetSSHKeyByFingerprint(fingerprint)
+	if err == nil {
+		// Known key - authenticate as existing user
+		user, err := s.db.GetUserByID(sshKey.UserID)
+		if err != nil {
+			log.Printf("SSH auth failed: user not found for key %s", fingerprint)
+			return nil, fmt.Errorf("user not found for SSH key")
+		}
+
+		// Update last used timestamp
+		if err := s.db.UpdateSSHKeyLastUsed(fingerprint); err != nil {
+			log.Printf("Failed to update SSH key last_used for %s: %v", fingerprint, err)
+		}
+
+		log.Printf("SSH auth: user %s (ID: %d, fingerprint: %s)", user.Nickname, user.ID, fingerprint)
+
+		// Return permissions with user info
+		return &ssh.Permissions{
+			Extensions: map[string]string{
+				"user_id":   fmt.Sprintf("%d", user.ID),
+				"nickname":  user.Nickname,
+				"user_flags": fmt.Sprintf("%d", user.UserFlags),
+				"pubkey_fp": fingerprint,
+			},
+		}, nil
+	}
+
+	// Unknown key - auto-register new user
+	username := conn.User() // From ssh username@host
+	if username == "" {
+		username = "user" // Fallback
+	}
+
+	// Check rate limiting (max 10 auto-registers per hour from same IP)
+	if !s.checkAutoRegisterRateLimit(conn.RemoteAddr().String()) {
+		log.Printf("SSH auto-register rate limit exceeded from %s", conn.RemoteAddr())
+		return nil, fmt.Errorf("auto-registration rate limit exceeded")
+	}
+
+	// Create new user with random password (user can change later via CHANGE_PASSWORD)
+	randomPassword := generateSecureRandomPassword(32)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(randomPassword), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("Failed to hash auto-register password: %v", err)
+		return nil, fmt.Errorf("failed to hash password")
+	}
+
+	userID, err := s.db.CreateUser(username, string(hashedPassword), 0) // 0 = no special flags
+	if err != nil {
+		log.Printf("Failed to auto-register user %s: %v", username, err)
+		return nil, fmt.Errorf("failed to auto-register user: %w", err)
+	}
+
+	// Store SSH key
+	newKey := &database.SSHKey{
+		UserID:      userID,
+		Fingerprint: fingerprint,
+		PublicKey:   string(ssh.MarshalAuthorizedKey(pubKey)),
+		KeyType:     pubKey.Type(),
+		Label:       stringPtr("Auto-registered"),
+		AddedAt:     time.Now().UnixMilli(),
+	}
+	if err := s.db.CreateSSHKey(newKey); err != nil {
+		// Rollback user creation would be ideal, but challenging with current DB structure
+		// User will exist but have no keys - they can still register via password
+		log.Printf("Failed to store SSH key for user %s (ID: %d): %v", username, userID, err)
+		return nil, fmt.Errorf("failed to store SSH key: %w", err)
+	}
+
+	log.Printf("Auto-registered new user %s (ID: %d) via SSH (fingerprint: %s)", username, userID, fingerprint)
+
+	return &ssh.Permissions{
+		Extensions: map[string]string{
+			"user_id":   fmt.Sprintf("%d", userID),
+			"nickname":  username,
+			"user_flags": "0",
+			"pubkey_fp": fingerprint,
+		},
+	}, nil
+}
+
+// generateSecureRandomPassword generates a cryptographically secure random password
+func generateSecureRandomPassword(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // Crypto rand failure is unrecoverable
+	}
+	for i := range b {
+		b[i] = charset[int(b[i])%len(charset)]
+	}
+	return string(b)
+}
+
+// checkAutoRegisterRateLimit checks if auto-registration is allowed from this IP
+// TODO: Implement actual rate limiting with in-memory map and cleanup goroutine
+// For now, always allow (to be implemented in follow-up)
+func (s *Server) checkAutoRegisterRateLimit(remoteAddr string) bool {
+	// TODO: Track IP → [timestamp, timestamp, ...] (last 10 registrations)
+	// Allow if < 10 registrations in last hour
+	return true // For now, no rate limiting
+}
+
+// stringPtr returns a pointer to a string
+func stringPtr(s string) *string {
+	return &s
 }
