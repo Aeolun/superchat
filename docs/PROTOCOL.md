@@ -161,6 +161,7 @@ All messages use a simple frame-based format:
 | 0x19 | START_DM | Initiate a direct message conversation |
 | 0x1A | PROVIDE_PUBLIC_KEY | Upload public key for encryption |
 | 0x1B | ALLOW_UNENCRYPTED | Explicitly allow unencrypted DMs |
+| 0x1C | LOGOUT | Clear authentication, become anonymous |
 | 0x51 | SUBSCRIBE_THREAD | Subscribe to thread updates |
 | 0x52 | UNSUBSCRIBE_THREAD | Unsubscribe from thread updates |
 | 0x53 | SUBSCRIBE_CHANNEL | Subscribe to new threads in channel |
@@ -225,19 +226,23 @@ Used when connecting to use a registered nickname.
 ### 0x81 - AUTH_RESPONSE (Server → Client)
 
 ```
-+-------------------+-------------------+----------------------+
-| success (bool)    | user_id (uint64)  | message (String)     |
-|                   | (only if success) | (error if failed)    |
-+-------------------+-------------------+----------------------+
++-------------------+-------------------+----------------------+----------------------+
+| success (bool)    | user_id (uint64)  | nickname (String)    | message (String)     |
+|                   | (only if success) | (only if success)    | (error if failed)    |
++-------------------+-------------------+----------------------+----------------------+
 ```
 
 If success:
 - `user_id`: The registered user's ID
+- `nickname`: The authenticated user's registered nickname
 - `message`: Welcome message or empty
 
 If failed:
 - `user_id`: Omitted
+- `nickname`: Omitted
 - `message`: Error description
+
+**Note:** The `nickname` field was added in V2 to support SSH authentication, where the client needs to know their authenticated nickname without sending SET_NICKNAME.
 
 ### 0x02 - SET_NICKNAME (Client → Server)
 
@@ -867,6 +872,28 @@ Each user:
 - Same user_id may appear multiple times if user has multiple sessions
 - Useful for seeing who's currently online
 
+### 0x1C - LOGOUT (Client → Server)
+
+Clear the current session's authentication and become anonymous.
+
+```
+(empty message - no payload)
+```
+
+**Notes:**
+- Clears `session.UserID` on the server, making the session anonymous
+- Preserves the current nickname, but user can no longer perform authenticated actions
+- User can still post messages as an anonymous user with their current nickname
+- To fully switch identity, send LOGOUT followed by SET_NICKNAME with a new name
+- No response message - operation always succeeds
+- Useful for "Go Anonymous" feature or switching between registered accounts
+
+**Behavior:**
+- After logout, session becomes anonymous (user_id = NULL)
+- Current nickname is preserved unless explicitly changed
+- If nickname is registered, subsequent SET_NICKNAME with same name will require authentication
+- User loses access to authenticated-only features (creating channels, SSH keys, etc.)
+
 ### 0x07 - CREATE_CHANNEL (Client → Server)
 
 ```
@@ -1448,8 +1475,8 @@ Each server:
 +-------------------------------------+-------------------+
 | max_users (u32)   | uptime_seconds (u64)                |
 +-------------------+------------------------------------- +
-| is_public (bool)  |
-+-------------------+
+| is_public (bool)  | channel_count (u32)                 |
++-------------------+-------------------------------------+
 ```
 
 **Fields:**
@@ -1461,6 +1488,7 @@ Each server:
 - `max_users`: Maximum user capacity (0 = unlimited)
 - `uptime_seconds`: How long server has been running
 - `is_public`: Whether server accepts public registrations
+- `channel_count`: Number of channels available on the server
 
 **Notes:**
 - Sorted by last heartbeat time (most recent first)
@@ -1476,8 +1504,8 @@ Register or update server entry in directory.
 +-------------------+-------------------+-------------------+
 | description (String)                | max_users (u32)   |
 +-------------------------------------+-------------------+
-| is_public (bool)  |
-+-------------------+
+| is_public (bool)  | channel_count (u32)                 |
++-------------------+-------------------------------------+
 ```
 
 **Fields:**
@@ -1487,6 +1515,7 @@ Register or update server entry in directory.
 - `description`: Server description/purpose
 - `max_users`: Maximum user capacity (0 = unlimited)
 - `is_public`: Whether server accepts public registrations
+- `channel_count`: Number of channels available on the server
 
 **Behavior:**
 - If hostname:port already registered: updates existing entry
@@ -1597,6 +1626,8 @@ Periodic heartbeat to maintain directory listing.
 +-------------------+-------------------+
 | user_count (u32)  | uptime_seconds(u64)|
 +-------------------+-------------------+
+| channel_count (u32)                   |
++---------------------------------------+
 ```
 
 **Fields:**
@@ -1604,6 +1635,7 @@ Periodic heartbeat to maintain directory listing.
 - `port`: Server's port (must match registration)
 - `user_count`: Current number of connected users (updated)
 - `uptime_seconds`: Server uptime in seconds (updated)
+- `channel_count`: Number of channels available on the server (updated)
 
 **Behavior:**
 - Sent at interval specified in REGISTER_ACK or HEARTBEAT_ACK

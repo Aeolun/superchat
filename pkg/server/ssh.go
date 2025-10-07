@@ -190,9 +190,10 @@ func (s *Server) handleSSHSession(channel ssh.Channel, permissions *ssh.Permissi
 		sess.mu.Unlock()
 
 		authResp := &protocol.AuthResponseMessage{
-			Success: true,
-			UserID:  uint64(*userID),
-			Message: fmt.Sprintf("Authenticated via SSH as %s", nickname),
+			Success:  true,
+			UserID:   uint64(*userID),
+			Nickname: nickname,
+			Message:  fmt.Sprintf("Authenticated via SSH as %s", nickname),
 		}
 		if err := s.sendMessage(sess, protocol.TypeAuthResponse, authResp); err != nil {
 			log.Printf("Failed to send AUTH_RESPONSE for SSH user %s: %v", nickname, err)

@@ -561,6 +561,13 @@ func (m *MemDB) ListChannels() ([]*Channel, error) {
 	return channels, nil
 }
 
+// CountChannels returns the number of channels
+func (m *MemDB) CountChannels() uint32 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return uint32(len(m.channels))
+}
+
 // GetChannel retrieves a channel by ID
 func (m *MemDB) GetChannel(channelID int64) (*Channel, error) {
 	m.mu.RLock()
@@ -1007,12 +1014,12 @@ func (m *MemDB) CreateChannel(name, displayName string, description *string, cha
 // ===== Server Discovery Passthrough Methods =====
 // Discovery operations don't need in-memory caching - they're read-mostly and infrequent
 
-func (m *MemDB) RegisterDiscoveredServer(hostname string, port uint16, name, description string, maxUsers uint32, isPublic bool, sourceIP, discoveredVia string) (int64, error) {
-	return m.sqliteDB.RegisterDiscoveredServer(hostname, port, name, description, maxUsers, isPublic, sourceIP, discoveredVia)
+func (m *MemDB) RegisterDiscoveredServer(hostname string, port uint16, name, description string, maxUsers uint32, isPublic bool, channelCount uint32, sourceIP, discoveredVia string) (int64, error) {
+	return m.sqliteDB.RegisterDiscoveredServer(hostname, port, name, description, maxUsers, isPublic, channelCount, sourceIP, discoveredVia)
 }
 
-func (m *MemDB) UpdateHeartbeat(hostname string, port uint16, userCount uint32, uptimeSeconds uint64, newInterval uint32) error {
-	return m.sqliteDB.UpdateHeartbeat(hostname, port, userCount, uptimeSeconds, newInterval)
+func (m *MemDB) UpdateHeartbeat(hostname string, port uint16, userCount uint32, uptimeSeconds uint64, channelCount uint32, newInterval uint32) error {
+	return m.sqliteDB.UpdateHeartbeat(hostname, port, userCount, uptimeSeconds, channelCount, newInterval)
 }
 
 func (m *MemDB) ListDiscoveredServers(limit uint16) ([]*DiscoveredServer, error) {

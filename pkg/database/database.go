@@ -1280,6 +1280,7 @@ type DiscoveredServer struct {
 	IsPublic          bool
 	UserCount         uint32
 	UptimeSeconds     uint64
+	ChannelCount      uint32
 	LastHeartbeat     int64
 	HeartbeatInterval uint32
 	DiscoveredVia     string // "registration" or "gossip"
@@ -1289,22 +1290,23 @@ type DiscoveredServer struct {
 
 // RegisterDiscoveredServer adds or updates a server in the directory
 // This is an upsert operation: if hostname:port exists, it updates; otherwise inserts
-func (db *DB) RegisterDiscoveredServer(hostname string, port uint16, name, description string, maxUsers uint32, isPublic bool, sourceIP, discoveredVia string) (int64, error) {
+func (db *DB) RegisterDiscoveredServer(hostname string, port uint16, name, description string, maxUsers uint32, isPublic bool, channelCount uint32, sourceIP, discoveredVia string) (int64, error) {
 	now := nowMillis()
 
 	result, err := db.writeConn.Exec(`
 		INSERT INTO DiscoveredServer (
 			hostname, port, name, description, max_users, is_public,
-			user_count, uptime_seconds, last_heartbeat, heartbeat_interval,
+			user_count, uptime_seconds, channel_count, last_heartbeat, heartbeat_interval,
 			discovered_via, source_ip, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 300, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 300, ?, ?, ?)
 		ON CONFLICT(hostname, port) DO UPDATE SET
 			name = excluded.name,
 			description = excluded.description,
 			max_users = excluded.max_users,
 			is_public = excluded.is_public,
+			channel_count = excluded.channel_count,
 			last_heartbeat = excluded.last_heartbeat
-	`, hostname, port, name, description, maxUsers, isPublic, now, discoveredVia, sourceIP, now)
+	`, hostname, port, name, description, maxUsers, isPublic, channelCount, now, discoveredVia, sourceIP, now)
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to register discovered server: %w", err)
@@ -1325,7 +1327,7 @@ func (db *DB) RegisterDiscoveredServer(hostname string, port uint16, name, descr
 }
 
 // UpdateHeartbeat updates the heartbeat timestamp and stats for a server
-func (db *DB) UpdateHeartbeat(hostname string, port uint16, userCount uint32, uptimeSeconds uint64, newInterval uint32) error {
+func (db *DB) UpdateHeartbeat(hostname string, port uint16, userCount uint32, uptimeSeconds uint64, channelCount uint32, newInterval uint32) error {
 	now := nowMillis()
 
 	_, err := db.writeConn.Exec(`
@@ -1333,9 +1335,10 @@ func (db *DB) UpdateHeartbeat(hostname string, port uint16, userCount uint32, up
 		SET last_heartbeat = ?,
 		    user_count = ?,
 		    uptime_seconds = ?,
+		    channel_count = ?,
 		    heartbeat_interval = ?
 		WHERE hostname = ? AND port = ?
-	`, now, userCount, uptimeSeconds, newInterval, hostname, port)
+	`, now, userCount, uptimeSeconds, channelCount, newInterval, hostname, port)
 
 	if err != nil {
 		return fmt.Errorf("failed to update heartbeat: %w", err)
@@ -1351,7 +1354,7 @@ func (db *DB) ListDiscoveredServers(limit uint16) ([]*DiscoveredServer, error) {
 
 	rows, err := db.conn.Query(`
 		SELECT id, hostname, port, name, description, max_users, is_public,
-		       user_count, uptime_seconds, last_heartbeat, heartbeat_interval,
+		       user_count, uptime_seconds, channel_count, last_heartbeat, heartbeat_interval,
 		       discovered_via, source_ip, created_at
 		FROM DiscoveredServer
 		WHERE (? - last_heartbeat) <= (heartbeat_interval * 3 * 1000)
@@ -1372,7 +1375,7 @@ func (db *DB) ListDiscoveredServers(limit uint16) ([]*DiscoveredServer, error) {
 		err := rows.Scan(
 			&server.ID, &server.Hostname, &server.Port, &server.Name,
 			&server.Description, &server.MaxUsers, &server.IsPublic,
-			&server.UserCount, &server.UptimeSeconds, &server.LastHeartbeat,
+			&server.UserCount, &server.UptimeSeconds, &server.ChannelCount, &server.LastHeartbeat,
 			&server.HeartbeatInterval, &server.DiscoveredVia, &sourceIP, &server.CreatedAt,
 		)
 		if err != nil {
@@ -1396,14 +1399,14 @@ func (db *DB) GetDiscoveredServer(hostname string, port uint16) (*DiscoveredServ
 
 	err := db.conn.QueryRow(`
 		SELECT id, hostname, port, name, description, max_users, is_public,
-		       user_count, uptime_seconds, last_heartbeat, heartbeat_interval,
+		       user_count, uptime_seconds, channel_count, last_heartbeat, heartbeat_interval,
 		       discovered_via, source_ip, created_at
 		FROM DiscoveredServer
 		WHERE hostname = ? AND port = ?
 	`, hostname, port).Scan(
 		&server.ID, &server.Hostname, &server.Port, &server.Name,
 		&server.Description, &server.MaxUsers, &server.IsPublic,
-		&server.UserCount, &server.UptimeSeconds, &server.LastHeartbeat,
+		&server.UserCount, &server.UptimeSeconds, &server.ChannelCount, &server.LastHeartbeat,
 		&server.HeartbeatInterval, &server.DiscoveredVia, &sourceIP, &server.CreatedAt,
 	)
 

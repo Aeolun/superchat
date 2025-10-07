@@ -82,9 +82,10 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 
 	// Send success response
 	resp := &protocol.AuthResponseMessage{
-		Success: true,
-		UserID:  uint64(user.ID),
-		Message: fmt.Sprintf("Welcome back, %s!", user.Nickname),
+		Success:  true,
+		UserID:   uint64(user.ID),
+		Nickname: user.Nickname,
+		Message:  fmt.Sprintf("Welcome back, %s!", user.Nickname),
 	}
 	return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
 }
@@ -160,6 +161,33 @@ func (s *Server) handleRegisterUser(sess *Session, frame *protocol.Frame) error 
 	return s.sendMessage(sess, protocol.TypeRegisterResponse, resp)
 }
 
+// handleLogout handles LOGOUT message
+func (s *Server) handleLogout(sess *Session, frame *protocol.Frame) error {
+	log.Printf("Session %d: LOGOUT request received", sess.ID)
+
+	// Decode message (empty, but verify payload is valid)
+	msg := &protocol.LogoutMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		log.Printf("Session %d: LOGOUT decode failed: %v", sess.ID, err)
+		return s.sendError(sess, 1000, "Invalid message format")
+	}
+
+	// Clear the session's authentication
+	sess.mu.Lock()
+	oldUserID := sess.UserID
+	sess.UserID = nil
+	sess.mu.Unlock()
+
+	if oldUserID != nil {
+		log.Printf("Session %d: Logged out (was user_id=%d), now anonymous with nickname %s", sess.ID, *oldUserID, sess.Nickname)
+	} else {
+		log.Printf("Session %d: LOGOUT received but already anonymous", sess.ID)
+	}
+
+	// No response message - silent success
+	return nil
+}
+
 // handleSetNickname handles SET_NICKNAME message
 func (s *Server) handleSetNickname(sess *Session, frame *protocol.Frame) error {
 	// Decode message
@@ -192,7 +220,7 @@ func (s *Server) handleSetNickname(sess *Session, frame *protocol.Frame) error {
 
 	// Determine if this is a change or initial set
 	oldNickname := sess.Nickname
-	isChange := oldNickname != ""
+	isChange := oldNickname != "" && oldNickname != msg.Nickname
 
 	// For registered users changing nickname, update database
 	if sess.UserID != nil && isChange {
@@ -1609,8 +1637,11 @@ func (s *Server) broadcastChannelCreated(ch *database.Channel, creatorSessionID 
 
 // handleListServers handles LIST_SERVERS message (request server directory)
 func (s *Server) handleListServers(sess *Session, frame *protocol.Frame) error {
+	log.Printf("[DEBUG] handleListServers: DirectoryEnabled=%v", s.config.DirectoryEnabled)
+
 	// Only respond if directory mode is enabled
 	if !s.config.DirectoryEnabled {
+		log.Printf("[DEBUG] handleListServers: Directory not enabled, returning empty list")
 		// Return empty list for non-directory servers
 		resp := &protocol.ServerListMessage{
 			Servers: []protocol.ServerInfo{},
@@ -1639,10 +1670,28 @@ func (s *Server) handleListServers(sess *Session, frame *protocol.Frame) error {
 		return s.dbError(sess, "ListDiscoveredServers", err)
 	}
 
-	// Convert to protocol format
-	serverInfos := make([]protocol.ServerInfo, len(servers))
-	for i, server := range servers {
-		serverInfos[i] = protocol.ServerInfo{
+	// Include the directory server itself as the first entry
+	serverInfos := make([]protocol.ServerInfo, 0, len(servers)+1)
+
+	// Add self (directory server)
+	selfInfo := protocol.ServerInfo{
+		Hostname:      s.config.PublicHostname,
+		Port:          uint16(s.config.TCPPort),
+		Name:          s.config.ServerName,
+		Description:   s.config.ServerDesc,
+		UserCount:     s.sessions.CountOnlineUsers(),
+		MaxUsers:      s.config.MaxUsers,
+		UptimeSeconds: 0, // TODO: Track server start time for uptime
+		IsPublic:      true,
+		ChannelCount:  s.db.CountChannels(),
+	}
+	serverInfos = append(serverInfos, selfInfo)
+
+	log.Printf("[DEBUG] handleListServers: Returning %d servers (including self: %s)", len(serverInfos), selfInfo.Name)
+
+	// Add registered servers from database
+	for _, server := range servers {
+		serverInfos = append(serverInfos, protocol.ServerInfo{
 			Hostname:      server.Hostname,
 			Port:          server.Port,
 			Name:          server.Name,
@@ -1651,7 +1700,8 @@ func (s *Server) handleListServers(sess *Session, frame *protocol.Frame) error {
 			MaxUsers:      server.MaxUsers,
 			UptimeSeconds: server.UptimeSeconds,
 			IsPublic:      server.IsPublic,
-		}
+			ChannelCount:  server.ChannelCount,
+		})
 	}
 
 	// Send response
@@ -1771,7 +1821,7 @@ func (s *Server) handleHeartbeat(sess *Session, frame *protocol.Frame) error {
 	newInterval := s.calculateHeartbeatInterval(serverCount)
 
 	// Update heartbeat
-	err = s.db.UpdateHeartbeat(msg.Hostname, msg.Port, msg.UserCount, msg.UptimeSeconds, newInterval)
+	err = s.db.UpdateHeartbeat(msg.Hostname, msg.Port, msg.UserCount, msg.UptimeSeconds, msg.ChannelCount, newInterval)
 	if err != nil {
 		return s.dbError(sess, "UpdateHeartbeat", err)
 	}
@@ -1925,6 +1975,7 @@ func (s *Server) verifyAndRegisterServer(msg *protocol.RegisterServerMessage, so
 		msg.Description,
 		msg.MaxUsers,
 		msg.IsPublic,
+		msg.ChannelCount,
 		sourceIP,
 		"registration",
 	)

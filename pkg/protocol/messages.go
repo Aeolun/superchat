@@ -36,6 +36,7 @@ const (
 	TypeUpdateSSHKeyLabel  = 0x12
 	TypeDeleteSSHKey       = 0x13
 	TypeListSSHKeys        = 0x14
+	TypeLogout             = 0x1C
 	TypePing               = 0x10
 	TypeDisconnect         = 0x11
 	TypeListUsers          = 0x16
@@ -164,9 +165,10 @@ func (m *AuthRequestMessage) Decode(payload []byte) error {
 
 // AuthResponseMessage (0x81) - Authentication result
 type AuthResponseMessage struct {
-	Success bool
-	UserID  uint64 // Only present if success=true
-	Message string
+	Success  bool
+	UserID   uint64 // Only present if success=true
+	Nickname string // Only present if success=true
+	Message  string
 }
 
 func (m *AuthResponseMessage) EncodeTo(w io.Writer) error {
@@ -175,6 +177,9 @@ func (m *AuthResponseMessage) EncodeTo(w io.Writer) error {
 	}
 	if m.Success {
 		if err := WriteUint64(w, m.UserID); err != nil {
+			return err
+		}
+		if err := WriteString(w, m.Nickname); err != nil {
 			return err
 		}
 	}
@@ -204,6 +209,12 @@ func (m *AuthResponseMessage) Decode(payload []byte) error {
 			return err
 		}
 		m.UserID = userID
+
+		nickname, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		m.Nickname = nickname
 	}
 
 	message, err := ReadString(buf)
@@ -374,6 +385,23 @@ func (m *RegisterResponseMessage) Decode(payload []byte) error {
 	}
 	m.Message = message
 
+	return nil
+}
+
+// LogoutMessage (0x15) - Clear authentication and become anonymous
+type LogoutMessage struct{}
+
+func (m *LogoutMessage) EncodeTo(w io.Writer) error {
+	// Empty message
+	return nil
+}
+
+func (m *LogoutMessage) Encode() ([]byte, error) {
+	return []byte{}, nil
+}
+
+func (m *LogoutMessage) Decode(payload []byte) error {
+	// Empty message - nothing to decode
 	return nil
 }
 
@@ -2049,6 +2077,7 @@ type ServerInfo struct {
 	MaxUsers       uint32
 	UptimeSeconds  uint64
 	IsPublic       bool
+	ChannelCount   uint32
 }
 
 // ServerListMessage (0x9B) - List of discoverable servers
@@ -2083,6 +2112,9 @@ func (m *ServerListMessage) EncodeTo(w io.Writer) error {
 			return err
 		}
 		if err := WriteBool(w, server.IsPublic); err != nil {
+			return err
+		}
+		if err := WriteUint32(w, server.ChannelCount); err != nil {
 			return err
 		}
 	}
@@ -2138,6 +2170,10 @@ func (m *ServerListMessage) Decode(payload []byte) error {
 		if err != nil {
 			return err
 		}
+		channelCount, err := ReadUint32(buf)
+		if err != nil {
+			return err
+		}
 
 		servers[i] = ServerInfo{
 			Hostname:      hostname,
@@ -2148,6 +2184,7 @@ func (m *ServerListMessage) Decode(payload []byte) error {
 			MaxUsers:      maxUsers,
 			UptimeSeconds: uptimeSeconds,
 			IsPublic:      isPublic,
+			ChannelCount:  channelCount,
 		}
 	}
 
@@ -2157,12 +2194,13 @@ func (m *ServerListMessage) Decode(payload []byte) error {
 
 // RegisterServerMessage (0x56) - Register server with directory
 type RegisterServerMessage struct {
-	Hostname    string
-	Port        uint16
-	Name        string
-	Description string
-	MaxUsers    uint32
-	IsPublic    bool
+	Hostname     string
+	Port         uint16
+	Name         string
+	Description  string
+	MaxUsers     uint32
+	IsPublic     bool
+	ChannelCount uint32
 }
 
 func (m *RegisterServerMessage) EncodeTo(w io.Writer) error {
@@ -2181,7 +2219,10 @@ func (m *RegisterServerMessage) EncodeTo(w io.Writer) error {
 	if err := WriteUint32(w, m.MaxUsers); err != nil {
 		return err
 	}
-	return WriteBool(w, m.IsPublic)
+	if err := WriteBool(w, m.IsPublic); err != nil {
+		return err
+	}
+	return WriteUint32(w, m.ChannelCount)
 }
 
 func (m *RegisterServerMessage) Encode() ([]byte, error) {
@@ -2218,6 +2259,10 @@ func (m *RegisterServerMessage) Decode(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	channelCount, err := ReadUint32(buf)
+	if err != nil {
+		return err
+	}
 
 	m.Hostname = hostname
 	m.Port = port
@@ -2225,6 +2270,7 @@ func (m *RegisterServerMessage) Decode(payload []byte) error {
 	m.Description = description
 	m.MaxUsers = maxUsers
 	m.IsPublic = isPublic
+	m.ChannelCount = channelCount
 	return nil
 }
 
@@ -2339,6 +2385,7 @@ type HeartbeatMessage struct {
 	Port          uint16
 	UserCount     uint32
 	UptimeSeconds uint64
+	ChannelCount  uint32
 }
 
 func (m *HeartbeatMessage) EncodeTo(w io.Writer) error {
@@ -2351,7 +2398,10 @@ func (m *HeartbeatMessage) EncodeTo(w io.Writer) error {
 	if err := WriteUint32(w, m.UserCount); err != nil {
 		return err
 	}
-	return WriteUint64(w, m.UptimeSeconds)
+	if err := WriteUint64(w, m.UptimeSeconds); err != nil {
+		return err
+	}
+	return WriteUint32(w, m.ChannelCount)
 }
 
 func (m *HeartbeatMessage) Encode() ([]byte, error) {
@@ -2380,11 +2430,16 @@ func (m *HeartbeatMessage) Decode(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	channelCount, err := ReadUint32(buf)
+	if err != nil {
+		return err
+	}
 
 	m.Hostname = hostname
 	m.Port = port
 	m.UserCount = userCount
 	m.UptimeSeconds = uptimeSeconds
+	m.ChannelCount = channelCount
 	return nil
 }
 
@@ -2865,6 +2920,7 @@ var (
 	_ ProtocolMessage = (*AuthRequestMessage)(nil)
 	_ ProtocolMessage = (*SetNicknameMessage)(nil)
 	_ ProtocolMessage = (*RegisterUserMessage)(nil)
+	_ ProtocolMessage = (*LogoutMessage)(nil)
 	_ ProtocolMessage = (*ListChannelsMessage)(nil)
 	_ ProtocolMessage = (*JoinChannelMessage)(nil)
 	_ ProtocolMessage = (*CreateChannelMessage)(nil)
