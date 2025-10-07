@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/76creates/stickers/flexbox"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -130,166 +131,309 @@ func (m *SSHKeyManagerModal) Render(width, height int) string {
 }
 
 func (m *SSHKeyManagerModal) renderList() string {
-	var content strings.Builder
+	// Build key list content
+	var keyListItems []string
 
 	if m.loading {
-		content.WriteString(mutedTextStyle.Render("Loading SSH keys...\n\n"))
+		keyListItems = append(keyListItems, mutedTextStyle.Render("Loading SSH keys..."))
 	} else if len(m.keys) == 0 {
-		content.WriteString(mutedTextStyle.Render("No SSH keys configured.\n"))
-		content.WriteString(mutedTextStyle.Render("Add a key to enable SSH authentication.\n\n"))
+		keyListItems = append(keyListItems,
+			mutedTextStyle.Render("No SSH keys configured."),
+			mutedTextStyle.Render("Add a key to enable SSH authentication."),
+		)
 	} else {
 		for i, key := range m.keys {
-			var line strings.Builder
-
-			// Selection indicator
+			// Build key item
+			indicator := "  "
 			if i == m.selectedIndex {
-				line.WriteString(lipgloss.NewStyle().Foreground(primaryColor).Render("► "))
-			} else {
-				line.WriteString("  ")
+				indicator = lipgloss.NewStyle().Foreground(primaryColor).Render("► ")
 			}
 
-			// Key info
-			line.WriteString(boldStyle.Render(key.Label))
-			line.WriteString("\n  ")
-			line.WriteString(mutedTextStyle.Render(fmt.Sprintf("Type: %s", key.KeyType)))
-			line.WriteString("\n  ")
-			line.WriteString(mutedTextStyle.Render(fmt.Sprintf("Fingerprint: %s", truncateFingerprint(key.Fingerprint))))
-			line.WriteString("\n  ")
+			keyInfo := lipgloss.JoinVertical(lipgloss.Left,
+				boldStyle.Render(key.Label),
+				mutedTextStyle.Render("  Type: "+key.KeyType),
+				mutedTextStyle.Render("  Fingerprint: "+truncateFingerprint(key.Fingerprint)),
+				mutedTextStyle.Render("  "+formatLastUsed(key.LastUsedAt)),
+			)
 
-			if key.LastUsedAt != nil {
-				line.WriteString(mutedTextStyle.Render(fmt.Sprintf("Last used: %s", formatTimeAgo(*key.LastUsedAt))))
-			} else {
-				line.WriteString(mutedTextStyle.Render("Never used"))
-			}
-
+			item := indicator + keyInfo
 			if i == m.selectedIndex {
-				content.WriteString(highlightStyle.Render(line.String()))
-			} else {
-				content.WriteString(line.String())
+				item = highlightStyle.Render(item)
 			}
-			content.WriteString("\n\n")
+
+			keyListItems = append(keyListItems, item)
 		}
 	}
 
-	// Help text
-	content.WriteString(mutedTextStyle.Render("──────────────────────────────────────────────────\n"))
-	content.WriteString(mutedTextStyle.Render("[a] Add key  [r] Rename  [d] Delete  [Esc] Close"))
+	// Create flexbox layout
+	modalWidth := 74
+	modalHeight := 25
+	layout := flexbox.New(modalWidth, modalHeight)
+
+	// Row 1: Title
+	titleRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			lipgloss.NewStyle().Bold(true).Foreground(primaryColor).
+				Align(lipgloss.Center).Render("SSH Key Manager"),
+		),
+	)
+
+	// Row 2: Key list (flexible height)
+	contentHeight := modalHeight - 4 // title(1) + separator(1) + footer(1) + margin(1)
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight).SetContent(
+			lipgloss.JoinVertical(lipgloss.Left, keyListItems...),
+		),
+	)
+
+	// Row 3: Separator
+	separatorRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Render(strings.Repeat("─", modalWidth-4)),
+		),
+	)
+
+	// Row 4: Footer with help text
+	footerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Align(lipgloss.Center).
+				Render("[a] Add key  [r] Rename  [d] Delete  [Esc] Close"),
+		),
+	)
+
+	layout.AddRows([]*flexbox.Row{titleRow, contentRow, separatorRow, footerRow})
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryColor).
 		Padding(1, 2).
-		Width(70).
-		Render(boldStyle.Render("SSH Key Manager") + "\n\n" + content.String())
+		Render(layout.Render())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
+func formatLastUsed(lastUsedAt *time.Time) string {
+	if lastUsedAt == nil {
+		return "Never used"
+	}
+	return "Last used: " + formatTimeAgo(*lastUsedAt)
+}
+
 func (m *SSHKeyManagerModal) renderAddKey() string {
-	var content strings.Builder
+	modalWidth := 74
+	modalHeight := 28
+	layout := flexbox.New(modalWidth, modalHeight)
+
+	// Row 1: Title
+	titleRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			lipgloss.NewStyle().Bold(true).Foreground(primaryColor).
+				Align(lipgloss.Center).Render("Add SSH Key"),
+		),
+	)
+
+	// Build content items
+	var contentItems []string
 
 	// Public key input
-	content.WriteString(boldStyle.Render("Public Key:") + "\n")
+	keyInputView := m.addKeyInput.View()
 	if m.addFocusIndex == 0 {
-		content.WriteString(highlightStyle.Render(m.addKeyInput.View()))
-	} else {
-		content.WriteString(m.addKeyInput.View())
+		keyInputView = highlightStyle.Render(keyInputView)
 	}
-	content.WriteString("\n\n")
+	contentItems = append(contentItems,
+		boldStyle.Render("Public Key:"),
+		keyInputView,
+		"",
+	)
 
-	// Available .pub files
+	// Quick select files
 	if len(m.pubKeyFiles) > 0 {
-		content.WriteString(mutedTextStyle.Render("Quick select from ~/.ssh/:") + "\n")
+		contentItems = append(contentItems, mutedTextStyle.Render("Quick select from ~/.ssh/:"))
 		for i, file := range m.pubKeyFiles {
-			prefix := fmt.Sprintf("[%d] ", i+1)
-			content.WriteString(mutedTextStyle.Render(prefix + filepath.Base(file)) + "\n")
+			contentItems = append(contentItems,
+				mutedTextStyle.Render(fmt.Sprintf("  [%d] %s", i+1, filepath.Base(file))),
+			)
 		}
-		content.WriteString("\n")
+		contentItems = append(contentItems, "")
 	}
 
 	// Label input
-	content.WriteString(boldStyle.Render("Label:") + "\n")
+	labelInputView := m.addLabelInput.View()
 	if m.addFocusIndex == 1 {
-		content.WriteString(highlightStyle.Render(m.addLabelInput.View()))
-	} else {
-		content.WriteString(m.addLabelInput.View())
+		labelInputView = highlightStyle.Render(labelInputView)
 	}
-	content.WriteString("\n\n")
+	contentItems = append(contentItems,
+		boldStyle.Render("Label:"),
+		labelInputView,
+	)
 
 	// Error message
 	if m.addErrorMsg != "" {
-		content.WriteString(errorStyle.Render("Error: "+m.addErrorMsg) + "\n\n")
+		contentItems = append(contentItems, "", errorStyle.Render("Error: "+m.addErrorMsg))
 	}
 
-	// Help text
-	content.WriteString(mutedTextStyle.Render("──────────────────────────────────────────────────\n"))
-	content.WriteString(mutedTextStyle.Render("[Tab] Next field  [Enter] Add  [Esc] Cancel"))
+	// Row 2: Content
+	contentHeight := modalHeight - 4
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight).SetContent(
+			lipgloss.JoinVertical(lipgloss.Left, contentItems...),
+		),
+	)
+
+	// Row 3: Separator
+	separatorRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Render(strings.Repeat("─", modalWidth-4)),
+		),
+	)
+
+	// Row 4: Footer
+	footerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Align(lipgloss.Center).
+				Render("[Tab] Next field  [Enter] Add  [Esc] Cancel"),
+		),
+	)
+
+	layout.AddRows([]*flexbox.Row{titleRow, contentRow, separatorRow, footerRow})
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryColor).
 		Padding(1, 2).
-		Width(70).
-		Render(boldStyle.Render("Add SSH Key") + "\n\n" + content.String())
+		Render(layout.Render())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m *SSHKeyManagerModal) renderEditLabel() string {
-	var content strings.Builder
+	modalWidth := 54
+	modalHeight := 10
+	layout := flexbox.New(modalWidth, modalHeight)
 
-	content.WriteString("Enter new label for this key:\n\n")
-	content.WriteString(m.editLabelInput.View() + "\n\n")
+	// Row 1: Title
+	titleRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			lipgloss.NewStyle().Bold(true).Foreground(primaryColor).
+				Align(lipgloss.Center).Render("Edit Key Label"),
+		),
+	)
 
-	if m.editErrorMsg != "" {
-		content.WriteString(errorStyle.Render("Error: "+m.editErrorMsg) + "\n\n")
+	// Build content items
+	contentItems := []string{
+		"Enter new label for this key:",
+		"",
+		m.editLabelInput.View(),
 	}
 
-	content.WriteString(mutedTextStyle.Render("[Enter] Save  [Esc] Cancel"))
+	if m.editErrorMsg != "" {
+		contentItems = append(contentItems, "", errorStyle.Render("Error: "+m.editErrorMsg))
+	}
+
+	// Row 2: Content
+	contentHeight := modalHeight - 4
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight).SetContent(
+			lipgloss.JoinVertical(lipgloss.Left, contentItems...),
+		),
+	)
+
+	// Row 3: Separator
+	separatorRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Render(strings.Repeat("─", modalWidth-4)),
+		),
+	)
+
+	// Row 4: Footer
+	footerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Align(lipgloss.Center).
+				Render("[Enter] Save  [Esc] Cancel"),
+		),
+	)
+
+	layout.AddRows([]*flexbox.Row{titleRow, contentRow, separatorRow, footerRow})
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryColor).
 		Padding(1, 2).
-		Width(50).
-		Render(boldStyle.Render("Edit Key Label") + "\n\n" + content.String())
+		Render(layout.Render())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m *SSHKeyManagerModal) renderDeleteConfirm() string {
-	var content strings.Builder
+	modalWidth := 54
+	modalHeight := 12
+	layout := flexbox.New(modalWidth, modalHeight)
 
-	content.WriteString(fmt.Sprintf("Delete SSH key '%s'?\n\n", m.deleteKeyLabel))
-	content.WriteString(mutedTextStyle.Render("This action cannot be undone.\n\n"))
+	// Row 1: Title
+	titleRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			lipgloss.NewStyle().Bold(true).Foreground(primaryColor).
+				Align(lipgloss.Center).Render("Delete SSH Key"),
+		),
+	)
+
+	// Build content items
+	contentItems := []string{
+		fmt.Sprintf("Delete SSH key '%s'?", m.deleteKeyLabel),
+		"",
+		mutedTextStyle.Render("This action cannot be undone."),
+	}
 
 	if m.deleteErrorMsg != "" {
-		content.WriteString(errorStyle.Render("Error: "+m.deleteErrorMsg) + "\n\n")
+		contentItems = append(contentItems, "", errorStyle.Render("Error: "+m.deleteErrorMsg))
 	}
 
 	// Yes/No buttons
-	yesStyle := lipgloss.NewStyle().Padding(0, 2)
-	noStyle := lipgloss.NewStyle().Padding(0, 2)
-
+	yesButton := "[Yes]"
+	noButton := "[No]"
 	if m.deleteFocusYes {
-		content.WriteString(highlightStyle.Render(yesStyle.Render("[Yes]")))
-		content.WriteString("  ")
-		content.WriteString(noStyle.Render("[No]"))
+		yesButton = highlightStyle.Render(yesButton)
 	} else {
-		content.WriteString(yesStyle.Render("[Yes]"))
-		content.WriteString("  ")
-		content.WriteString(highlightStyle.Render(noStyle.Render("[No]")))
+		noButton = highlightStyle.Render(noButton)
 	}
 
-	content.WriteString("\n\n")
-	content.WriteString(mutedTextStyle.Render("[Tab] Switch  [Enter] Confirm  [Esc] Cancel"))
+	buttons := lipgloss.JoinHorizontal(lipgloss.Left,
+		yesButton,
+		"  ",
+		noButton,
+	)
+	contentItems = append(contentItems, "", buttons)
+
+	// Row 2: Content
+	contentHeight := modalHeight - 4
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight).SetContent(
+			lipgloss.JoinVertical(lipgloss.Left, contentItems...),
+		),
+	)
+
+	// Row 3: Separator
+	separatorRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Render(strings.Repeat("─", modalWidth-4)),
+		),
+	)
+
+	// Row 4: Footer
+	footerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Align(lipgloss.Center).
+				Render("[Tab] Switch  [Enter] Confirm  [Esc] Cancel"),
+		),
+	)
+
+	layout.AddRows([]*flexbox.Row{titleRow, contentRow, separatorRow, footerRow})
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primaryColor).
 		Padding(1, 2).
-		Width(50).
-		Render(boldStyle.Render("Delete SSH Key") + "\n\n" + content.String())
+		Render(layout.Render())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
