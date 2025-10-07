@@ -45,6 +45,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.threadListViewport.Height = msg.Height - 6
 		}
 
+		// Initialize or resize chat viewport (message area only, input is separate)
+		chatHeight := msg.Height - 6 - 3 // Reserve 3 lines for input field
+		if chatHeight < 5 {
+			chatHeight = 5
+		}
+		if m.chatViewport.Width == 0 || m.chatViewport.Height == 0 {
+			m.chatViewport = viewport.New(msg.Width-4, chatHeight)
+			m.chatViewport.SetContent(m.buildChatMessages())
+		} else {
+			m.chatViewport.Width = msg.Width - 4
+			m.chatViewport.Height = chatHeight
+		}
+
+		// Resize chat textarea
+		m.chatTextarea.SetWidth(msg.Width - 4)
+
 		return m, nil
 
 	case ServerFrameMsg:
@@ -103,6 +119,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case modal.ServerSelectedMsg:
+		// User selected a server to connect to
+		return m.handleServerSelected(msg.Server)
+
 	default:
 		// Always update spinner (it manages its own tick messages)
 		var cmd tea.Cmd
@@ -157,6 +177,22 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// No modal active or modal didn't handle the key
+
+	// For chat view, only bypass command registry for normal keys (not Ctrl/Alt combinations)
+	// This allows Ctrl+R, Ctrl+N, etc. to still work while typing goes to input
+	if m.currentView == ViewChatChannel {
+		// Check if this is a modifier key combination
+		isModifierCombo := strings.HasPrefix(key, "ctrl+") ||
+			strings.HasPrefix(key, "alt+") ||
+			strings.HasPrefix(key, "shift+")
+
+		if !isModifierCombo {
+			// Normal key - send to chat input handler
+			return m.handleChatChannelKeys(msg)
+		}
+		// Modifier combo - fall through to command registry
+	}
+
 	// Route through command registry based on main view and active modal
 	activeModalType := m.modalStack.TopType()
 	if cmd := m.commands.GetCommand(key, int(m.currentView), activeModalType, &m); cmd != nil {
@@ -184,6 +220,8 @@ func (m Model) handleLegacyKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleThreadListKeys(msg)
 	case ViewThreadView:
 		return m.handleThreadViewKeys(msg)
+	case ViewChatChannel:
+		return m.handleChatChannelKeys(msg)
 	}
 
 	return m, nil
@@ -407,6 +445,67 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleChatChannelKeys handles keyboard input in chat channel view
+func (m Model) handleChatChannelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg.String() {
+	case "esc":
+		// Exit chat and return to channel list
+		m.currentView = ViewChannelList
+		m.currentChannel = nil
+		m.chatMessages = []protocol.Message{}
+		m.chatTextarea.Reset()
+		m.chatTextarea.Blur() // Unfocus when leaving
+		return m, nil
+
+	case "enter":
+		// Send message if input is not empty
+		content := strings.TrimSpace(m.chatTextarea.Value())
+		if content != "" {
+			m.chatTextarea.Reset() // Clear textarea
+			return m.sendChatMessageWithContent(content)
+		}
+		return m, nil
+
+	case "up", "down", "pgup", "pgdown":
+		// Allow scrolling through message history
+		m.chatViewport, cmd = m.chatViewport.Update(msg)
+		return m, cmd
+
+	default:
+		// Pass all other keys to the textarea
+		m.chatTextarea, cmd = m.chatTextarea.Update(msg)
+		return m, cmd
+	}
+}
+
+// sendChatMessageWithContent sends a chat message with the given content
+func (m Model) sendChatMessageWithContent(content string) (Model, tea.Cmd) {
+	if m.currentChannel == nil {
+		return m, nil
+	}
+
+	if content == "" {
+		return m, nil
+	}
+
+	// Send POST_MESSAGE
+	msg := &protocol.PostMessageMessage{
+		ChannelID:    m.currentChannel.ID,
+		SubchannelID: nil,
+		ParentID:     nil, // Chat channels have no threading
+		Content:      content,
+	}
+
+	return m, func() tea.Msg {
+		if err := m.conn.SendMessage(protocol.TypePostMessage, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
 // selectedMessage returns the currently highlighted message, if any.
 func (m Model) selectedMessage() (*protocol.Message, bool) {
 	if m.currentThread == nil {
@@ -454,6 +553,8 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleUserInfo(frame)
 	case protocol.TypeChannelList:
 		return m.handleChannelList(frame)
+	case protocol.TypeServerList:
+		return m.handleServerList(frame)
 	case protocol.TypeChannelCreated:
 		return m.handleChannelCreated(frame)
 	case protocol.TypeJoinResponse:
@@ -659,6 +760,38 @@ func (m Model) handleChannelList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	return m, listenForServerFrames(m.conn)
 }
 
+// handleServerList processes SERVER_LIST (0x9B)
+func (m Model) handleServerList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.ServerListMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode server list: %v", err)
+
+		// Update modal to show error
+		if activeModal := m.modalStack.Top(); activeModal != nil {
+			if serverModal, ok := activeModal.(*modal.ServerSelectorModal); ok {
+				serverModal.SetError(fmt.Sprintf("Failed to decode server list: %v", err))
+			}
+		}
+
+		return m, listenForServerFrames(m.conn)
+	}
+
+	// Update the server selector modal with the received list
+	if activeModal := m.modalStack.Top(); activeModal != nil {
+		if serverModal, ok := activeModal.(*modal.ServerSelectorModal); ok {
+			serverModal.SetServers(msg.Servers)
+
+			if len(msg.Servers) == 0 {
+				m.statusMessage = "No servers available"
+			} else {
+				m.statusMessage = fmt.Sprintf("Loaded %d servers", len(msg.Servers))
+			}
+		}
+	}
+
+	return m, listenForServerFrames(m.conn)
+}
+
 // handleChannelCreated processes CHANNEL_CREATED (response + broadcast)
 func (m Model) handleChannelCreated(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.ChannelCreatedMessage{}
@@ -721,29 +854,51 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	}
 
 	if msg.ParentID == nil {
-		// Root messages (thread list)
-		m.loadingThreadList = false
+		// Root messages - could be thread list OR chat messages
+		// Check if we're in chat view
+		if m.currentView == ViewChatChannel {
+			// Chat messages (linear)
+			m.loadingChat = false
 
-		if m.loadingMore {
-			// Append to existing threads
-			m.threads = append(m.threads, msg.Messages...)
-			m.loadingMore = false
+			// Initial load - replace chat messages and sort by timestamp (oldest first)
+			m.chatMessages = msg.Messages
+			sort.Slice(m.chatMessages, func(i, j int) bool {
+				return m.chatMessages[i].CreatedAt.Before(m.chatMessages[j].CreatedAt)
+			})
 
-			// If we got fewer than 25, we've reached the end
-			if len(msg.Messages) < 25 {
-				m.allThreadsLoaded = true
+			m.allChatLoaded = len(msg.Messages) < 100
+			m.statusMessage = fmt.Sprintf("Loaded %d messages", len(m.chatMessages))
+
+			// Update viewport to show loaded messages
+			m.chatViewport.SetContent(m.buildChatMessages())
+
+			// Auto-scroll to bottom (newest messages)
+			m.chatViewport.GotoBottom()
+		} else {
+			// Thread list (forum view)
+			m.loadingThreadList = false
+
+			if m.loadingMore {
+				// Append to existing threads
+				m.threads = append(m.threads, msg.Messages...)
+				m.loadingMore = false
+
+				// If we got fewer than 25, we've reached the end
+				if len(msg.Messages) < 25 {
+					m.allThreadsLoaded = true
+				}
+
+				m.statusMessage = fmt.Sprintf("Loaded %d more threads", len(msg.Messages))
+			} else {
+				// Initial load - replace threads
+				m.threads = msg.Messages
+				m.allThreadsLoaded = len(msg.Messages) < 25
+				m.statusMessage = fmt.Sprintf("Loaded %d threads", len(m.threads))
 			}
 
-			m.statusMessage = fmt.Sprintf("Loaded %d more threads", len(msg.Messages))
-		} else {
-			// Initial load - replace threads
-			m.threads = msg.Messages
-			m.allThreadsLoaded = len(msg.Messages) < 25
-			m.statusMessage = fmt.Sprintf("Loaded %d threads", len(m.threads))
+			// Update viewport to show loaded threads
+			m.threadListViewport.SetContent(m.buildThreadListContent())
 		}
-
-		// Update viewport to show loaded threads
-		m.threadListViewport.SetContent(m.buildThreadListContent())
 	} else {
 		// Thread replies - sort them in depth-first order
 		m.loadingThreadReplies = false
@@ -838,28 +993,37 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	// Add to appropriate list
 	if m.currentChannel != nil && newMsg.ChannelID == m.currentChannel.ID {
 		if newMsg.ParentID == nil {
-			// New root message - add to threads
-			m.threads = append([]protocol.Message{newMsg}, m.threads...)
-			// Sort threads by created_at descending (newest first)
-			sort.Slice(m.threads, func(i, j int) bool {
-				return m.threads[i].CreatedAt.After(m.threads[j].CreatedAt)
-			})
-			m.threadListViewport.SetContent(m.buildThreadListContent())
-
-			// If this is our own new thread and we're in thread list view, select it
-			// Server adds ~ prefix for anonymous users
-			var isOwnThread bool
-			if m.authState == AuthStateAuthenticated {
-				isOwnThread = newMsg.AuthorNickname == m.nickname
+			// New root message - could be chat or thread depending on view
+			if m.currentView == ViewChatChannel {
+				// Chat message - append to end (newest last)
+				m.chatMessages = append(m.chatMessages, newMsg)
+				m.chatViewport.SetContent(m.buildChatMessages())
+				// Auto-scroll to bottom to show new message
+				m.chatViewport.GotoBottom()
 			} else {
-				isOwnThread = newMsg.AuthorNickname == "~"+m.nickname
-			}
+				// Forum thread - add to threads
+				m.threads = append([]protocol.Message{newMsg}, m.threads...)
+				// Sort threads by created_at descending (newest first)
+				sort.Slice(m.threads, func(i, j int) bool {
+					return m.threads[i].CreatedAt.After(m.threads[j].CreatedAt)
+				})
+				m.threadListViewport.SetContent(m.buildThreadListContent())
 
-			if m.currentView == ViewThreadList && isOwnThread {
-				for i, thread := range m.threads {
-					if thread.ID == newMsg.ID {
-						m.threadCursor = i
-						break
+				// If this is our own new thread and we're in thread list view, select it
+				// Server adds ~ prefix for anonymous users
+				var isOwnThread bool
+				if m.authState == AuthStateAuthenticated {
+					isOwnThread = newMsg.AuthorNickname == m.nickname
+				} else {
+					isOwnThread = newMsg.AuthorNickname == "~"+m.nickname
+				}
+
+				if m.currentView == ViewThreadList && isOwnThread {
+					for i, thread := range m.threads {
+						if thread.ID == newMsg.ID {
+							m.threadCursor = i
+							break
+						}
 					}
 				}
 			}
@@ -1150,6 +1314,18 @@ func (m Model) requestChannelList() tea.Cmd {
 	}
 }
 
+func (m Model) requestServerList() tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.ListServersMessage{
+			Limit: 100, // Request up to 100 servers
+		}
+		if err := m.conn.SendMessage(protocol.TypeListServers, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
 func (m Model) sendJoinChannel(channelID uint64) tea.Cmd {
 	return func() tea.Msg {
 		msg := &protocol.JoinChannelMessage{
@@ -1203,6 +1379,24 @@ func (m Model) requestThreadList(channelID uint64) tea.Cmd {
 			Limit:        limit,
 			BeforeID:     nil,
 			ParentID:     nil,
+			AfterID:      nil,
+		}
+		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) requestChatMessages(channelID uint64) tea.Cmd {
+	return func() tea.Msg {
+		limit := uint16(100) // Load last 100 messages initially
+		msg := &protocol.ListMessagesMessage{
+			ChannelID:    channelID,
+			SubchannelID: nil,
+			Limit:        limit,
+			BeforeID:     nil,
+			ParentID:     nil, // No parent ID = root messages only (chat has no threading)
 			AfterID:      nil,
 		}
 		if err := m.conn.SendMessage(protocol.TypeListMessages, msg); err != nil {
@@ -1510,4 +1704,21 @@ func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// handleServerSelected processes server selection from the server selector modal
+func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.Cmd) {
+	// Store server info for connection
+	serverAddr := fmt.Sprintf("%s:%d", server.Hostname, server.Port)
+
+	// Save to state for next startup
+	if err := m.state.SetConfig("server_address", serverAddr); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to save server address: %v", err)
+		return m, nil
+	}
+
+	// Show message that user needs to restart
+	m.statusMessage = fmt.Sprintf("Server %s selected. Please restart the client to connect.", server.Name)
+
+	return m, nil
 }

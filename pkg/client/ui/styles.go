@@ -5,203 +5,203 @@ import (
 )
 
 var (
-	// Color scheme
-	primaryColor   = lipgloss.Color("39")  // Blue
-	secondaryColor = lipgloss.Color("213") // Pink
-	successColor   = lipgloss.Color("42")  // Green
-	errorColor     = lipgloss.Color("196") // Red
-	warningColor   = lipgloss.Color("214") // Orange
-	mutedColor     = lipgloss.Color("243") // Gray
-	borderColor    = lipgloss.Color("238") // Dark gray
+	// Color scheme (exported for view package)
+	PrimaryColor   = lipgloss.Color("39")  // Blue
+	SecondaryColor = lipgloss.Color("213") // Pink
+	SuccessColor   = lipgloss.Color("42")  // Green
+	ErrorColor     = lipgloss.Color("196") // Red
+	WarningColor   = lipgloss.Color("214") // Orange
+	MutedColor     = lipgloss.Color("243") // Gray
+	BorderColor    = lipgloss.Color("238") // Dark gray
 
 	// Base styles
-	baseStyle = lipgloss.NewStyle()
+	BaseStyle = lipgloss.NewStyle()
 
-	// Header styles
-	headerStyle = baseStyle.Copy().
+	// Header styles (exported for view package)
+	HeaderStyle = BaseStyle.Copy().
 			Bold(true).
-			Foreground(primaryColor).
+			Foreground(PrimaryColor).
 			Padding(0, 1)
 
-	statusStyle = baseStyle.Copy().
-			Foreground(mutedColor).
+	StatusStyle = BaseStyle.Copy().
+			Foreground(MutedColor).
 			Padding(0, 1)
 
-	// Footer styles
-	footerStyle = baseStyle.Copy().
-			Foreground(mutedColor).
+	// Footer styles (exported for view package)
+	FooterStyle = BaseStyle.Copy().
+			Foreground(MutedColor).
 			Padding(0, 1)
 
-	shortcutKeyStyle = baseStyle.Copy().
-				Foreground(primaryColor).
+	ShortcutKeyStyle = BaseStyle.Copy().
+				Foreground(PrimaryColor).
 				Bold(true)
 
-	shortcutDescStyle = baseStyle.Copy().
+	ShortcutDescStyle = BaseStyle.Copy().
 				Foreground(lipgloss.Color("252"))
 
-	// List styles
-	selectedItemStyle = baseStyle.Copy().
-				Foreground(primaryColor).
+	// List styles (exported for view package)
+	SelectedItemStyle = BaseStyle.Copy().
+				Foreground(PrimaryColor).
 				Bold(true)
 
-	unselectedItemStyle = baseStyle.Copy().
+	UnselectedItemStyle = BaseStyle.Copy().
 				Foreground(lipgloss.Color("252"))
 
-	// Channel list styles
-	channelPaneStyle = baseStyle.Copy().
+	// Channel list styles (exported for view package)
+	ChannelPaneStyle = BaseStyle.Copy().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(borderColor).
+				BorderForeground(BorderColor).
 				Padding(0, 1)
 
-	channelTitleStyle = baseStyle.Copy().
+	ChannelTitleStyle = BaseStyle.Copy().
 				Bold(true).
-				Foreground(primaryColor)
+				Foreground(PrimaryColor)
 
-	channelItemStyle = baseStyle.Copy()
+	ChannelItemStyle = BaseStyle.Copy()
 
-	// Thread list styles
-	threadPaneStyle = baseStyle.Copy().
+	// Thread list styles (exported for view package)
+	ThreadPaneStyle = BaseStyle.Copy().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(borderColor)
+			BorderForeground(BorderColor)
 
-	actualThreadStyle = baseStyle.Copy().
+	ActualThreadStyle = BaseStyle.Copy().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(borderColor).
+				BorderForeground(BorderColor).
 				Padding(0, 1) // Top/bottom padding only, no left/right padding
 
-	threadTitleStyle = baseStyle.Copy().
+	ThreadTitleStyle = BaseStyle.Copy().
 				Bold(true).
-				Foreground(primaryColor).
+				Foreground(PrimaryColor).
 				MarginBottom(1)
 
-	// Message styles
-	messageAuthorStyle = baseStyle.Copy().
-				Foreground(secondaryColor)
+	// Message styles (exported for view package)
+	MessageAuthorStyle = BaseStyle.Copy().
+				Foreground(SecondaryColor)
 
-	messageAnonymousStyle = baseStyle.Copy().
-				Foreground(secondaryColor)
+	MessageAnonymousStyle = BaseStyle.Copy().
+				Foreground(SecondaryColor)
 
-	messageOwnAuthorStyle = baseStyle.Copy().
-				Foreground(successColor).
+	MessageOwnAuthorStyle = BaseStyle.Copy().
+				Foreground(SuccessColor).
 				Bold(true)
 
-	messageTimeStyle = baseStyle.Copy().
-				Foreground(mutedColor).
+	MessageTimeStyle = BaseStyle.Copy().
+				Foreground(MutedColor).
 				Italic(true)
 
-	messageContentStyle = baseStyle.Copy().
+	MessageContentStyle = BaseStyle.Copy().
 				Foreground(lipgloss.Color("252"))
 
-	messageDepthStyle = baseStyle.Copy().
-				Foreground(mutedColor)
+	MessageDepthStyle = BaseStyle.Copy().
+				Foreground(MutedColor)
 
-	// Modal styles
+	// Modal styles (exported for view package)
 	// Note: Width sets content width, border (2 chars) is added on top
-	modalStyle = baseStyle.Copy().
+	ModalStyle = BaseStyle.Copy().
 			Border(lipgloss.DoubleBorder()).
-			BorderForeground(primaryColor).
+			BorderForeground(PrimaryColor).
 			Padding(1, 2).
 			Width(58) // 58 + 2 (border) = 60 total
 
-	modalTitleStyle = baseStyle.Copy().
+	ModalTitleStyle = BaseStyle.Copy().
 			Bold(true).
-			Foreground(primaryColor).
+			Foreground(PrimaryColor).
 			MarginBottom(1)
 
-	// Input styles
-	inputStyle = baseStyle.Copy().
+	// Input styles (exported for view package)
+	InputStyle = BaseStyle.Copy().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(borderColor).
+			BorderForeground(BorderColor).
 			Padding(0, 1)
 
-	inputFocusedStyle = baseStyle.Copy().
+	InputFocusedStyle = BaseStyle.Copy().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(primaryColor).
+				BorderForeground(PrimaryColor).
 				Padding(0, 1)
 
-	inputBlurredStyle = baseStyle.Copy().
+	InputBlurredStyle = BaseStyle.Copy().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(borderColor).
-				Foreground(mutedColor).
+				BorderForeground(BorderColor).
+				Foreground(MutedColor).
 				Padding(0, 1)
 
-	// Error/success styles
-	errorStyle = baseStyle.Copy().
-			Foreground(errorColor).
+	// Error/success styles (exported for view package)
+	ErrorStyle = BaseStyle.Copy().
+			Foreground(ErrorColor).
 			Bold(true)
 
-	successStyle = baseStyle.Copy().
-			Foreground(successColor).
+	SuccessStyle = BaseStyle.Copy().
+			Foreground(SuccessColor).
 			Bold(true)
 
-	warningStyle = baseStyle.Copy().
-			Foreground(warningColor).
+	WarningStyle = BaseStyle.Copy().
+			Foreground(WarningColor).
 			Bold(true)
 
-	// Help styles
-	helpTitleStyle = baseStyle.Copy().
+	// Help styles (exported for view package)
+	HelpTitleStyle = BaseStyle.Copy().
 			Bold(true).
-			Foreground(primaryColor).
+			Foreground(PrimaryColor).
 			MarginBottom(1)
 
-	helpKeyStyle = baseStyle.Copy().
-			Foreground(primaryColor).
+	HelpKeyStyle = BaseStyle.Copy().
+			Foreground(PrimaryColor).
 			Bold(true).
 			Width(12)
 
-	helpDescStyle = baseStyle.Copy().
+	HelpDescStyle = BaseStyle.Copy().
 			Foreground(lipgloss.Color("252"))
 
-	// Splash screen styles
-	splashTitleStyle = baseStyle.Copy().
+	// Splash screen styles (exported for view package)
+	SplashTitleStyle = BaseStyle.Copy().
 				Bold(true).
-				Foreground(primaryColor).
+				Foreground(PrimaryColor).
 				Align(lipgloss.Center).
 				MarginBottom(2)
 
-	splashBodyStyle = baseStyle.Copy().
+	SplashBodyStyle = BaseStyle.Copy().
 			Foreground(lipgloss.Color("252")).
 			Align(lipgloss.Left).
 			MarginBottom(1)
 
-	splashPromptStyle = baseStyle.Copy().
-				Foreground(mutedColor).
+	SplashPromptStyle = BaseStyle.Copy().
+				Foreground(MutedColor).
 				Italic(true).
 				Align(lipgloss.Center).
 				MarginTop(2)
 
-	// Muted text style
-	mutedTextStyle = baseStyle.Copy().
-			Foreground(mutedColor)
+	// Muted text style (exported for view package)
+	MutedTextStyle = BaseStyle.Copy().
+			Foreground(MutedColor)
 
-	// Spinner style
-	spinnerStyle = baseStyle.Copy().
-			Foreground(primaryColor)
+	// Spinner style (exported for view package)
+	SpinnerStyle = BaseStyle.Copy().
+			Foreground(PrimaryColor)
 )
 
 // Styles holds all UI styles including spinner
 var Styles = struct {
 	Spinner lipgloss.Style
 }{
-	Spinner: spinnerStyle,
+	Spinner: SpinnerStyle,
 }
 
 // RenderShortcut renders a keyboard shortcut
 func RenderShortcut(key, desc string) string {
-	return shortcutKeyStyle.Render("["+key+"]") + " " + shortcutDescStyle.Render(desc)
+	return ShortcutKeyStyle.Render("["+key+"]") + " " + ShortcutDescStyle.Render(desc)
 }
 
 // RenderError renders an error message
 func RenderError(msg string) string {
-	return errorStyle.Render("✗ " + msg)
+	return ErrorStyle.Render("✗ " + msg)
 }
 
 // RenderSuccess renders a success message
 func RenderSuccess(msg string) string {
-	return successStyle.Render("✓ " + msg)
+	return SuccessStyle.Render("✓ " + msg)
 }
 
 // RenderWarning renders a warning message
 func RenderWarning(msg string) string {
-	return warningStyle.Render("⚠ " + msg)
+	return WarningStyle.Render("⚠ " + msg)
 }

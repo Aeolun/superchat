@@ -9,8 +9,10 @@ import (
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/aeolun/superchat/pkg/updater"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ViewState represents the current view
@@ -21,6 +23,7 @@ const (
 	ViewChannelList
 	ViewThreadList
 	ViewThreadView
+	ViewChatChannel
 	ViewHelp
 )
 
@@ -86,10 +89,18 @@ type Model struct {
 	replyCursor        int
 	threadViewport     viewport.Model  // Viewport for thread view
 	threadListViewport viewport.Model  // Viewport for thread list
+	chatViewport       viewport.Model  // Viewport for chat channel view
 	spinner            spinner.Model   // Loading spinner
 	newMessageIDs      map[uint64]bool // Track new messages in current thread
 	confirmingDelete   bool
 	pendingDeleteID    uint64
+
+	// Chat channel state
+	chatMessages     []protocol.Message // Linear list of all messages in chat channel
+	chatInput        string             // Current input in chat channel (deprecated - use chatTextarea)
+	chatTextarea     textarea.Model     // Textarea for chat input
+	loadingChat      bool               // True if loading chat messages
+	allChatLoaded    bool               // True if we've reached the beginning of chat history
 
 	// Input state
 	nickname             string
@@ -150,6 +161,27 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 	s.Spinner = spinner.Dot
 	s.Style = Styles.Spinner
 
+	// Create textarea for chat input
+	ta := textarea.New()
+	ta.Placeholder = "Type a message..."
+	ta.Prompt = ""
+	ta.CharLimit = 0 // No limit (server will enforce max message length)
+	ta.SetWidth(80)  // Will be resized dynamically
+	ta.SetHeight(3)
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle() // Remove cursor line styling
+	ta.ShowLineNumbers = false
+	ta.KeyMap.InsertNewline.SetEnabled(false) // Disable multiline (Enter sends message)
+
+	// Style the textarea with a border
+	ta.FocusedStyle.Base = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("205")). // Primary color
+		Padding(0, 1)
+	ta.BlurredStyle.Base = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")). // Muted color
+		Padding(0, 1)
+
 	m := Model{
 		conn:                   conn,
 		state:                  state,
@@ -166,6 +198,7 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 		threads:                []protocol.Message{},
 		threadReplies:          []protocol.Message{},
 		spinner:                s,
+		chatTextarea:           ta,
 		newMessageIDs:          make(map[uint64]bool),
 		threadRepliesCache:     make(map[uint64][]protocol.Message),
 		threadHighestMessageID: make(map[uint64]uint64),
@@ -213,6 +246,28 @@ func (m *Model) registerCommands() {
 			return model, nil
 		}).
 		Priority(950).
+		Build())
+
+	// Server selector (only if directory is enabled)
+	m.commands.Register(commands.NewCommand().
+		Keys("ctrl+l").
+		Name("Server List").
+		Help("List available servers").
+		Global().
+		InModals(modal.ModalNone). // Only available when no modal is open
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			// Only show if server has directory capability
+			if model.serverConfig == nil || !model.serverConfig.DirectoryEnabled {
+				model.statusMessage = "Server does not support server discovery"
+				return model, nil
+			}
+			// Show loading modal and request server list
+			serverModal := modal.NewServerSelectorLoading()
+			model.modalStack.Push(serverModal)
+			return model, model.requestServerList()
+		}).
+		Priority(940).
 		Build())
 
 	// Close help overlay with ESC - now handled by HelpModal itself
@@ -630,17 +685,36 @@ func (m *Model) registerCommands() {
 			if model.channelCursor < len(model.channels) {
 				selectedChannel := model.channels[model.channelCursor]
 				model.currentChannel = &selectedChannel
-				model.currentView = ViewThreadList
-				model.loadingMore = false
-				model.allThreadsLoaded = false
-				model.loadingThreadList = true
-				model.threads = []protocol.Message{} // Clear threads
-				model.threadListViewport.SetContent(model.buildThreadListContent()) // Show initial spinner
-				return model, tea.Batch(
-					model.sendJoinChannel(selectedChannel.ID),
-					model.requestThreadList(selectedChannel.ID),
-					model.sendSubscribeChannel(selectedChannel.ID),
-				)
+
+				// Check channel type and route to appropriate view
+				if selectedChannel.Type == 0 {
+					// Chat channel (type 0) - go to chat view
+					model.currentView = ViewChatChannel
+					model.loadingChat = true
+					model.chatMessages = []protocol.Message{} // Clear chat messages
+					model.chatTextarea.Reset()                // Clear textarea
+					model.chatTextarea.Focus()                // Focus textarea for immediate typing
+					model.chatViewport.SetContent(model.buildChatMessages())
+					return model, tea.Batch(
+						model.sendJoinChannel(selectedChannel.ID),
+						model.requestChatMessages(selectedChannel.ID),
+						model.sendSubscribeChannel(selectedChannel.ID),
+						textarea.Blink, // Start cursor blinking
+					)
+				} else {
+					// Forum channel (type 1) - go to thread list view
+					model.currentView = ViewThreadList
+					model.loadingMore = false
+					model.allThreadsLoaded = false
+					model.loadingThreadList = true
+					model.threads = []protocol.Message{} // Clear threads
+					model.threadListViewport.SetContent(model.buildThreadListContent()) // Show initial spinner
+					return model, tea.Batch(
+						model.sendJoinChannel(selectedChannel.ID),
+						model.requestThreadList(selectedChannel.ID),
+						model.sendSubscribeChannel(selectedChannel.ID),
+					)
+				}
 			}
 			return model, nil
 		}).

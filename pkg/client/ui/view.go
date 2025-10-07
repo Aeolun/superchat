@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/76creates/stickers/flexbox"
 	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/charmbracelet/lipgloss"
@@ -36,6 +37,8 @@ func (m Model) View() string {
 		baseView = m.renderThreadList()
 	case ViewThreadView:
 		baseView = m.renderThreadView()
+	case ViewChatChannel:
+		baseView = m.renderChatChannel()
 	default:
 		baseView = "Unknown view"
 	}
@@ -65,14 +68,14 @@ func (m Model) renderModalOverlay(baseView string, activeModal modal.Modal) stri
 func (m Model) renderSplash() string {
 	var s strings.Builder
 
-	title := splashTitleStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
+	title := SplashTitleStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
 	subtitle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("252")).
 		Align(lipgloss.Center).
 		MarginBottom(1).
 		Render("A terminal-based threaded chat application")
 
-	body := splashBodyStyle.Render(`Getting Started:
+	body := SplashBodyStyle.Render(`Getting Started:
 • Use arrow keys (↑↓←→) to navigate
 • Press [Enter] to select channels and threads
 • Press [h] or [?] anytime for help
@@ -86,7 +89,7 @@ Anonymous vs Registered:
 You can browse anonymously without setting a nickname.
 When you want to post, you'll be prompted to set one.`)
 
-	prompt := splashPromptStyle.Render("[Press any key to continue]")
+	prompt := SplashPromptStyle.Render("[Press any key to continue]")
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -98,26 +101,22 @@ When you want to post, you'll be prompted to set one.`)
 		prompt,
 	)
 
-	box := modalStyle.Render(content)
+	box := ModalStyle.Render(content)
 	s.WriteString("\n\n")
 	s.WriteString(lipgloss.Place(m.width, m.height-4, lipgloss.Center, lipgloss.Center, box))
 
 	return s.String()
 }
 
-// renderChannelList renders the channel list view
+// renderChannelList renders the channel list view using flexbox for stable layout
 func (m Model) renderChannelList() string {
-	var s strings.Builder
+	// Import flexbox at the top if not already imported
+	layout := flexbox.NewHorizontal(m.width, m.height-3) // Total height minus header(1) + footer(1) + spacing(1)
 
-	// Header
-	header := m.renderHeader()
-	s.WriteString(header)
-	s.WriteString("\n")
+	// Build channel pane content
+	channelPaneContent := m.buildChannelPaneContentString()
 
-	// Channel list
-	channelList := m.renderChannelPane()
-
-	// Main content area (instructions when no channel selected)
+	// Build main pane content (instructions)
 	welcomeLines := []string{
 		"Welcome to SuperChat!",
 		"",
@@ -126,12 +125,12 @@ func (m Model) renderChannelList() string {
 	// Add update notification if available
 	if m.updateAvailable {
 		updateNotice := lipgloss.NewStyle().
-			Foreground(warningColor).
+			Foreground(WarningColor).
 			Bold(true).
 			Render(fmt.Sprintf("⚠ Update available: %s → %s", m.currentVersion, m.latestVersion))
 
 		updateInstr := lipgloss.NewStyle().
-			Foreground(mutedColor).
+			Foreground(MutedColor).
 			Render("Run 'sc update' in your terminal to update")
 
 		welcomeLines = append(welcomeLines, updateNotice, updateInstr, "", "")
@@ -152,87 +151,134 @@ func (m Model) renderChannelList() string {
 		PaddingLeft(2).
 		Render(lipgloss.JoinVertical(lipgloss.Left, welcomeLines...))
 
-	// Use 75% of width for main pane (channel is 25%)
-	// Subtract 2 for border (lipgloss adds border on top of width)
-	threadWidth := m.width - m.width/4 - 1 - 2 // Total width - channel - space - border
-	if threadWidth < 30 {
-		threadWidth = 30
-	}
-
-	mainPane := threadPaneStyle.
-		Width(threadWidth).
-		Height(m.height - 4).
-		Render(instructions)
-
-	content := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		channelList,
-		" ",
-		mainPane,
+	// Column 1: Channel pane (ratioX=1 = 25% of width)
+	channelCol := layout.NewColumn().AddCells(
+		flexbox.NewCell(1, 1).
+			SetStyle(ChannelPaneStyle).
+			SetContent(channelPaneContent),
 	)
 
-	s.WriteString(content)
-	s.WriteString("\n")
-
-	// Footer
-	footer := m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m))
-	s.WriteString(footer)
-
-	return s.String()
-}
-
-// renderThreadList renders the thread list view
-func (m Model) renderThreadList() string {
-	var s strings.Builder
-
-	// Header
-	header := m.renderHeader()
-	s.WriteString(header)
-	s.WriteString("\n")
-
-	// Channel list (left pane)
-	channelList := m.renderChannelPane()
-
-	// Thread list (right pane)
-	// Account for channel pane (40) + space (1) + border/padding (4)
-	threadList := m.renderThreadPane()
-
-	content := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		channelList,
-		" ",
-		threadList,
+	// Column 2: Main pane (ratioX=3 = 75% of width)
+	mainCol := layout.NewColumn().AddCells(
+		flexbox.NewCell(3, 1).
+			SetStyle(ThreadPaneStyle).
+			SetContent(instructions),
 	)
 
-	s.WriteString(content)
-	s.WriteString("\n")
+	layout.AddColumns([]*flexbox.Column{channelCol, mainCol})
 
-	// Footer
-	footer := m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m))
-	s.WriteString(footer)
-
-	return s.String()
-}
-
-// renderThreadView renders the thread view
-func (m Model) renderThreadView() string {
+	// Combine header, content, and footer
 	header := m.renderHeader()
-	threadContent := m.renderThreadContent()
+	content := layout.Render()
 	footer := m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m))
 
-	body := lipgloss.JoinVertical(
+	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
-		"",
-		threadContent,
-		"",
+		content,
 		footer,
 	)
+}
 
-	base := lipgloss.Place(m.width, m.height, lipgloss.Top, lipgloss.Left, body)
+// renderThreadList renders the thread list view using flexbox for stable layout
+func (m Model) renderThreadList() string {
+	layout := flexbox.NewHorizontal(m.width, m.height-3) // Total height minus header(1) + footer(1) + spacing(1)
 
-	// Delete confirmation now handled by DeleteConfirmModal in modal stack
-	return base
+	// Build channel pane content
+	channelPaneContent := m.buildChannelPaneContentString()
+
+	// Build thread list pane content
+	threadListContent := lipgloss.NewStyle().
+		PaddingLeft(2).
+		Render(m.threadListViewport.View())
+
+	// Column 1: Channel pane (ratioX=1 = 25% of width)
+	channelCol := layout.NewColumn().AddCells(
+		flexbox.NewCell(1, 1).
+			SetStyle(ChannelPaneStyle).
+			SetContent(channelPaneContent),
+	)
+
+	// Column 2: Thread list pane (ratioX=3 = 75% of width)
+	threadCol := layout.NewColumn().AddCells(
+		flexbox.NewCell(3, 1).
+			SetStyle(ThreadPaneStyle).
+			SetContent(threadListContent),
+	)
+
+	layout.AddColumns([]*flexbox.Column{channelCol, threadCol})
+
+	// Combine header, content, and footer
+	header := m.renderHeader()
+	content := layout.Render()
+	footer := m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m))
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		content,
+		footer,
+	)
+}
+
+// renderThreadView renders the thread view using flexbox for stable layout
+func (m Model) renderThreadView() string {
+	// Create vertical layout: header, content, footer
+	layout := flexbox.New(m.width, m.height)
+
+	// Row 1: Header (fixed height = 1)
+	headerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(m.renderHeader()),
+	)
+
+	// Row 2: Thread content (flexible = remaining height)
+	contentHeight := m.height - 2 // Subtract header(1) + footer(1)
+	threadContent := m.renderThreadContent()
+
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight).SetContent(threadContent),
+	)
+
+	// Row 3: Footer (fixed height = 1)
+	footerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m)),
+		),
+	)
+
+	layout.AddRows([]*flexbox.Row{headerRow, contentRow, footerRow})
+
+	return layout.Render()
+}
+
+// renderChatChannel renders the chat channel view using flexbox for stable layout
+func (m Model) renderChatChannel() string {
+	// Create vertical layout: header, content, footer
+	layout := flexbox.New(m.width, m.height)
+
+	// Row 1: Header (fixed height = 1)
+	headerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(m.renderHeader()),
+	)
+
+	// Row 2: Chat content (flexible = remaining height)
+	contentHeight := m.height - 2 // Subtract header(1) + footer(1)
+	chatContent := m.renderChatContent()
+
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight).SetContent(chatContent),
+	)
+
+	// Row 3: Footer (fixed height = 1)
+	footerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			m.renderFooter(m.commands.GenerateFooter(int(m.currentView), m.modalStack.TopType(), &m)),
+		),
+	)
+
+	layout.AddRows([]*flexbox.Row{headerRow, contentRow, footerRow})
+
+	return layout.Render()
 }
 
 func mergeOverlay(base, overlay string) string {
@@ -254,14 +300,14 @@ func mergeOverlay(base, overlay string) string {
 
 // renderHelp renders the help modal
 func (m Model) renderHelp() string {
-	title := helpTitleStyle.Render("Keyboard Shortcuts")
+	title := HelpTitleStyle.Render("Keyboard Shortcuts")
 
 	// Auto-generate shortcuts from command registry (context-aware)
 	shortcuts := m.commands.GenerateHelp(int(m.currentView), m.modalStack.TopType(), &m)
 
 	var lines []string
 	for _, sc := range shortcuts {
-		line := helpKeyStyle.Render(sc[0]) + "  " + helpDescStyle.Render(sc[1])
+		line := HelpKeyStyle.Render(sc[0]) + "  " + HelpDescStyle.Render(sc[1])
 		lines = append(lines, line)
 	}
 
@@ -271,10 +317,10 @@ func (m Model) renderHelp() string {
 		"",
 		strings.Join(lines, "\n"),
 		"",
-		mutedTextStyle.Render("[Press h or ? to close]"),
+		MutedTextStyle.Render("[Press h or ? to close]"),
 	)
 
-	modal := modalStyle.Render(content)
+	modal := ModalStyle.Render(content)
 
 	// Overlay modal (simple version - just place centered)
 	return lipgloss.Place(
@@ -302,7 +348,7 @@ func formatBytes(bytes uint64) string {
 
 // renderHeader renders the header
 func (m Model) renderHeader() string {
-	left := headerStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
+	left := HeaderStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
 
 	status := "Disconnected"
 	if m.conn.IsConnected() {
@@ -323,11 +369,11 @@ func (m Model) renderHeader() string {
 		// Add traffic counter
 		sent := formatBytes(m.conn.GetBytesSent())
 		recv := formatBytes(m.conn.GetBytesReceived())
-		traffic := mutedTextStyle.Render(fmt.Sprintf("  ↑%s ↓%s", sent, recv))
+		traffic := MutedTextStyle.Render(fmt.Sprintf("  ↑%s ↓%s", sent, recv))
 		status += traffic
 	}
 
-	right := statusStyle.Render(status)
+	right := StatusStyle.Render(status)
 
 	spacer := strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right)))
 
@@ -418,15 +464,15 @@ func (m Model) renderFooter(shortcuts string) string {
 	footerContent := shortcuts
 
 	if m.statusMessage != "" {
-		footerContent += "  " + successStyle.Render(m.statusMessage)
+		footerContent += "  " + SuccessStyle.Render(m.statusMessage)
 	}
 
 	if m.errorMessage != "" {
 		footerContent += "  " + RenderError(m.errorMessage)
 	}
 
-	// Truncate if too long (account for padding in footerStyle)
-	// footerStyle has Padding(0, 1) which adds 2 chars total
+	// Truncate if too long (account for padding in FooterStyle)
+	// FooterStyle has Padding(0, 1) which adds 2 chars total
 	maxWidth := m.width - 2
 	suffix := " [?/h] for more…"
 	fadeLength := 3
@@ -458,48 +504,60 @@ func (m Model) renderFooter(shortcuts string) string {
 		footerContent = trimmed + faded.String() + suffix
 	}
 
-	footer := footerStyle.Render(footerContent)
+	footer := FooterStyle.Render(footerContent)
 	return footer
 }
 
-// renderChannelPane renders the channel list pane
-func (m Model) renderChannelPane() string {
-	title := channelTitleStyle.Render("Channels")
+// buildChannelPaneContentString builds the channel list content without styling
+func (m Model) buildChannelPaneContentString() string {
+	title := ChannelTitleStyle.Render("Channels")
 
 	// Format server address, hiding default port (6465)
 	addr := m.conn.GetAddress()
 	if idx := strings.LastIndex(addr, ":6465"); idx != -1 {
 		addr = addr[:idx]
 	}
-	serverAddr := mutedTextStyle.MarginBottom(1).Render(addr)
+	serverAddr := MutedTextStyle.MarginBottom(1).Render(addr)
 
 	var items []string
 
 	// Show loading indicator if loading channels
 	if m.loadingChannels {
-		items = append(items, mutedTextStyle.Render("  "+m.spinner.View()+" Loading channels..."))
+		items = append(items, MutedTextStyle.Render("  "+m.spinner.View()+" Loading channels..."))
 	} else {
 		for i, channel := range m.channels {
-			item := "#" + channel.Name
-			if i == m.channelCursor {
-				item = selectedItemStyle.Render("▶ " + item)
+			// Use '>' prefix for chat channels (type 0), '#' for forum channels (type 1)
+			var prefix string
+			if channel.Type == 0 {
+				prefix = ">"
 			} else {
-				item = unselectedItemStyle.Render("  " + item)
+				prefix = "#"
+			}
+			item := prefix + channel.Name
+			if i == m.channelCursor {
+				item = SelectedItemStyle.Render("▶ " + item)
+			} else {
+				item = UnselectedItemStyle.Render("  " + item)
 			}
 			items = append(items, item)
 		}
 
 		if len(items) == 0 {
-			items = append(items, mutedTextStyle.Render("  (no channels)"))
+			items = append(items, MutedTextStyle.Render("  (no channels)"))
 		}
 	}
 
-	content := lipgloss.JoinVertical(
+	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
 		serverAddr,
 		strings.Join(items, "\n"),
 	)
+}
+
+// renderChannelPane renders the channel list pane (used by thread list view)
+func (m Model) renderChannelPane() string {
+	content := m.buildChannelPaneContentString()
 
 	// Use 25% of width for channel pane
 	// Subtract 2 for border (lipgloss adds border on top of width)
@@ -508,7 +566,7 @@ func (m Model) renderChannelPane() string {
 		channelWidth = 20
 	}
 
-	return channelPaneStyle.
+	return ChannelPaneStyle.
 		Width(channelWidth).
 		Height(m.height - 4).
 		Render(content)
@@ -528,18 +586,18 @@ func (m Model) renderThreadPane() string {
 		PaddingLeft(2).
 		Render(m.threadListViewport.View())
 
-	return threadPaneStyle.
+	return ThreadPaneStyle.
 		Width(threadWidth).
 		Height(m.height - 4).
 		Render(content)
 }
 
-// renderThreadContent renders the thread and its replies
+// renderThreadContent renders the thread and its replies using flexbox
 func (m Model) renderThreadContent() string {
 	if m.currentThread == nil {
-		return threadPaneStyle.
+		return ThreadPaneStyle.
 			Width(m.width - 4).
-			Height(m.height - 6).
+			Height(m.height - 2). // Just header and footer
 			Render("No thread selected")
 	}
 
@@ -549,37 +607,61 @@ func (m Model) renderThreadContent() string {
 	// Check for new messages outside viewport
 	hasNewAbove, hasNewBelow := m.checkNewMessagesOutsideViewport()
 
-	// Render the pane first
-	pane := actualThreadStyle.
-		Width(m.width - 2). // Subtract 2 for border
-		Height(m.height - 6).
-		Render(viewportContent)
+	// Available height for thread content area (excludes header and footer)
+	contentHeight := m.height - 2
+	layout := flexbox.New(m.width, contentHeight)
 
-	// Add indicator lines outside the pane if needed
-	var components []string
+	var rows []*flexbox.Row
+
+	// Row 1 (optional): "NEW MESSAGES ABOVE" indicator (1 line if present)
 	if hasNewAbove {
 		indicator := lipgloss.NewStyle().
-			Foreground(warningColor).
+			Foreground(WarningColor).
 			Bold(true).
 			Align(lipgloss.Right).
-			Width(m.width - 2). // Match pane width
 			Render("▲ NEW MESSAGES ABOVE ▲")
-		components = append(components, indicator)
+
+		indicatorRow := layout.NewRow().AddCells(
+			flexbox.NewCell(1, 1).SetContent(indicator),
+		)
+		rows = append(rows, indicatorRow)
 	}
 
-	components = append(components, pane)
+	// Row 2: Thread viewport (flexible - takes remaining space)
+	// Calculate height: total - indicators (1 line each if present)
+	indicatorLines := 0
+	if hasNewAbove {
+		indicatorLines++
+	}
+	if hasNewBelow {
+		indicatorLines++
+	}
+	threadHeight := contentHeight - indicatorLines
 
+	threadRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, threadHeight).
+			SetStyle(ActualThreadStyle).
+			SetContent(viewportContent),
+	)
+	rows = append(rows, threadRow)
+
+	// Row 3 (optional): "NEW MESSAGES BELOW" indicator (1 line if present)
 	if hasNewBelow {
 		indicator := lipgloss.NewStyle().
-			Foreground(warningColor).
+			Foreground(WarningColor).
 			Bold(true).
 			Align(lipgloss.Right).
-			Width(m.width - 2). // Match pane width
 			Render("▼ NEW MESSAGES BELOW ▼")
-		components = append(components, indicator)
+
+		indicatorRow := layout.NewRow().AddCells(
+			flexbox.NewCell(1, 1).SetContent(indicator),
+		)
+		rows = append(rows, indicatorRow)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, components...)
+	layout.AddRows(rows)
+
+	return layout.Render()
 }
 
 // formatThreadItem formats a thread list item
@@ -618,12 +700,12 @@ func (m Model) formatThreadItem(thread protocol.Message) string {
 
 	// Calculate space for preview
 	// Format: "author preview  time(replies)"
-	authorStyle := messageAuthorStyle
+	authorStyle := MessageAuthorStyle
 	if m.isOwnMessage(thread) {
-		authorStyle = messageOwnAuthorStyle
+		authorStyle = MessageOwnAuthorStyle
 	}
 	authorRendered := authorStyle.Render(author)
-	metadataRendered := messageTimeStyle.Render(timeStr) + mutedTextStyle.Render(replyCount)
+	metadataRendered := MessageTimeStyle.Render(timeStr) + MutedTextStyle.Render(replyCount)
 
 	// Use lipgloss.Width to get actual rendered width (accounting for ANSI codes)
 	authorWidth := lipgloss.Width(authorRendered)
@@ -661,35 +743,35 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 	// Choose style based on whether this is the current user's message
 	var authorStyle lipgloss.Style
 	if m.isOwnMessage(msg) {
-		authorStyle = messageOwnAuthorStyle
+		authorStyle = MessageOwnAuthorStyle
 	} else if msg.AuthorUserID == nil {
 		// Anonymous user (not current user)
-		authorStyle = messageAnonymousStyle
+		authorStyle = MessageAnonymousStyle
 	} else {
 		// Registered user (not current user)
-		authorStyle = messageAuthorStyle
+		authorStyle = MessageAuthorStyle
 	}
 	author = authorStyle.Render(author)
 
 	timeStr := formatTime(msg.CreatedAt)
-	timestamp := messageTimeStyle.Render(timeStr)
+	timestamp := MessageTimeStyle.Render(timeStr)
 
 	// Add edited indicator if message was edited
 	editedIndicator := ""
 	if msg.EditedAt != nil {
-		editedIndicator = "  " + messageTimeStyle.Render("(edited)")
+		editedIndicator = "  " + MessageTimeStyle.Render("(edited)")
 	}
 
 	// Add NEW indicator if message is unread
 	newIndicator := ""
 	if m.newMessageIDs[msg.ID] {
-		newIndicator = "  " + successStyle.Render("[NEW]")
+		newIndicator = "  " + SuccessStyle.Render("[NEW]")
 	}
 
 	// Add depth indicator at the end
 	depthIndicator := ""
 	if depth > 0 {
-		depthIndicator = "  " + messageDepthStyle.Render(fmt.Sprintf("[%d]", depth))
+		depthIndicator = "  " + MessageDepthStyle.Render(fmt.Sprintf("[%d]", depth))
 	}
 
 	header := author + "  " + timestamp + editedIndicator + newIndicator + depthIndicator
@@ -710,7 +792,7 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 		wrapped := lipgloss.NewStyle().Width(availableWidth).Render(line)
 		wrappedLines := strings.Split(wrapped, "\n")
 		for _, wl := range wrappedLines {
-			indentedContent = append(indentedContent, indent+messageContentStyle.Render(wl))
+			indentedContent = append(indentedContent, indent+MessageContentStyle.Render(wl))
 		}
 	}
 
@@ -719,10 +801,10 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 	full := header + "\n" + content
 
 	if selected {
-		return selectedItemStyle.Render("▶ " + selectedIndent + full)
+		return SelectedItemStyle.Render("▶ " + selectedIndent + full)
 	}
 
-	return unselectedItemStyle.Render("" + indent + full)
+	return UnselectedItemStyle.Render("" + indent + full)
 }
 
 // formatTime formats a timestamp as relative time
@@ -763,34 +845,34 @@ func min(a, b int) int {
 func (m Model) buildThreadListContent() string {
 	var title string
 	if m.currentChannel != nil {
-		title = threadTitleStyle.Render("#" + m.currentChannel.Name + " - Threads")
+		title = ThreadTitleStyle.Render("#" + m.currentChannel.Name + " - Threads")
 	} else {
-		title = threadTitleStyle.Render("Threads")
+		title = ThreadTitleStyle.Render("Threads")
 	}
 
 	var items []string
 
 	// Show loading indicator if initially loading
 	if m.loadingThreadList {
-		items = append(items, mutedTextStyle.Render("  "+m.spinner.View()+" Loading threads..."))
+		items = append(items, MutedTextStyle.Render("  "+m.spinner.View()+" Loading threads..."))
 	} else {
 		for i, thread := range m.threads {
 			item := m.formatThreadItem(thread)
 			if i == m.threadCursor {
-				item = selectedItemStyle.Render("▶ " + item)
+				item = SelectedItemStyle.Render("▶ " + item)
 			} else {
-				item = unselectedItemStyle.Render("  " + item)
+				item = UnselectedItemStyle.Render("  " + item)
 			}
 			items = append(items, item)
 		}
 
 		if len(items) == 0 {
-			items = append(items, mutedTextStyle.Render("  (no threads)"))
+			items = append(items, MutedTextStyle.Render("  (no threads)"))
 		}
 
 		// Show "loading more" indicator at bottom if appropriate
 		if m.loadingMore {
-			items = append(items, "", mutedTextStyle.Render("  "+m.spinner.View()+" Loading more threads..."))
+			items = append(items, "", MutedTextStyle.Render("  "+m.spinner.View()+" Loading more threads..."))
 		}
 	}
 
@@ -811,7 +893,7 @@ func (m Model) buildThreadContent() string {
 
 	// Show loading indicator if loading initial replies
 	if m.loadingThreadReplies {
-		content.WriteString(mutedTextStyle.Render(m.spinner.View() + " Loading replies..."))
+		content.WriteString(MutedTextStyle.Render(m.spinner.View() + " Loading replies..."))
 		return content.String()
 	}
 
@@ -833,11 +915,186 @@ func (m Model) buildThreadContent() string {
 
 	// Show "loading more" indicator at bottom if appropriate
 	if m.loadingMoreReplies {
-		content.WriteString(mutedTextStyle.Render(m.spinner.View() + " Loading more replies..."))
+		content.WriteString(MutedTextStyle.Render(m.spinner.View() + " Loading more replies..."))
 		content.WriteString("\n\n")
 	}
 
 	return content.String()
+}
+
+// renderChatContent renders the chat channel content with message area and input field using flexbox
+func (m Model) renderChatContent() string {
+	if m.currentChannel == nil {
+		return ThreadPaneStyle.
+			Width(m.width - 4).
+			Height(m.height - 2). // Just header and footer
+			Render("No channel selected")
+	}
+
+	// Create vertical layout for message area + input field
+	// Available height excludes header and footer
+	contentHeight := m.height - 2
+	layout := flexbox.New(m.width, contentHeight)
+
+	// Build message area content
+	messageContent := m.chatViewport.View()
+
+	// Build input field content
+	inputContent := m.buildChatInputField()
+
+	// Row 1: Message area (flexible - takes remaining space after input)
+	// The input field has fixed height of 5 lines (3 content + 2 border)
+	// So message area gets: contentHeight - 5
+	messageRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight-5).
+			SetStyle(ThreadPaneStyle).
+			SetContent(messageContent),
+	)
+
+	// Row 2: Input field (fixed height = 5 lines)
+	inputRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 5).
+			SetContent(inputContent),
+	)
+
+	layout.AddRows([]*flexbox.Row{messageRow, inputRow})
+
+	return layout.Render()
+}
+
+// buildChatMessages builds the chat message list for the viewport
+func (m Model) buildChatMessages() string {
+	// Show loading indicator if initially loading
+	if m.loadingChat {
+		return MutedTextStyle.Render("  " + m.spinner.View() + " Loading messages...")
+	}
+
+	// Render messages in chronological order (oldest first, newest last)
+	if len(m.chatMessages) == 0 {
+		return MutedTextStyle.Render("  (no messages yet)")
+	}
+
+	var lines []string
+	for _, msg := range m.chatMessages {
+		chatLine := m.formatChatMessage(msg)
+		lines = append(lines, chatLine)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// formatChatMessage formats a single chat message as: [time] nickname message
+func (m Model) formatChatMessage(msg protocol.Message) string {
+	// Format timestamp (HH:MM)
+	timestamp := msg.CreatedAt.Format("15:04")
+	timeStyle := lipgloss.NewStyle().Foreground(MutedColor)
+
+	// Format nickname with same styling as threaded view
+	nickname := msg.AuthorNickname
+
+	// Choose style based on whether this is the current user's message
+	var nicknameStyle lipgloss.Style
+	if m.isOwnMessage(msg) {
+		nicknameStyle = MessageOwnAuthorStyle // Green + bold for own messages
+	} else if msg.AuthorUserID == nil {
+		// Anonymous user (not current user)
+		nicknameStyle = MessageAnonymousStyle // Secondary color
+	} else {
+		// Registered user (not current user)
+		nicknameStyle = MessageAuthorStyle // Secondary color
+	}
+
+	// Build first line with timestamp and nickname
+	timestampRendered := timeStyle.Render("[" + timestamp + "]")
+	nicknameRendered := nicknameStyle.Render(nickname)
+	firstLinePrefix := timestampRendered + " " + nicknameRendered + " "
+
+	// Calculate available width for message content
+	// Account for viewport width minus some padding
+	availableWidth := m.chatViewport.Width - 4 // Some padding
+	if availableWidth < 20 {
+		availableWidth = 20
+	}
+
+	// Calculate prefix width (using lipgloss.Width to account for ANSI codes)
+	prefixWidth := lipgloss.Width(firstLinePrefix)
+	contentWidth := availableWidth - prefixWidth
+
+	// Wrap the message content
+	wrappedLines := wrapText(msg.Content, contentWidth)
+
+	// Format content with proper indentation for continuation lines
+	contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	if len(wrappedLines) == 0 {
+		return firstLinePrefix
+	}
+
+	// First line includes timestamp and nickname
+	result := firstLinePrefix + contentStyle.Render(wrappedLines[0])
+
+	// Continuation lines are indented to align with first line content
+	indent := strings.Repeat(" ", prefixWidth)
+	for i := 1; i < len(wrappedLines); i++ {
+		result += "\n" + indent + contentStyle.Render(wrappedLines[i])
+	}
+
+	return result
+}
+
+// wrapText wraps text to fit within the specified width
+func wrapText(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+
+	var lines []string
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	currentLine := ""
+	for _, word := range words {
+		// If word itself is longer than width, we'll just let it overflow
+		if len(word) > width {
+			if currentLine != "" {
+				lines = append(lines, currentLine)
+				currentLine = ""
+			}
+			lines = append(lines, word)
+			continue
+		}
+
+		// Check if adding this word would exceed width
+		testLine := currentLine
+		if testLine != "" {
+			testLine += " "
+		}
+		testLine += word
+
+		if len(testLine) > width {
+			// Adding this word would exceed width, so start a new line
+			if currentLine != "" {
+				lines = append(lines, currentLine)
+			}
+			currentLine = word
+		} else {
+			currentLine = testLine
+		}
+	}
+
+	// Add the last line
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
+
+	return lines
+}
+
+// buildChatInputField builds the input field at the bottom of chat view
+func (m Model) buildChatInputField() string {
+	// The textarea handles all the rendering internally
+	return m.chatTextarea.View()
 }
 
 // calculateThreadDepths builds a depth map for all messages in the thread (single pass)
@@ -988,7 +1245,7 @@ func (m *Model) scrollThreadListToKeepCursorVisible() {
 func (m Model) renderDisconnectedOverlay() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(errorColor).
+		Foreground(ErrorColor).
 		Align(lipgloss.Center).
 		MarginBottom(2).
 		Render("⚠  CONNECTION LOST  ⚠")
@@ -1000,7 +1257,7 @@ func (m Model) renderDisconnectedOverlay() string {
 		Render("The connection to the server has been lost.")
 
 	info := lipgloss.NewStyle().
-		Foreground(mutedColor).
+		Foreground(MutedColor).
 		Align(lipgloss.Center).
 		Render("Attempting to reconnect...")
 
@@ -1015,7 +1272,7 @@ func (m Model) renderDisconnectedOverlay() string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
-		BorderForeground(errorColor).
+		BorderForeground(ErrorColor).
 		Padding(2, 4).
 		Render(content)
 
@@ -1026,7 +1283,7 @@ func (m Model) renderDisconnectedOverlay() string {
 func (m Model) renderReconnectingOverlay() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(warningColor).
+		Foreground(WarningColor).
 		Align(lipgloss.Center).
 		MarginBottom(2).
 		Render("RECONNECTING...")
@@ -1039,14 +1296,14 @@ func (m Model) renderReconnectingOverlay() string {
 		Render(attemptMsg)
 
 	info := lipgloss.NewStyle().
-		Foreground(mutedColor).
+		Foreground(MutedColor).
 		Align(lipgloss.Center).
 		Render("Please wait while we restore your connection...")
 
 	// Animated dots based on attempt number
 	dots := strings.Repeat(".", (m.reconnectAttempt % 4))
 	spinner := lipgloss.NewStyle().
-		Foreground(primaryColor).
+		Foreground(PrimaryColor).
 		Align(lipgloss.Center).
 		MarginTop(1).
 		Render(dots)
@@ -1063,7 +1320,7 @@ func (m Model) renderReconnectingOverlay() string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
-		BorderForeground(warningColor).
+		BorderForeground(WarningColor).
 		Padding(2, 4).
 		Render(content)
 
