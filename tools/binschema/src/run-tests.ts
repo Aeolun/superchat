@@ -32,8 +32,33 @@ import { stringTestSuite, shortStringTestSuite, cStringTestSuite, multipleString
 import { conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite } from "./tests/composite/conditionals.test.js";
 
 async function main() {
+  // Parse command line arguments
+  const args = process.argv.slice(2);
+  let filter: string | null = null;
+
+  for (const arg of args) {
+    if (arg.startsWith("--filter=")) {
+      filter = arg.substring("--filter=".length);
+    } else if (arg === "--help" || arg === "-h") {
+      console.log("Usage: node dist/run-tests.js [options]");
+      console.log("");
+      console.log("Options:");
+      console.log("  --filter=<pattern>  Only run tests with names containing <pattern>");
+      console.log("  --help, -h          Show this help message");
+      console.log("");
+      console.log("Examples:");
+      console.log("  node dist/run-tests.js                    # Run all tests");
+      console.log("  node dist/run-tests.js --filter=optional  # Run tests with 'optional' in name");
+      console.log("  node dist/run-tests.js --filter=uint8     # Run only uint8 tests");
+      process.exit(0);
+    }
+  }
+
   console.log("=".repeat(80));
   console.log("Running BinSchema Test Suite");
+  if (filter) {
+    console.log(`Filter: "${filter}"`);
+  }
   console.log("=".repeat(80));
 
   const results: TestResult[] = [];
@@ -90,15 +115,39 @@ async function main() {
     },
   ];
 
+  // Filter test groups and suites
+  let totalSuites = 0;
+  let filteredSuites = 0;
+
   for (const group of testGroups) {
+    // Filter suites within this group
+    const filteredGroupSuites = filter
+      ? group.suites.filter(suite => suite.name.toLowerCase().includes(filter.toLowerCase()))
+      : group.suites;
+
+    totalSuites += group.suites.length;
+    filteredSuites += filteredGroupSuites.length;
+
+    // Skip empty groups
+    if (filteredGroupSuites.length === 0) continue;
+
     console.log(`\n${"━".repeat(80)}`);
     console.log(`📦 ${group.name}`);
     console.log(`${"━".repeat(80)}`);
 
-    for (const suite of group.suites) {
+    for (const suite of filteredGroupSuites) {
       const result = await runTestSuite(suite);
       results.push(result);
     }
+  }
+
+  // Show filter summary
+  if (filter && filteredSuites === 0) {
+    console.log(`\n⚠️  No tests matched filter: "${filter}"`);
+    console.log(`Total available test suites: ${totalSuites}`);
+    process.exit(0);
+  } else if (filter) {
+    console.log(`\nℹ️  Ran ${filteredSuites} of ${totalSuites} test suites (filtered)`);
   }
 
   console.log(`\n${"=".repeat(80)}`);
