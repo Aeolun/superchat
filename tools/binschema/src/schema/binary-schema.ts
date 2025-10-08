@@ -254,7 +254,7 @@ export type TypeDef = z.infer<typeof TypeDefSchema>;
  */
 export const BinarySchemaSchema = z.object({
   config: ConfigSchema,
-  types: z.record(TypeDefSchema), // Map of type name → definition
+  types: z.record(z.string(), TypeDefSchema), // Map of type name → definition
 });
 export type BinarySchema = z.infer<typeof BinarySchemaSchema>;
 
