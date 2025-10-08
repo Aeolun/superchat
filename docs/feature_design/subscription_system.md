@@ -1,6 +1,15 @@
-# Subscription-Based Message Broadcasting Proposal
+# Subscription-Based Message Broadcasting
 
-## Problem Statement
+**Status:** ✅ IMPLEMENTED - This is a historical design document
+
+**Implementation:** The subscription system is fully implemented as of V1. See:
+- Protocol messages: `pkg/protocol/messages.go` (0x51-0x54, 0x99)
+- Server handlers: `pkg/server/handlers.go` (`handleSubscribeThread`, `handleSubscribeChannel`)
+- Client implementation: `pkg/client/ui/update.go` (subscription management)
+
+---
+
+## Original Problem Statement (Historical)
 
 Currently, the server broadcasts NEW_MESSAGE events to all clients in a channel, regardless of whether they care about those specific messages. With 2000 concurrent clients, this causes:
 - High response latency (~978ms vs 11ms with 500 clients)

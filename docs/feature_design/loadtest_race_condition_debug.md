@@ -1,7 +1,17 @@
-# Load Test Debugging Session
+# Load Test Debugging Session - TCP Write Race Condition
+
+**Status:** ✅ FIXED - This is a historical debugging document
 
 **Date:** 2025-10-04
 **Issue:** Random disconnections and corrupted frames under load (50+ concurrent clients)
+**Root Cause:** Unsynchronized concurrent writes to `net.Conn` caused frame interleaving
+**Fix:** Added `Session.writeMu` mutex to synchronize all protocol frame writes
+
+**Implementation:** See `pkg/server/session.go` - all `EncodeFrame()` calls now protected by `writeMu.Lock()`
+
+---
+
+## Historical Debugging Session
 
 ## Symptoms
 

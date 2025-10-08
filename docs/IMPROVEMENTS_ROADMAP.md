@@ -570,7 +570,8 @@ After implementing this roadmap, we should be able to:
 ## Related Documents
 
 - `CLAUDE.md` - Project architecture and development guidelines
-- `docs/V2.md` - V2 feature status and implementation plan
+- `docs/versions/V2.md` - V2 feature summary (COMPLETE)
+- `docs/versions/V3.md` - V3 planned features
 - `docs/PROTOCOL.md` - Binary protocol specification
 - `docs/DATA_MODEL.md` - Database schema
 - `docs/MIGRATIONS.md` - Database migration system

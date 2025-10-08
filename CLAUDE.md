@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SuperChat is a terminal-based threaded chat application with a custom binary protocol. The V1 implementation focuses on anonymous users, TCP connections, and forum-style threading. The codebase is designed for forward compatibility with V2 features (user registration, SSH, DMs, encryption) through extensible protocol design and forward-compatible database schemas.
 
-**Current Status:** V2 in progress (3/6 features complete)
-- See `docs/V2.md` for detailed V2 feature status and implementation plan
-- See `docs/V1.md` for V1 specification and rationale
-- Chat channel type (type=0) moved from V3 to V2 scope
+**Current Status:** V2 Complete! 🎉
+- See `docs/versions/V2.md` for V2 implementation summary
+- See `docs/versions/V1.md` for V1 specification and rationale
+- See `docs/versions/V3.md` for planned V3 features (not started)
 
 ## ⚠️ CRITICAL: Protocol Changes ⚠️
 
@@ -480,11 +480,24 @@ Critical for: user registration, channel creation, message posting with versions
 
 ## Key Files
 
+**Primary Documentation:**
 - `docs/PROTOCOL.md`: Complete binary protocol specification
-- `docs/V1.md`: V1 feature scope and implementation phases
-- `docs/V2.md`: **V2 feature status and TODO list** ⭐
 - `docs/DATA_MODEL.md`: Database schema and relationships
 - `docs/MIGRATIONS.md`: Database migration system guide
+- `docs/IMPROVEMENTS_ROADMAP.md`: Pre-release checklist and UX improvements
+
+**Version Documentation:**
+- `docs/versions/V1.md`: V1 feature scope and implementation (COMPLETE)
+- `docs/versions/V2.md`: V2 feature summary (COMPLETE) ⭐
+- `docs/versions/V3.md`: V3 planned features (NOT STARTED)
+
+**Historical Feature Design Documentation:**
+- `docs/feature_design/`: Architectural decision records and implementation plans for major features
+  - `subscription_system.md`: Design and implementation of the message subscription/broadcast optimization (COMPLETED)
+  - `ssh_authentication.md`: Complete SSH key authentication implementation plan (COMPLETED)
+  - `loadtest_race_condition_debug.md`: Historical debugging session that fixed TCP write race condition
+
+**Core Implementation Files:**
 - `pkg/protocol/frame.go`: Frame encoding/decoding
 - `pkg/protocol/messages.go`: All message type definitions
 - `pkg/server/handlers.go`: Server message handlers

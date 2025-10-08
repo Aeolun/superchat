@@ -1,12 +1,27 @@
 # SSH Key Authentication Implementation Plan
 
-## Overview
+**Status:** ✅ MOSTLY COMPLETE - This is a historical design document
 
-This document outlines the complete implementation plan for SSH key authentication in SuperChat V2. This is the final V2 feature needed before completion.
+**Implementation:** SSH authentication is fully implemented with only minor TODOs:
+- ✅ All 8 implementation phases complete (see SSH_IMPLEMENTATION_STATUS.md for phase details)
+- ✅ Database schema (migration 005_add_ssh_keys.sql)
+- ✅ Server-side authentication with auto-registration
+- ✅ SSH key management UI (add/list/delete/rename)
+- ⚠️ Minor TODOs remaining:
+  - Auto-registration rate limiting (placeholder implementation at `pkg/server/ssh.go:457`)
+  - Encrypted key passphrase support for direct disk loading (SSH agent already handles this)
+
+**See:** `docs/versions/V2.md` for V2 feature summary
 
 ---
 
-## Current State
+## Overview (Historical)
+
+This document outlines the complete implementation plan for SSH key authentication in SuperChat V2.
+
+---
+
+## Implementation Status (Historical Reference)
 
 ✅ **What's Working:**
 - SSH server infrastructure fully built (`pkg/server/ssh.go`)
@@ -923,7 +938,7 @@ ssh -p 2222 myusername@localhost
 - `pkg/client/connection.go` - Add SSH connection support
 - `cmd/client/main.go` - Server directory support
 - `docs/PROTOCOL.md` - Document new message types
-- `docs/V2.md` - Update SSH feature status
+- `docs/versions/V2.md` - Update SSH feature status
 
 ---
 
