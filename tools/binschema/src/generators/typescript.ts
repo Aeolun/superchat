@@ -21,8 +21,13 @@ export function generateTypeScript(schema: BinarySchema): string {
   // Import runtime library (relative to .generated/ → dist/runtime/)
   let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "../dist/runtime/bit-stream.js";\n\n`;
 
-  // Generate code for each type
+  // Generate code for each type (skip generic types like Optional<T>)
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
+    // Skip generic type templates (contain < or T parameter)
+    if (typeName.includes('<') || typeName.includes('T')) {
+      continue;
+    }
+
     code += generateTypeCode(typeName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder);
     code += "\n\n";
   }
@@ -72,6 +77,11 @@ function generateInterface(typeName: string, typeDef: TypeDef, schema: BinarySch
  * Get TypeScript type for a field
  */
 function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
+  // Safety check
+  if (!field || typeof field !== 'object') {
+    return "any";
+  }
+
   if ('type' in field) {
     switch (field.type) {
       case "bit":
@@ -108,10 +118,27 @@ function resolveTypeReference(typeRef: string, schema: BinarySchema): string {
   // Check for generic syntax: Optional<T>
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
   if (genericMatch) {
-    const [, genericType, innerType] = genericMatch;
-    // For now, just return the structure
-    // TODO: Handle generics properly
-    return typeRef;
+    const [, genericType, typeArg] = genericMatch;
+    const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
+
+    if (templateDef) {
+      // Generate inline interface structure
+      const fields: string[] = [];
+      for (const field of templateDef.fields) {
+        // Get the TypeScript type for the field, replacing T with typeArg
+        let fieldType: string;
+        if ('type' in field && field.type === 'T') {
+          // Direct T reference - replace with type argument
+          fieldType = getFieldTypeScriptType({ ...field, type: typeArg } as any, schema);
+        } else {
+          fieldType = getFieldTypeScriptType(field, schema);
+        }
+
+        const optional = isFieldConditional(field) ? "?" : "";
+        fields.push(`${field.name}${optional}: ${fieldType}`);
+      }
+      return `{ ${fields.join(", ")} }`;
+    }
   }
 
   // Simple type reference
@@ -183,6 +210,31 @@ function generateEncodeField(
  * Generate core encoding logic for a field
  */
 function generateEncodeFieldCore(
+  field: Field,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  valuePath: string,
+  indent: string
+): string {
+  if (!('type' in field)) return "";
+
+  // Handle conditional fields
+  if (isFieldConditional(field)) {
+    const conditional = 'conditional' in field ? field.conditional : '';
+    // Simple conditional evaluation (just check if field is present/defined)
+    let code = `${indent}if (${valuePath} !== undefined) {\n`;
+    code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, valuePath, indent + "  ");
+    code += `${indent}}\n`;
+    return code;
+  }
+
+  return generateEncodeFieldCoreImpl(field, schema, globalEndianness, valuePath, indent);
+}
+
+/**
+ * Generate core encoding logic implementation (without conditional wrapper)
+ */
+function generateEncodeFieldCoreImpl(
   field: Field,
   schema: BinarySchema,
   globalEndianness: Endianness,
@@ -274,13 +326,20 @@ function generateEncodeArray(
 
   // Write array elements
   code += `${indent}for (const item of ${valuePath}) {\n`;
-  code += generateEncodeFieldCore(
-    { ...field.items, name: "item" },
-    schema,
-    globalEndianness,
-    "item",
-    indent + "  "
-  );
+
+  // Safety check for items field
+  if (!field.items || typeof field.items !== 'object') {
+    code += `${indent}  // TODO: Array items type not specified\n`;
+  } else {
+    code += generateEncodeFieldCoreImpl(
+      field.items as Field,
+      schema,
+      globalEndianness,
+      "item",
+      indent + "  "
+    );
+  }
+
   code += `${indent}}\n`;
 
   // Write null terminator if null_terminated
@@ -313,8 +372,28 @@ function generateEncodeTypeReference(
   valuePath: string,
   indent: string
 ): string {
-  // For now, recursively inline the type's fields
-  // TODO: Handle generics and references properly
+  // Check if this is a generic type instantiation (e.g., Optional<uint64>)
+  const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
+  if (genericMatch) {
+    const [, genericType, typeArg] = genericMatch;
+    const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
+
+    if (templateDef) {
+      // Inline expand the generic by replacing T with the type argument
+      let code = "";
+      for (const field of templateDef.fields) {
+        // Replace T with the actual type
+        const expandedField = JSON.parse(
+          JSON.stringify(field).replace(/"T"/g, `"${typeArg}"`)
+        );
+        const newValuePath = `${valuePath}.${expandedField.name}`;
+        code += generateEncodeFieldCore(expandedField, schema, "big_endian", newValuePath, indent);
+      }
+      return code;
+    }
+  }
+
+  // Regular type reference (not generic)
   const typeDef = schema.types[typeRef] as TypeDef | undefined;
   if (!typeDef) {
     return `${indent}// TODO: Unknown type ${typeRef}\n`;
@@ -527,6 +606,34 @@ function generateDecodeTypeReference(
   fieldName: string,
   indent: string
 ): string {
+  // Check if this is a generic type instantiation (e.g., Optional<uint64>)
+  const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
+  if (genericMatch) {
+    const [, genericType, typeArg] = genericMatch;
+    const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
+
+    if (templateDef) {
+      // Inline expand the generic by replacing T with the type argument
+      let code = `${indent}value.${fieldName} = {};\n`;
+      for (const field of templateDef.fields) {
+        // Replace T with the actual type
+        const expandedField = JSON.parse(
+          JSON.stringify(field).replace(/"T"/g, `"${typeArg}"`)
+        );
+        const subFieldCode = generateDecodeFieldCore(
+          expandedField,
+          schema,
+          "big_endian",
+          `${fieldName}.${expandedField.name}`,
+          indent
+        );
+        code += subFieldCode;
+      }
+      return code;
+    }
+  }
+
+  // Regular type reference (not generic)
   const typeDef = schema.types[typeRef] as TypeDef | undefined;
   if (!typeDef) {
     return `${indent}// TODO: Unknown type ${typeRef}\n`;

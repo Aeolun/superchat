@@ -69,8 +69,8 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
   const genJsFile = join(genDir, `${suite.test_type}.js`);
   const generatedModule = await import(pathToFileURL(genJsFile).href);
 
-  // Get encoder/decoder class names
-  const typeName = Object.keys(suite.schema.types)[0];
+  // Get encoder/decoder class names (use test_type, not first type in schema)
+  const typeName = suite.test_type;
   const EncoderClass = generatedModule[`${typeName}Encoder`];
   const DecoderClass = generatedModule[`${typeName}Decoder`];
 
