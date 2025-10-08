@@ -18,8 +18,8 @@ export function generateTypeScript(schema: BinarySchema): string {
   const globalEndianness = schema.config?.endianness || "big_endian";
   const globalBitOrder = schema.config?.bit_order || "msb_first";
 
-  // Import runtime library
-  let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "../runtime/bit-stream.js";\n\n`;
+  // Import runtime library (relative to .generated/ → dist/runtime/)
+  let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "../dist/runtime/bit-stream.js";\n\n`;
 
   // Generate code for each type
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
