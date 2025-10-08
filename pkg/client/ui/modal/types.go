@@ -21,6 +21,8 @@ const (
 	ModalTypePasswordChange
 	ModalTypeSSHKeyManager
 	ModalConnectionFailed
+	ModalConnectionMethod
+	ModalConnecting
 )
 
 // String returns the string representation of the modal type
@@ -52,6 +54,10 @@ func (m ModalType) String() string {
 		return "SSHKeyManager"
 	case ModalConnectionFailed:
 		return "ConnectionFailed"
+	case ModalConnectionMethod:
+		return "ConnectionMethod"
+	case ModalConnecting:
+		return "Connecting"
 	default:
 		return "Unknown"
 	}
@@ -75,6 +81,14 @@ type Modal interface {
 	// IsBlockingInput returns true if this modal blocks all input to underlying views
 	// If false, unhandled keys fall through to the main view
 	IsBlockingInput() bool
+}
+
+// UpdatableModal is an optional interface for modals that need to handle Update messages
+type UpdatableModal interface {
+	Modal
+	// Update processes bubbletea messages (e.g., for animations)
+	// Called on every message from the main Update loop
+	Update(msg tea.Msg) tea.Cmd
 }
 
 // ModalStack manages the stack of active modals
@@ -147,4 +161,11 @@ func (ms *ModalStack) IsEmpty() bool {
 // Size returns the number of modals in the stack
 func (ms *ModalStack) Size() int {
 	return len(ms.stack)
+}
+
+// ForEach calls the given function for each modal in the stack (bottom to top)
+func (ms *ModalStack) ForEach(fn func(Modal)) {
+	for _, m := range ms.stack {
+		fn(m)
+	}
 }

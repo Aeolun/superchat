@@ -63,7 +63,7 @@ func main() {
 	// Command line flags
 	defaultConfig := getDefaultConfigPath()
 	configPath := flag.String("config", defaultConfig, "Path to config file")
-	server := flag.String("server", "", "Server address (sc://host:port or host:port, default port 6465, overrides config)")
+	server := flag.String("server", "", "Server address (host:port, sc://host:port, ssh://user@host:port, ws://host:port; default port varies by scheme)")
 	directory := flag.String("directory", "", "Directory server address (host:port) to fetch server list from")
 	profile := flag.String("profile", "", "Profile name for separate configuration (default: none)")
 	statePath := flag.String("state", "", "Path to state database (overrides config)")

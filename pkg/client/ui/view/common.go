@@ -35,6 +35,23 @@ func RenderHeader(width int, currentVersion string, conn client.ConnectionInterf
 		recv := formatBytes(conn.GetBytesReceived())
 		traffic := ui.MutedTextStyle.Render(fmt.Sprintf("  ↑%s ↓%s", sent, recv))
 		status += traffic
+
+		// Add connection type indicator
+		connType := conn.GetConnectionType()
+		if connType != "" {
+			// Map connection types to display names
+			typeDisplay := connType
+			switch connType {
+			case "tcp":
+				typeDisplay = "TCP"
+			case "ssh":
+				typeDisplay = "SSH"
+			case "websocket":
+				typeDisplay = "WS"
+			}
+			connTypeStr := ui.MutedTextStyle.Render(fmt.Sprintf("  [%s]", typeDisplay))
+			status += connTypeStr
+		}
 	}
 
 	right := ui.StatusStyle.Render(status)

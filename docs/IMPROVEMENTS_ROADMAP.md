@@ -71,13 +71,41 @@ This document tracks needed improvements for server operations documentation and
       sc --help            # View all options
     ```
 
-#### 6. Server Selector on First Launch
+#### 6. Server Selector on First Launch ✅
 - **Problem**: Hard-coded dependency on superchat.win
+- **Status**: COMPLETE
 - **Fix**:
-  - [ ] On first-ever launch, show modal: "Welcome! Choose a server:"
-  - [ ] List: superchat.win (default), [other public servers], "Enter custom server"
-  - [ ] Save choice as default
-  - [ ] Gives users agency and teaches that servers exist
+  - [x] On first-ever launch, show modal: "Welcome! Choose a server:"
+  - [x] List: superchat.win (default), [other public servers], "Enter custom server"
+  - [x] Save choice as default
+  - [x] Gives users agency and teaches that servers exist
+  - [x] Welcoming tone on first launch ("Welcome! Choose a server:")
+  - [x] Normal tone on subsequent launches ("Available Servers")
+  - [x] Custom server input option (always available at end of list)
+  - [x] Extended first-launch explanation about directory and custom servers
+- **Implementation**:
+  - First launch (no saved server) automatically uses directory mode, showing server selector
+  - Selected server is saved to `directory_selected_server` config and used for subsequent launches
+  - Custom server option allows entering unlisted servers (format: hostname:port)
+  - Modal adapts messaging based on whether it's first launch or manual switch (Ctrl+L)
+
+#### 6a. WebSocket Fallback for Firewall-Restricted Networks ✅
+- **Problem**: Some firewalls block binary TCP traffic but allow HTTP/WebSocket
+- **Status**: COMPLETE
+- **Fix**:
+  - [x] Server: WebSocket endpoint on HTTP port 6467 (`/ws`)
+  - [x] Client: Automatic fallback (TCP → WebSocket on connection failure)
+  - [x] Connection type indicator in client UI (shows [TCP], [SSH], or [WS])
+  - [x] Server startup shows available connection methods
+- **Implementation**:
+  - WebSocket adapter implements `net.Conn` interface for complete code reuse
+  - Binary protocol transported over WebSocket binary messages
+  - Same session handling, same message loop, zero protocol changes
+  - Port consolidation: 6465 (Binary TCP), 6466 (SSH), 6467 (HTTP/WS), 9090 (Metrics)
+  - Automatic fallback: client tries primary method first, falls back to WebSocket if fails
+  - Explicit WebSocket: Use `ws://host:port` or `--server ws://host:port` to force WebSocket
+  - Status bar shows connection type: "Connected: ~alice  [WS]" or "[TCP]" or "[SSH]"
+  - Server selector shows protocol used: "Loading servers from directory via WebSocket..."
 
 #### 7. Add Channel Symbol Legend
 - **Problem**: `>` and `#` prefixes unexplained

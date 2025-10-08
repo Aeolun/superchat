@@ -280,13 +280,22 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	// Start public HTTP server for /servers.json (safe to expose publicly)
+	// Start public HTTP server for /servers.json and WebSocket (safe to expose publicly)
 	if s.config.HTTPPort > 0 {
 		go func() {
 			publicMux := http.NewServeMux()
-			publicMux.HandleFunc("/servers.json", s.ServersJSONHandler)
+			if s.config.DirectoryEnabled {
+				publicMux.HandleFunc("/servers.json", s.ServersJSONHandler)
+			}
+			publicMux.HandleFunc("/ws", s.HandleWebSocket)
 			addr := fmt.Sprintf(":%d", s.config.HTTPPort)
-			log.Printf("Public HTTP server listening on %s (/servers.json)", addr)
+
+			endpoints := "/ws"
+			if s.config.DirectoryEnabled {
+				endpoints = "/servers.json, /ws"
+			}
+			log.Printf("Public HTTP server listening on %s (%s)", addr, endpoints)
+
 			if err := http.ListenAndServe(addr, publicMux); err != nil {
 				log.Printf("Public HTTP server error: %v", err)
 			}

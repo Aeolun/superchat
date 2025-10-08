@@ -20,29 +20,39 @@ type ServerSelectorCancelledMsg struct{}
 
 // ServerSelectorModal displays a list of available servers
 type ServerSelectorModal struct {
-	servers      []protocol.ServerInfo
-	cursor       int
-	loading      bool
-	errorMessage string
-	viewport     viewport.Model
-	ready        bool
+	servers        []protocol.ServerInfo
+	localServers   []protocol.ServerInfo // Servers saved locally (not from directory)
+	cursor         int
+	loading        bool
+	errorMessage   string
+	viewport       viewport.Model
+	ready          bool
+	isFirstLaunch  bool // Show welcoming message on first launch
+	customInput    string
+	showingCustomInput bool
+	connectionType string // Connection type being used (tcp, ssh, websocket)
 }
 
 // NewServerSelectorModal creates a new server selector modal
-func NewServerSelectorModal(servers []protocol.ServerInfo) *ServerSelectorModal {
+func NewServerSelectorModal(servers []protocol.ServerInfo, localServers []protocol.ServerInfo, isFirstLaunch bool) *ServerSelectorModal {
 	return &ServerSelectorModal{
-		servers: servers,
-		cursor:  0,
-		loading: false,
+		servers:       servers,
+		localServers:  localServers,
+		cursor:        0,
+		loading:       false,
+		isFirstLaunch: isFirstLaunch,
 	}
 }
 
 // NewServerSelectorLoading creates a loading server selector modal
-func NewServerSelectorLoading() *ServerSelectorModal {
+func NewServerSelectorLoading(isFirstLaunch bool, connectionType string) *ServerSelectorModal {
 	return &ServerSelectorModal{
-		servers: []protocol.ServerInfo{},
-		cursor:  0,
-		loading: true,
+		servers:        []protocol.ServerInfo{},
+		localServers:   []protocol.ServerInfo{},
+		cursor:         0,
+		loading:        true,
+		isFirstLaunch:  isFirstLaunch,
+		connectionType: connectionType,
 	}
 }
 
@@ -50,9 +60,42 @@ func NewServerSelectorLoading() *ServerSelectorModal {
 func (m *ServerSelectorModal) SetServers(servers []protocol.ServerInfo) {
 	m.servers = servers
 	m.loading = false
-	if m.cursor >= len(servers) && len(servers) > 0 {
-		m.cursor = len(servers) - 1
+
+	// Recalculate cursor position based on merged list
+	totalServers := len(m.getMergedServers())
+	if m.cursor >= totalServers && totalServers > 0 {
+		m.cursor = totalServers - 1
 	}
+}
+
+// getMergedServers returns directory servers + local servers + custom option
+func (m *ServerSelectorModal) getMergedServers() []protocol.ServerInfo {
+	merged := make([]protocol.ServerInfo, 0, len(m.servers)+len(m.localServers)+1)
+
+	// Add directory servers
+	merged = append(merged, m.servers...)
+
+	// Add local servers (mark them as local by setting a flag in name)
+	merged = append(merged, m.localServers...)
+
+	// Add "Custom server" option at the end
+	merged = append(merged, protocol.ServerInfo{
+		Name:        "Enter custom server address",
+		Description: "Connect to a server not listed above",
+		Hostname:    "__custom__",
+	})
+
+	return merged
+}
+
+// isLocalServer checks if a server is from local list
+func (m *ServerSelectorModal) isLocalServer(server protocol.ServerInfo) bool {
+	for _, local := range m.localServers {
+		if local.Hostname == server.Hostname && local.Port == server.Port {
+			return true
+		}
+	}
+	return false
 }
 
 // SetError sets an error message
@@ -66,9 +109,47 @@ func (m *ServerSelectorModal) Type() ModalType {
 	return ModalServerSelector
 }
 
+// CustomServerInputMsg is sent when user finishes entering custom server
+type CustomServerInputMsg struct {
+	Address string
+}
+
 // HandleKey processes keyboard input
 func (m *ServerSelectorModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
-	// If loading, only allow escape
+	// If showing custom input, handle text input
+	if m.showingCustomInput {
+		switch msg.String() {
+		case "esc":
+			// Cancel custom input
+			m.showingCustomInput = false
+			m.customInput = ""
+			return true, m, nil
+		case "enter":
+			// Submit custom server address
+			if m.customInput != "" {
+				addr := m.customInput
+				m.showingCustomInput = false
+				m.customInput = ""
+				return true, nil, func() tea.Msg {
+					return CustomServerInputMsg{Address: addr}
+				}
+			}
+			return true, m, nil
+		case "backspace":
+			if len(m.customInput) > 0 {
+				m.customInput = m.customInput[:len(m.customInput)-1]
+			}
+			return true, m, nil
+		default:
+			// Add character to input
+			if len(msg.String()) == 1 {
+				m.customInput += msg.String()
+			}
+			return true, m, nil
+		}
+	}
+
+	// If loading, allow escape or custom server input
 	if m.loading {
 		switch msg.String() {
 		case "esc", "q":
@@ -76,10 +157,34 @@ func (m *ServerSelectorModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
 			return true, nil, func() tea.Msg {
 				return ServerSelectorCancelledMsg{}
 			}
+		case "c":
+			// User wants to enter custom server while loading
+			m.showingCustomInput = true
+			m.customInput = ""
+			return true, m, nil
 		default:
 			return true, m, nil
 		}
 	}
+
+	// If error state, allow custom server input
+	if m.errorMessage != "" {
+		switch msg.String() {
+		case "esc", "q":
+			return true, nil, func() tea.Msg {
+				return ServerSelectorCancelledMsg{}
+			}
+		case "c":
+			// User wants to enter custom server after error
+			m.showingCustomInput = true
+			m.customInput = ""
+			return true, m, nil
+		default:
+			return true, m, nil
+		}
+	}
+
+	mergedServers := m.getMergedServers()
 
 	switch msg.String() {
 	case "esc", "q":
@@ -97,7 +202,7 @@ func (m *ServerSelectorModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
 		return true, m, nil
 
 	case "down", "j":
-		if m.cursor < len(m.servers)-1 {
+		if m.cursor < len(mergedServers)-1 {
 			m.cursor++
 			// Scroll viewport if needed
 			m.scrollToSelected()
@@ -106,8 +211,16 @@ func (m *ServerSelectorModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
 
 	case "enter":
 		// Select current server
-		if m.cursor >= 0 && m.cursor < len(m.servers) {
-			server := m.servers[m.cursor]
+		if m.cursor >= 0 && m.cursor < len(mergedServers) {
+			server := mergedServers[m.cursor]
+
+			// Check if custom server option
+			if server.Hostname == "__custom__" {
+				m.showingCustomInput = true
+				m.customInput = ""
+				return true, m, nil
+			}
+
 			return true, nil, func() tea.Msg {
 				return ServerSelectedMsg{Server: server}
 			}
@@ -150,10 +263,16 @@ func (m *ServerSelectorModal) Render(width, height int) string {
 		Italic(true)
 
 	// Build content
-	title := titleStyle.Render("Available Servers")
+	var title string
+	var discoveryInfo string
 
-	// Add explanation about server discovery
-	discoveryInfo := mutedTextStyle.Render("Servers announce themselves to the directory as they come online")
+	if m.isFirstLaunch {
+		title = titleStyle.Render("Welcome! Choose a server:")
+		discoveryInfo = mutedTextStyle.Render("Servers announce themselves to the directory as they come online.\nYou can also connect to unlisted servers using the custom option.")
+	} else {
+		title = titleStyle.Render("Available Servers")
+		discoveryInfo = mutedTextStyle.Render("Servers announce themselves to the directory as they come online")
+	}
 
 	var content string
 
@@ -167,55 +286,114 @@ func (m *ServerSelectorModal) Render(width, height int) string {
 	availableHeight := height - titleHeight - discoveryHeight - footerHeight - 7
 
 	var serverList string
-	if m.loading {
-		serverList = "Loading servers..."
-		footerText = mutedTextStyle.Render("[Press ESC to close]")
-	} else if m.errorMessage != "" {
-		serverList = errorStyle.Render("Error: " + m.errorMessage)
-		footerText = mutedTextStyle.Render("[Press ESC to close]")
-	} else if len(m.servers) == 0 {
-		serverList = mutedTextStyle.Render("No servers available")
-		footerText = mutedTextStyle.Render("[Press ESC to close]")
-	} else {
-		var lines []string
-		for i, server := range m.servers {
-			// Indicator for selected item (matching SSH key manager)
-			indicator := "  "
-			if i == m.cursor {
-				indicator = lipgloss.NewStyle().Foreground(primaryColor).Render("► ")
+
+	// If showing custom input, render input field
+	if m.showingCustomInput {
+		serverList = lipgloss.JoinVertical(lipgloss.Left,
+			serverNameStyle.Render("Enter server address:"),
+			"",
+			fmt.Sprintf("> %s_", m.customInput),
+			"",
+			mutedTextStyle.Render("Format: hostname:port (default port: 6465)"),
+			mutedTextStyle.Render("Example: chat.example.com:6465"),
+		)
+		footerText = mutedTextStyle.Render("[Enter to connect, ESC to cancel]")
+	} else if m.loading {
+		// Show loading + custom option available
+		loadingMsg := "Loading servers from directory..."
+		if m.connectionType != "" {
+			// Map connection type to display format
+			connTypeDisplay := m.connectionType
+			switch m.connectionType {
+			case "tcp":
+				connTypeDisplay = "TCP"
+			case "ssh":
+				connTypeDisplay = "SSH"
+			case "websocket":
+				connTypeDisplay = "WebSocket"
 			}
-
-			// Format server info
-			name := serverNameStyle.Render(server.Name)
-			desc := serverDescStyle.Render("  " + server.Description) // Indent description
-
-			// Stats line
-			stats := fmt.Sprintf("Users: %d", server.UserCount)
-			if server.MaxUsers > 0 {
-				stats = fmt.Sprintf("Users: %d/%d", server.UserCount, server.MaxUsers)
-			}
-			stats = fmt.Sprintf("%s • Channels: %d", stats, server.ChannelCount)
-			statsLine := serverStatsStyle.Render(stats)
-
-			// Address line
-			address := serverStatsStyle.Render(fmt.Sprintf("%s:%d", server.Hostname, server.Port))
-
-			// Combine into server block (with indicator on first line, subsequent lines indented)
-			serverInfo := lipgloss.JoinVertical(lipgloss.Left,
-				name,
-				desc,
-				serverStatsStyle.Render("  "+statsLine+" • "+address), // Indent stats line
-			)
-
-			serverBlock := indicator + serverInfo
-
-			lines = append(lines, serverBlock)
-			if i < len(m.servers)-1 {
-				lines = append(lines, "") // Add spacing between servers
-			}
+			loadingMsg = fmt.Sprintf("Loading servers from directory via %s...", connTypeDisplay)
 		}
+		serverList = lipgloss.JoinVertical(lipgloss.Left,
+			loadingMsg,
+			"",
+			mutedTextStyle.Render("Or press 'c' to enter a custom server address"),
+		)
+		footerText = mutedTextStyle.Render("[c] Custom server  [ESC] Cancel")
+	} else if m.errorMessage != "" {
+		// Show error + custom option available
+		serverList = lipgloss.JoinVertical(lipgloss.Left,
+			errorStyle.Render("Could not load server list"),
+			mutedTextStyle.Render("  "+m.errorMessage),
+			"",
+			mutedTextStyle.Render("You can still connect to a custom server"),
+		)
+		footerText = mutedTextStyle.Render("[c] Custom server  [ESC] Cancel")
+	} else {
+		mergedServers := m.getMergedServers()
+		if len(mergedServers) == 0 {
+			serverList = mutedTextStyle.Render("No servers available")
+			footerText = mutedTextStyle.Render("[Press ESC to close]")
+		} else {
+			var lines []string
+			for i, server := range mergedServers {
+				// Indicator for selected item (matching SSH key manager)
+				indicator := "  "
+				if i == m.cursor {
+					indicator = lipgloss.NewStyle().Foreground(primaryColor).Render("► ")
+				}
 
-		serverList = strings.Join(lines, "\n")
+				// Check if this is the custom option
+				isCustom := server.Hostname == "__custom__"
+
+				// Check if this is a local server
+				isLocal := !isCustom && m.isLocalServer(server)
+
+				// Format server info
+				serverName := server.Name
+				if isLocal {
+					serverName = serverName + " (local)"
+				}
+				name := serverNameStyle.Render(serverName)
+				desc := serverDescStyle.Render("  " + server.Description) // Indent description
+
+				var serverInfo string
+				if isCustom {
+					// Custom option: simpler display
+					serverInfo = lipgloss.JoinVertical(lipgloss.Left,
+						name,
+						desc,
+					)
+				} else {
+					// Regular server: show stats and address
+					stats := fmt.Sprintf("Users: %d", server.UserCount)
+					if server.MaxUsers > 0 {
+						stats = fmt.Sprintf("Users: %d/%d", server.UserCount, server.MaxUsers)
+					}
+					stats = fmt.Sprintf("%s • Channels: %d", stats, server.ChannelCount)
+					statsLine := serverStatsStyle.Render(stats)
+
+					// Address line
+					address := serverStatsStyle.Render(fmt.Sprintf("%s:%d", server.Hostname, server.Port))
+
+					// Combine into server block (with indicator on first line, subsequent lines indented)
+					serverInfo = lipgloss.JoinVertical(lipgloss.Left,
+						name,
+						desc,
+						serverStatsStyle.Render("  "+statsLine+" • "+address), // Indent stats line
+					)
+				}
+
+				serverBlock := indicator + serverInfo
+
+				lines = append(lines, serverBlock)
+				if i < len(mergedServers)-1 {
+					lines = append(lines, "") // Add spacing between servers
+				}
+			}
+
+			serverList = strings.Join(lines, "\n")
+		}
 	}
 
 	// Initialize or update viewport

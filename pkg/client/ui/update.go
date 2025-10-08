@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,21 +72,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err.Error() != "disconnected from server" {
 			m.errorMessage = msg.Err.Error()
 		}
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 
 	case ConnectedMsg:
 		return m.handleReconnected()
 
 	case DisconnectedMsg:
+		if m.logger != nil {
+			m.logger.Printf("DEBUG: Received DisconnectedMsg with generation %d (current generation: %d)", msg.Generation, m.connGeneration)
+		}
+
+		// Ignore disconnect messages from old connection generations
+		if msg.Generation < m.connGeneration {
+			if m.logger != nil {
+				m.logger.Printf("Ignoring DisconnectedMsg from old connection generation %d (current: %d)", msg.Generation, m.connGeneration)
+			}
+			return m, nil
+		}
+
+		if m.logger != nil {
+			m.logger.Printf("DEBUG: Processing DisconnectedMsg (not filtered)")
+		}
+
 		m.connectionState = StateDisconnected
 		m.errorMessage = ""
-		return m, listenForServerFrames(m.conn)
+
+		// Show connection failed modal to give user options
+		// BUT: Don't show if there's already a connection-related modal active
+		activeModalType := m.modalStack.TopType()
+		if activeModalType != modal.ModalConnectionFailed && activeModalType != modal.ModalConnectionMethod {
+			m.modalStack.Push(modal.NewConnectionFailedModal(m.conn.GetAddress(), "Connection lost"))
+		}
+
+		// Continue listening for frames from current connection
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 
 	case ReconnectingMsg:
 		m.connectionState = StateReconnecting
 		m.reconnectAttempt = msg.Attempt
 		m.errorMessage = ""
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+
+	case ServerListTimeoutMsg:
+		// Server list request timed out
+		if m.awaitingServerList {
+			m.awaitingServerList = false
+			// Update modal to show timeout error
+			if activeModal := m.modalStack.Top(); activeModal != nil {
+				if serverModal, ok := activeModal.(*modal.ServerSelectorModal); ok {
+					serverModal.SetError("Directory server not responding (timeout after 5s)")
+				}
+			}
+		}
+		return m, nil
 
 	case TickMsg:
 		// Check if we need to send a ping (only if connected)
@@ -145,6 +184,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// User selected a server to connect to
 		return m.handleServerSelected(msg.Server)
 
+	case modal.CustomServerInputMsg:
+		// User entered a custom server address
+		return m.handleCustomServerInput(msg.Address)
+
 	case modal.ServerSelectorCancelledMsg:
 		// User cancelled server selection
 		// If we're in directory mode with no saved server (first run), exit the app
@@ -159,16 +202,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modal.ConnectionFailedRetryMsg:
 		// User wants to retry connection
+		m.switchingMethod = false // Clear flag when user takes action
 		return m.handleConnectionRetry()
+
+	case modal.ConnectionFailedTryMethodMsg:
+		// User wants to try a different connection method
+		m.switchingMethod = true // Set flag to prevent overlay during method selection
+		return m.handleTryDifferentMethod()
 
 	case modal.ConnectionFailedSwitchServerMsg:
 		// User wants to switch to server selector
+		m.switchingMethod = false // Clear flag when user takes action
 		return m.handleSwitchToServerSelector()
+
+	case modal.ConnectionMethodSelectedMsg:
+		// User selected a connection method to try
+		return m.handleConnectionMethodSelected(msg)
+
+	case modal.ConnectionMethodCancelledMsg:
+		// User cancelled method selection - go back to connection failed modal
+		m.modalStack.Pop() // Remove ConnectionMethodModal
+		m.modalStack.Push(modal.NewConnectionFailedModal(m.conn.GetAddress(), "Connection method selection cancelled"))
+		return m, nil
+
+	case ConnectionAttemptResultMsg:
+		// Async connection attempt completed
+		return m.handleConnectionAttemptResult(msg)
 
 	default:
 		// Always update spinner (it manages its own tick messages)
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
+
+		// Update all modals that implement UpdatableModal
+		var modalCmds []tea.Cmd
+		m.modalStack.ForEach(func(mod modal.Modal) {
+			if updatable, ok := mod.(modal.UpdatableModal); ok {
+				if modalCmd := updatable.Update(msg); modalCmd != nil {
+					modalCmds = append(modalCmds, modalCmd)
+				}
+			}
+		})
 
 		// Update viewport content if we're currently loading something
 		if m.loadingThreadList || m.loadingMore {
@@ -178,7 +252,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.threadViewport.SetContent(m.buildThreadContent())
 		}
 
-		return m, cmd
+		// Batch all commands
+		allCmds := append([]tea.Cmd{cmd}, modalCmds...)
+		return m, tea.Batch(allCmds...)
 	}
 
 	return m, nil
@@ -594,6 +670,11 @@ func (m Model) selectedMessageDeleted() bool {
 
 // handleServerFrame processes incoming server frames
 func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	// Ignore nil frames (can happen when channel closes)
+	if frame == nil {
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
 	switch frame.Type {
 	case protocol.TypeServerConfig:
 		return m.handleServerConfig(frame)
@@ -638,7 +719,7 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	}
 
 	// Continue listening
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // InitTimeoutCheckMsg triggers periodic checking of initialization timeout
@@ -649,7 +730,7 @@ func (m Model) handleServerConfig(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.ServerConfigMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode SERVER_CONFIG: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	m.serverConfig = msg
@@ -668,7 +749,7 @@ func (m Model) handleServerConfig(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 			m.logger.Printf("[InitStateMachine] TCP connection, sending SET_NICKNAME")
 		}
 		return m, tea.Batch(
-			listenForServerFrames(m.conn),
+			listenForServerFrames(m.conn, m.connGeneration),
 			m.sendSetNickname(),
 			m.sendGetUserInfo(m.nickname),
 		)
@@ -676,7 +757,7 @@ func (m Model) handleServerConfig(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 	// SSH connection - wait for AUTH_RESPONSE, check timeout with exponential backoff
 	return m, tea.Batch(
-		listenForServerFrames(m.conn),
+		listenForServerFrames(m.conn, m.connGeneration),
 		checkInitTimeout(m.initStateMachine.NextCheckDelay()),
 	)
 }
@@ -694,7 +775,7 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 	msg := &protocol.NicknameResponseMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode response: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
@@ -733,7 +814,7 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 		}
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleUserInfo processes USER_INFO response
@@ -741,7 +822,7 @@ func (m Model) handleUserInfo(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.UserInfoMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode USER_INFO: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	// Log the response for debugging
@@ -761,7 +842,7 @@ func (m Model) handleUserInfo(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 	// Force a re-render so the UI updates (footer commands change based on nicknameIsRegistered)
 	return m, tea.Batch(
-		listenForServerFrames(m.conn),
+		listenForServerFrames(m.conn, m.connGeneration),
 		func() tea.Msg { return ForceRenderMsg{} },
 	)
 }
@@ -777,7 +858,7 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 			m.logger.Printf("[ERROR] Failed to decode AUTH_RESPONSE: %v", err)
 		}
 		m.errorMessage = fmt.Sprintf("Failed to decode AUTH_RESPONSE: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if m.logger != nil {
@@ -837,7 +918,7 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleRegisterResponse processes REGISTER_RESPONSE
@@ -845,7 +926,7 @@ func (m Model) handleRegisterResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 	msg := &protocol.RegisterResponseMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode REGISTER_RESPONSE: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
@@ -865,7 +946,7 @@ func (m Model) handleRegisterResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 		m.errorMessage = "Registration failed. Please try again."
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleChannelList processes CHANNEL_LIST
@@ -875,13 +956,13 @@ func (m Model) handleChannelList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.ChannelListMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode channel list: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	m.channels = msg.Channels
 	m.statusMessage = fmt.Sprintf("Loaded %d channels", len(m.channels))
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleServerList processes SERVER_LIST (0x9B)
@@ -897,8 +978,11 @@ func (m Model) handleServerList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
+
+	// Clear awaiting flag since we got a response
+	m.awaitingServerList = false
 
 	// Update the server selector modal with the received list
 	if activeModal := m.modalStack.Top(); activeModal != nil {
@@ -913,7 +997,7 @@ func (m Model) handleServerList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleChannelCreated processes CHANNEL_CREATED (response + broadcast)
@@ -921,7 +1005,7 @@ func (m Model) handleChannelCreated(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 	msg := &protocol.ChannelCreatedMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode channel created: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
@@ -946,7 +1030,7 @@ func (m Model) handleChannelCreated(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 		m.errorMessage = msg.Message
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleJoinResponse processes JOIN_RESPONSE
@@ -954,7 +1038,7 @@ func (m Model) handleJoinResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.JoinResponseMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode join response: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
@@ -963,7 +1047,7 @@ func (m Model) handleJoinResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.errorMessage = msg.Message
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleMessageList processes MESSAGE_LIST
@@ -974,7 +1058,7 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.loadingThreadList = false
 		m.loadingThreadReplies = false
 		m.loadingMore = false
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.ParentID == nil {
@@ -1077,7 +1161,7 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.threadViewport.SetContent(m.buildThreadContent())
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleMessagePosted processes MESSAGE_POSTED
@@ -1087,7 +1171,7 @@ func (m Model) handleMessagePosted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.MessagePostedMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode response: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
@@ -1100,7 +1184,7 @@ func (m Model) handleMessagePosted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.errorMessage = msg.Message
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleNewMessage processes NEW_MESSAGE broadcasts
@@ -1108,7 +1192,7 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.NewMessageMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode new message: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	// Convert to protocol.Message
@@ -1211,7 +1295,7 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleMessageDeleted processes MESSAGE_DELETED confirmations and broadcasts.
@@ -1221,7 +1305,7 @@ func (m Model) handleMessageDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 	msg := &protocol.MessageDeletedMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode message deletion: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
@@ -1231,7 +1315,7 @@ func (m Model) handleMessageDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 		m.errorMessage = msg.Message
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleMessageEdited processes MESSAGE_EDITED confirmations and broadcasts.
@@ -1241,7 +1325,7 @@ func (m Model) handleMessageEdited(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.MessageEditedMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode message edit: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
@@ -1251,7 +1335,7 @@ func (m Model) handleMessageEdited(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.errorMessage = msg.Message
 	}
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleSubscribeOk processes SUBSCRIBE_OK confirmations
@@ -1259,14 +1343,14 @@ func (m Model) handleSubscribeOk(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.SubscribeOkMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode subscribe OK: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	// Subscription confirmed - no user-visible action needed
 	// The subscription is now active on the server
 	_ = msg // silence unused variable warning
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // handleError processes ERROR messages
@@ -1274,12 +1358,12 @@ func (m Model) handleError(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.ErrorMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode error: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	m.errorMessage = fmt.Sprintf("Error %d: %s", msg.ErrorCode, msg.Message)
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 // Command helpers
@@ -1448,8 +1532,12 @@ func (m Model) requestChannelList() tea.Cmd {
 	}
 }
 
+// ServerListTimeoutMsg is sent when server list request times out
+type ServerListTimeoutMsg struct{}
+
 func (m Model) requestServerList() tea.Cmd {
-	return func() tea.Msg {
+	// Send the LIST_SERVERS message
+	sendCmd := func() tea.Msg {
 		msg := &protocol.ListServersMessage{
 			Limit: 100, // Request up to 100 servers
 		}
@@ -1458,6 +1546,14 @@ func (m Model) requestServerList() tea.Cmd {
 		}
 		return nil
 	}
+
+	// Start a timeout timer (5 seconds)
+	timeoutCmd := func() tea.Msg {
+		time.Sleep(5 * time.Second)
+		return ServerListTimeoutMsg{}
+	}
+
+	return tea.Batch(sendCmd, timeoutCmd)
 }
 
 func (m Model) sendJoinChannel(channelID uint64) tea.Cmd {
@@ -1861,7 +1957,7 @@ func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
 	m.statusMessage = "Reconnected successfully"
 
 	// Re-request data based on current view
-	cmds := []tea.Cmd{listenForServerFrames(m.conn)}
+	cmds := []tea.Cmd{listenForServerFrames(m.conn, m.connGeneration)}
 
 	// Re-send nickname if we have one (but not if already authenticated - SSH already set it)
 	if m.nickname != "" && m.authState != AuthStateAuthenticated {
@@ -1985,7 +2081,7 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 
 	// Start normal operation
 	cmds := []tea.Cmd{
-		listenForServerFrames(m.conn),
+		listenForServerFrames(m.conn, m.connGeneration),
 		m.requestChannelList(),
 	}
 
@@ -1997,6 +2093,39 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 	m.loadingChannels = true
 
 	return m, tea.Batch(cmds...)
+}
+
+// handleCustomServerInput processes custom server address entry
+func (m Model) handleCustomServerInput(address string) (tea.Model, tea.Cmd) {
+	// Parse the address (add default port if not specified)
+	serverAddr := address
+	if !strings.Contains(serverAddr, ":") {
+		serverAddr = serverAddr + ":6465"
+	}
+
+	// Create a temporary ServerInfo for handleServerSelected
+	server := protocol.ServerInfo{
+		Name:        serverAddr,
+		Description: "Custom server",
+		Hostname:    strings.Split(serverAddr, ":")[0],
+		Port:        6465, // Will be parsed from serverAddr
+	}
+
+	// Parse port from address
+	if parts := strings.Split(serverAddr, ":"); len(parts) == 2 {
+		if port, err := strconv.Atoi(parts[1]); err == nil {
+			server.Port = uint16(port)
+		}
+	}
+
+	// Save to state for next startup
+	if err := m.state.SetConfig("directory_selected_server", serverAddr); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to save server address: %v", err)
+		return m, nil
+	}
+
+	// Reuse the server selection logic
+	return m.handleServerSelected(server)
 }
 
 // handleConnectionRetry attempts to reconnect to the same server
@@ -2024,7 +2153,7 @@ func (m Model) handleConnectionRetry() (tea.Model, tea.Cmd) {
 
 	// Start normal operation
 	cmds := []tea.Cmd{
-		listenForServerFrames(m.conn),
+		listenForServerFrames(m.conn, m.connGeneration),
 		m.requestChannelList(),
 	}
 
@@ -2044,7 +2173,9 @@ func (m Model) handleSwitchToServerSelector() (tea.Model, tea.Cmd) {
 	m.modalStack.Pop()
 
 	// Show server selector loading modal
-	m.modalStack.Push(modal.NewServerSelectorLoading())
+	// Not first launch when switching from connection failed modal
+	connType := m.conn.GetConnectionType()
+	m.modalStack.Push(modal.NewServerSelectorLoading(false, connType))
 	m.awaitingServerList = true
 	m.directoryMode = true
 
@@ -2056,13 +2187,166 @@ func (m Model) handleSwitchToServerSelector() (tea.Model, tea.Cmd) {
 	return m, m.requestServerList()
 }
 
+// handleTryDifferentMethod shows the connection method selection modal
+func (m Model) handleTryDifferentMethod() (tea.Model, tea.Cmd) {
+	// Close the connection failed modal
+	m.modalStack.Pop()
+
+	// Determine what method failed
+	connType := m.conn.GetConnectionType()
+	var failedMethod modal.ConnectionMethod
+	switch connType {
+	case "tcp":
+		failedMethod = modal.MethodTCP
+	case "ssh":
+		failedMethod = modal.MethodSSH
+	case "websocket":
+		failedMethod = modal.MethodWebSocket
+	default:
+		// Unknown method, default to TCP
+		failedMethod = modal.MethodTCP
+	}
+
+	// Show connection method modal
+	serverAddr := m.conn.GetAddress()
+	methodModal := modal.NewConnectionMethodModal(serverAddr, failedMethod, "Connection failed")
+	m.modalStack.Push(methodModal)
+
+	if m.logger != nil {
+		m.logger.Printf("Showing connection method modal (failed method: %s)", failedMethod)
+	}
+
+	return m, nil
+}
+
+// handleConnectionMethodSelected attempts connection with the user-selected method
+func (m Model) handleConnectionMethodSelected(msg modal.ConnectionMethodSelectedMsg) (tea.Model, tea.Cmd) {
+	// Close the connection method modal
+	m.modalStack.Pop()
+
+	// Set flag to prevent showing "CONNECTION LOST" modal from old connection cleanup
+	m.switchingMethod = true
+
+	method := string(msg.Method)
+	rawAddr := m.conn.GetRawAddress() // Get raw address without scheme
+
+	if m.logger != nil {
+		m.logger.Printf("Attempting connection with method: %s to %s", method, rawAddr)
+	}
+
+	// Show connecting modal while attempting connection
+	connectingModal := modal.NewConnectingModal(method, rawAddr)
+	m.modalStack.Push(connectingModal)
+
+	// Construct the appropriate URL scheme with the raw address
+	var address string
+	switch msg.Method {
+	case modal.MethodTCP:
+		address = "sc://" + rawAddr
+	case modal.MethodSSH:
+		address = "ssh://" + rawAddr
+	case modal.MethodWebSocket:
+		address = "ws://" + rawAddr
+	}
+
+	// Create new connection with the selected method
+	conn, err := client.NewConnection(address)
+	if err != nil {
+		// Failed to parse address - show error immediately
+		m.modalStack.RemoveByType(modal.ModalConnecting)
+		m.modalStack.Push(modal.NewConnectionFailedModal(rawAddr, fmt.Sprintf("Invalid address for %s: %v", method, err)))
+		return m, nil
+	}
+
+	// Set logger on the new connection
+	if m.logger != nil {
+		conn.SetLogger(m.logger)
+	}
+
+	// Close the old connection before replacing it
+	// This prevents stray DisconnectedMsg from the old connection
+	if m.conn != nil {
+		if m.logger != nil {
+			m.logger.Printf("DEBUG: Closing old connection (current generation: %d)", m.connGeneration)
+		}
+		m.conn.Close()
+	}
+
+	// Increment generation counter to ignore messages from old connection
+	m.connGeneration++
+	if m.logger != nil {
+		m.logger.Printf("DEBUG: Incremented generation counter to %d", m.connGeneration)
+	}
+
+	// Replace our connection
+	m.conn = conn
+
+	// Attempt connection asynchronously and start spinner
+	return m, tea.Batch(
+		connectingModal.Init(),      // Start the spinner ticking
+		m.attemptConnection(method), // Start connection attempt
+	)
+}
+
+// attemptConnection performs the connection attempt in a goroutine
+func (m Model) attemptConnection(method string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.conn.Connect()
+		return ConnectionAttemptResultMsg{
+			Success: err == nil,
+			Method:  method,
+			Error:   err,
+		}
+	}
+}
+
+// handleConnectionAttemptResult processes the result of an async connection attempt
+func (m Model) handleConnectionAttemptResult(msg ConnectionAttemptResultMsg) (tea.Model, tea.Cmd) {
+	// Remove the connecting modal
+	m.modalStack.RemoveByType(modal.ModalConnecting)
+
+	if !msg.Success {
+		// Connection failed - show error modal
+		m.modalStack.Push(modal.NewConnectionFailedModal(m.conn.GetAddress(), msg.Error.Error()))
+		m.connectionState = StateDisconnected
+		// Keep switchingMethod=true to prevent overlay flash
+		if m.logger != nil {
+			m.logger.Printf("Connection with method %s failed: %v", msg.Method, msg.Error)
+		}
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	// Connection successful!
+	m.switchingMethod = false // Clear flag on success
+	m.connectionState = StateConnected
+	m.statusMessage = fmt.Sprintf("Connected via %s", msg.Method)
+	if m.logger != nil {
+		m.logger.Printf("Connection with method %s succeeded", msg.Method)
+	}
+
+	// Start normal operation
+	cmds := []tea.Cmd{
+		listenForServerFrames(m.conn, m.connGeneration),
+		m.requestChannelList(),
+	}
+
+	// Send nickname if we have one (but not if already authenticated)
+	if m.nickname != "" && m.authState != AuthStateAuthenticated {
+		cmds = append(cmds, m.sendSetNickname())
+	}
+
+	m.loadingChannels = true
+
+	return m, tea.Batch(cmds...)
+}
+
 // SSH Key Management Handlers
 
 func (m Model) handleSSHKeyList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.SSHKeyListResponse{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode SSH_KEY_LIST: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	// Convert to modal.SSHKeyInfo format
@@ -2085,23 +2369,23 @@ func (m Model) handleSSHKeyList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	// Show SSH key manager modal
 	m.showSSHKeyManagerModal(keys)
 
-	return m, listenForServerFrames(m.conn)
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 func (m Model) handleSSHKeyAdded(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.SSHKeyAddedResponse{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode SSH_KEY_ADDED: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
 		m.statusMessage = fmt.Sprintf("SSH key added: %s", msg.Fingerprint)
 		// Refresh the key list
-		return m, tea.Batch(listenForServerFrames(m.conn), m.sendListSSHKeys())
+		return m, tea.Batch(listenForServerFrames(m.conn, m.connGeneration), m.sendListSSHKeys())
 	} else {
 		m.errorMessage = msg.ErrorMessage
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 }
 
@@ -2109,16 +2393,16 @@ func (m Model) handleSSHKeyLabelUpdated(frame *protocol.Frame) (tea.Model, tea.C
 	msg := &protocol.SSHKeyLabelUpdatedResponse{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode SSH_KEY_LABEL_UPDATED: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
 		m.statusMessage = "SSH key label updated"
 		// Refresh the key list
-		return m, tea.Batch(listenForServerFrames(m.conn), m.sendListSSHKeys())
+		return m, tea.Batch(listenForServerFrames(m.conn, m.connGeneration), m.sendListSSHKeys())
 	} else {
 		m.errorMessage = msg.ErrorMessage
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 }
 
@@ -2126,15 +2410,15 @@ func (m Model) handleSSHKeyDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.SSHKeyDeletedResponse{}
 	if err := msg.Decode(frame.Payload); err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to decode SSH_KEY_DELETED: %v", err)
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
 	if msg.Success {
 		m.statusMessage = "SSH key deleted"
 		// Refresh the key list
-		return m, tea.Batch(listenForServerFrames(m.conn), m.sendListSSHKeys())
+		return m, tea.Batch(listenForServerFrames(m.conn, m.connGeneration), m.sendListSSHKeys())
 	} else {
 		m.errorMessage = msg.ErrorMessage
-		return m, listenForServerFrames(m.conn)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 }

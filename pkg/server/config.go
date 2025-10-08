@@ -63,7 +63,7 @@ func DefaultTOMLConfig() TOMLConfig {
 		Server: ServerSection{
 			TCPPort:      6465,
 			SSHPort:      6466,
-			HTTPPort:     8080,
+			HTTPPort:     6467,
 			SSHHostKey:   "~/.superchat/ssh_host_key",
 			DatabasePath: "~/.superchat/superchat.db",
 		},

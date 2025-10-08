@@ -38,9 +38,21 @@ type ConnectionStateUpdate struct {
 	Err     error
 }
 
+// DisconnectReason indicates why a connection was lost
+type DisconnectReason int
+
+const (
+	DisconnectUnknown DisconnectReason = iota
+	DisconnectIdle                      // No activity, normal keepalive cycle
+	DisconnectError                     // Read/write error
+	DisconnectServerDown                // Server closed connection
+	DisconnectUserRequested             // User explicitly disconnected
+)
+
 // Connection represents a client connection to the server
 type Connection struct {
-	addr            string
+	addr            string // Display address with scheme (e.g., "ws://server:6467")
+	rawAddr         string // Raw host:port without scheme (e.g., "server:6467")
 	dial            func() (net.Conn, error)
 	conn            net.Conn
 	mu              sync.RWMutex
@@ -48,6 +60,7 @@ type Connection struct {
 	reconnecting    bool
 	securityWarning string
 	warningOnce     sync.Once
+	connectionType  string // "tcp", "ssh", or "websocket"
 
 	// Channels for communication
 	incoming    chan *protocol.Frame
@@ -59,6 +72,13 @@ type Connection struct {
 	autoReconnect     bool
 	reconnectDelay    time.Duration
 	maxReconnectDelay time.Duration
+
+	// Disconnect tracking
+	lastDisconnectReason DisconnectReason
+	lastSuccessfulMethod string // Track what worked for auto-reconnect
+
+	// Protocol validation
+	protocolTimeout time.Duration
 
 	// Traffic counters (bytes on the wire)
 	bytesSent     atomic.Uint64
@@ -72,6 +92,7 @@ type Connection struct {
 
 	// Shutdown
 	shutdown chan struct{}
+	closed   bool // Track if Close() has been called
 	wg       sync.WaitGroup
 }
 
@@ -84,6 +105,7 @@ func NewConnection(addr string) (*Connection, error) {
 
 	return &Connection{
 		addr:              dialConfig.display,
+		rawAddr:           dialConfig.raw,
 		dial:              dialConfig.dial,
 		securityWarning:   dialConfig.warning,
 		incoming:          make(chan *protocol.Frame, 100),
@@ -93,6 +115,7 @@ func NewConnection(addr string) (*Connection, error) {
 		autoReconnect:     true,
 		reconnectDelay:    1 * time.Second,
 		maxReconnectDelay: 30 * time.Second,
+		protocolTimeout:   2 * time.Second,
 		shutdown:          make(chan struct{}),
 	}, nil
 }
@@ -129,7 +152,7 @@ func (c *Connection) logf(format string, args ...interface{}) {
 	}
 }
 
-// Connect establishes connection to the server
+// Connect establishes connection to the server with WebSocket fallback
 func (c *Connection) Connect() error {
 	c.mu.Lock()
 	if c.connected {
@@ -144,18 +167,91 @@ func (c *Connection) Connect() error {
 		return fmt.Errorf("no dialer configured")
 	}
 
+	// Try primary connection method (TCP, SSH, or WebSocket)
 	conn, err := c.dial()
+
+	// Determine connection type from address
+	connType := "tcp" // Default
+	if strings.HasPrefix(c.addr, "ssh://") {
+		connType = "ssh"
+	} else if strings.HasPrefix(c.addr, "ws://") {
+		connType = "websocket"
+	}
+
 	if err != nil {
-		c.logf("Connection failed: %v", err)
-		return fmt.Errorf("failed to connect: %w", err)
+		c.logf("Primary connection failed: %v", err)
+
+		// Only try WebSocket fallback if not already trying WebSocket
+		if connType != "websocket" {
+			c.logf("Attempting WebSocket fallback...")
+			wsConn, wsErr := c.tryWebSocketFallback()
+			if wsErr != nil {
+				c.logf("WebSocket fallback also failed: %v", wsErr)
+				// Set connectionType even on failure so caller knows what we tried
+				c.mu.Lock()
+				c.connectionType = connType
+				c.mu.Unlock()
+				return fmt.Errorf("all connection methods failed - Primary: %w, WebSocket: %v", err, wsErr)
+			}
+			conn = wsConn
+			connType = "websocket"
+			c.logf("WebSocket fallback successful!")
+		} else {
+			// Already tried WebSocket explicitly, no fallback
+			// Set connectionType even on failure so caller knows what we tried
+			c.mu.Lock()
+			c.connectionType = connType
+			c.mu.Unlock()
+			return err
+		}
 	}
 
 	c.mu.Lock()
 	c.conn = conn
 	c.connected = true
+	c.connectionType = connType
 	c.mu.Unlock()
 
-	c.logf("Connected successfully to %s", c.addr)
+	c.logf("Connected successfully to %s (%s)", c.addr, connType)
+
+	// Validate protocol by sending PING and waiting for response
+	c.logf("Validating protocol...")
+	if err := c.validateProtocol(); err != nil {
+		c.logf("Protocol validation failed: %v", err)
+		conn.Close()
+
+		// Only try WebSocket fallback if not already using it
+		if connType != "websocket" {
+			c.logf("Attempting WebSocket fallback after protocol failure...")
+			wsConn, wsErr := c.tryWebSocketFallback()
+			if wsErr != nil {
+				c.logf("WebSocket fallback also failed: %v", wsErr)
+				return fmt.Errorf("protocol validation failed and WebSocket fallback failed: %w", err)
+			}
+
+			// Update connection and try validation again
+			conn = wsConn
+			connType = "websocket"
+			c.mu.Lock()
+			c.conn = conn
+			c.connectionType = connType
+			c.mu.Unlock()
+
+			c.logf("WebSocket fallback connected, validating protocol...")
+			if err := c.validateProtocol(); err != nil {
+				conn.Close()
+				return fmt.Errorf("protocol validation failed on WebSocket: %w", err)
+			}
+		} else {
+			return fmt.Errorf("protocol validation failed: %w", err)
+		}
+	}
+	c.logf("Protocol validation successful")
+
+	// Record successful connection method
+	c.mu.Lock()
+	c.lastSuccessfulMethod = connType
+	c.mu.Unlock()
 
 	c.warningOnce.Do(func() {
 		if c.securityWarning != "" {
@@ -171,15 +267,107 @@ func (c *Connection) Connect() error {
 	return nil
 }
 
+// tryWebSocketFallback attempts to connect via WebSocket on port 6467
+func (c *Connection) tryWebSocketFallback() (net.Conn, error) {
+	// Extract hostname from address (remove port if present)
+	host := c.addr
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+
+	// Try WebSocket on port 6467
+	wsAddr := fmt.Sprintf("%s:6467", host)
+	c.logf("Attempting WebSocket connection to %s", wsAddr)
+
+	return DialWebSocket(wsAddr)
+}
+
+// GetConnectionType returns the current connection type (tcp, ssh, or websocket)
+func (c *Connection) GetConnectionType() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.connectionType
+}
+
+// validateProtocol sends a PING and waits for PONG to verify protocol is working
+func (c *Connection) validateProtocol() error {
+	c.mu.RLock()
+	conn := c.conn
+	timeout := c.protocolTimeout
+	c.mu.RUnlock()
+
+	if conn == nil {
+		return fmt.Errorf("no connection available")
+	}
+
+	// Create a PING message
+	ping := &protocol.PingMessage{
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	// Encode to frame
+	frame := &protocol.Frame{
+		Version: protocol.ProtocolVersion,
+		Type:    protocol.TypePing,
+	}
+
+	// Encode the ping message
+	var buf bytes.Buffer
+	if err := ping.EncodeTo(&buf); err != nil {
+		return fmt.Errorf("failed to encode ping: %w", err)
+	}
+	frame.Payload = buf.Bytes()
+
+	// Set write deadline
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("failed to set write deadline: %w", err)
+	}
+
+	// Write frame using EncodeFrame
+	if err := protocol.EncodeFrame(conn, frame); err != nil {
+		return fmt.Errorf("failed to write ping: %w", err)
+	}
+
+	// Clear write deadline
+	conn.SetWriteDeadline(time.Time{})
+
+	// Set read deadline
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("failed to set read deadline: %w", err)
+	}
+
+	// Read response frame using DecodeFrame
+	responseFrame, err := protocol.DecodeFrame(conn)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Clear read deadline
+	conn.SetReadDeadline(time.Time{})
+
+	// Check if it's a PONG
+	if responseFrame.Type != protocol.TypePong {
+		return fmt.Errorf("unexpected response type: got %d, expected PONG (%d)", responseFrame.Type, protocol.TypePong)
+	}
+
+	return nil
+}
+
 // Disconnect closes the connection
 func (c *Connection) Disconnect() {
+	c.disconnectWithReason(DisconnectUserRequested)
+}
+
+// disconnectWithReason closes the connection and records why
+func (c *Connection) disconnectWithReason(reason DisconnectReason) {
 	c.mu.Lock()
 	if !c.connected {
 		c.mu.Unlock()
 		return
 	}
-	c.logf("Disconnecting from %s", c.addr)
+	c.logf("Disconnecting from %s (reason: %v)", c.addr, reason)
 	c.connected = false
+	c.lastDisconnectReason = reason
 	if c.conn != nil {
 		c.conn.Close()
 	}
@@ -188,13 +376,25 @@ func (c *Connection) Disconnect() {
 
 // Close shuts down the connection permanently
 func (c *Connection) Close() {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return // Already closed
+	}
+	c.closed = true
+	c.mu.Unlock()
+
+	c.logf("DEBUG: Closing connection - sending shutdown signal")
 	close(c.shutdown)
 	c.Disconnect()
+	c.logf("DEBUG: Waiting for goroutines to finish")
 	c.wg.Wait()
+	c.logf("DEBUG: Closing channels")
 	close(c.incoming)
 	close(c.outgoing)
 	close(c.errors)
 	close(c.stateChange)
+	c.logf("DEBUG: Connection fully closed")
 }
 
 // Send sends a frame to the server
@@ -236,6 +436,11 @@ func (c *Connection) GetAddress() string {
 	return c.addr
 }
 
+// GetRawAddress returns the raw address without scheme (e.g., "server:6467" or "user@server:6466")
+func (c *Connection) GetRawAddress() string {
+	return c.rawAddr
+}
+
 // GetBytesSent returns the total bytes sent
 func (c *Connection) GetBytesSent() uint64 {
 	return c.bytesSent.Load()
@@ -274,12 +479,12 @@ func (c *Connection) readLoop() {
 		if err != nil {
 			if err == io.EOF {
 				c.logf("Connection closed by server (EOF)")
-				c.handleDisconnect()
+				c.handleDisconnectWithReason(DisconnectServerDown)
 				return
 			}
 			c.logf("Read error: %v", err)
 			c.errors <- fmt.Errorf("read error: %w", err)
-			c.handleDisconnect()
+			c.handleDisconnectWithReason(DisconnectError)
 			return
 		}
 
@@ -461,7 +666,7 @@ func (c *Connection) writeLoop() {
 			if _, err := writer.Write(frameBytes); err != nil {
 				c.logf("Write error: %v", err)
 				c.errors <- fmt.Errorf("write error: %w", err)
-				c.handleDisconnect()
+				c.handleDisconnectWithReason(DisconnectError)
 				return
 			}
 
@@ -475,9 +680,14 @@ func (c *Connection) writeLoop() {
 
 // handleDisconnect handles unexpected disconnection
 func (c *Connection) handleDisconnect() {
+	c.handleDisconnectWithReason(DisconnectUnknown)
+}
+
+func (c *Connection) handleDisconnectWithReason(reason DisconnectReason) {
 	c.mu.Lock()
 	wasConnected := c.connected
 	c.connected = false
+	c.lastDisconnectReason = reason
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
@@ -488,18 +698,22 @@ func (c *Connection) handleDisconnect() {
 		return
 	}
 
-	c.logf("Disconnected from server")
+	c.logf("Disconnected from server (reason: %v)", reason)
 
 	disconnectErr := fmt.Errorf("disconnected from server")
 	c.errors <- disconnectErr
 
 	// Send disconnected state
+	c.logf("DEBUG: Attempting to send StateTypeDisconnected on stateChange channel")
 	select {
 	case c.stateChange <- ConnectionStateUpdate{State: StateTypeDisconnected, Err: disconnectErr}:
+		c.logf("DEBUG: Successfully sent StateTypeDisconnected")
 	default:
+		c.logf("DEBUG: Failed to send StateTypeDisconnected (channel full or closed)")
 	}
 
 	// Auto-reconnect if enabled
+	// For idle disconnects, reconnect immediately without modal
 	if c.autoReconnect {
 		c.logf("Auto-reconnect enabled, starting reconnect loop")
 		go c.reconnectLoop()
@@ -592,7 +806,8 @@ func (c *Connection) SendMessage(msgType uint8, msg interface{}) error {
 }
 
 type dialConfig struct {
-	display string
+	display string // Display address with scheme
+	raw     string // Raw host:port without scheme
 	dial    func() (net.Conn, error)
 	warning string
 }
@@ -600,6 +815,7 @@ type dialConfig struct {
 const (
 	defaultTCPPort            = "6465"
 	defaultSSHPort            = "6466"
+	defaultHTTPPort           = "6467"
 	superChatSSHVersionPrefix = "SSH-2.0-SuperChat"
 )
 
@@ -644,11 +860,12 @@ func parseServerAddress(raw string) (*dialConfig, error) {
 
 		address := net.JoinHostPort(host, port)
 		dial := func() (net.Conn, error) {
-			return net.DialTimeout("tcp", address, 10*time.Second)
+			return net.DialTimeout("tcp", address, 2*time.Second)
 		}
 
 		return &dialConfig{
 			display: address,
+			raw:     address,
 			dial:    dial,
 		}, nil
 
@@ -670,14 +887,42 @@ func parseServerAddress(raw string) (*dialConfig, error) {
 		}
 
 		display := fmt.Sprintf("ssh://%s", address)
+		rawAddr := address
 		if user != "" {
 			display = fmt.Sprintf("ssh://%s@%s", user, address)
+			rawAddr = fmt.Sprintf("%s@%s", user, address) // Preserve user@ for SSH
 		}
 
 		return &dialConfig{
 			display: display,
+			raw:     rawAddr,
 			dial:    dial,
 			warning: verifier.warning,
+		}, nil
+
+	case "ws", "wss":
+		// WebSocket connections (ws:// or wss://)
+		// Note: wss:// is currently unsupported (no TLS), but we parse it for future compatibility
+		host, port, err := splitHostPortWithDefault(hostPort, defaultHTTPPort)
+		if err != nil {
+			return nil, err
+		}
+
+		address := net.JoinHostPort(host, port)
+		dial := func() (net.Conn, error) {
+			return DialWebSocket(address)
+		}
+
+		warning := ""
+		if scheme == "wss" {
+			warning = "wss:// (TLS) is not yet supported, connecting via plain ws://"
+		}
+
+		return &dialConfig{
+			display: fmt.Sprintf("ws://%s", address),
+			raw:     address,
+			dial:    dial,
+			warning: warning,
 		}, nil
 
 	default:
@@ -911,7 +1156,7 @@ func userHomeDir() string {
 
 func dialSSH(user, host, port string, verifier *hostKeyVerifier) (net.Conn, error) {
 	address := net.JoinHostPort(host, port)
-	netConn, err := net.DialTimeout("tcp", address, 10*time.Second)
+	netConn, err := net.DialTimeout("tcp", address, 2*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -932,7 +1177,13 @@ func dialSSH(user, host, port string, verifier *hostKeyVerifier) (net.Conn, erro
 		User:            user,
 		Auth:            authMethods,
 		HostKeyCallback: verifier.callback,
-		Timeout:         10 * time.Second,
+		Timeout:         2 * time.Second,
+	}
+
+	// Set a deadline for the SSH handshake to enforce the timeout
+	if err := netConn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		netConn.Close()
+		return nil, fmt.Errorf("failed to set connection deadline: %w", err)
 	}
 
 	localAddr := netConn.LocalAddr()
@@ -942,6 +1193,12 @@ func dialSSH(user, host, port string, verifier *hostKeyVerifier) (net.Conn, erro
 	if err != nil {
 		netConn.Close()
 		return nil, verifier.wrapError(err)
+	}
+
+	// Clear the deadline after handshake completes
+	if err := netConn.SetDeadline(time.Time{}); err != nil {
+		clientConn.Close()
+		return nil, fmt.Errorf("failed to clear connection deadline: %w", err)
 	}
 
 	serverBanner := string(clientConn.ServerVersion())

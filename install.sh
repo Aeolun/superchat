@@ -175,19 +175,83 @@ main() {
         *)
             log_warn "Installation complete, but $INSTALL_DIR is not in your PATH"
             echo ""
-            echo "Add it to your PATH by running:"
-            echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
+            echo "To add it to your PATH, run ONE of these commands:"
             echo ""
-            echo "Or add this line to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-            echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
+
+            # Detect current shell
+            CURRENT_SHELL=$(basename "$SHELL")
+
+            case "$CURRENT_SHELL" in
+                bash)
+                    echo "  ${GREEN}For Bash:${NC}"
+                    printf "    echo 'export PATH=\"\$PATH:$INSTALL_DIR\"' >> ~/.bashrc\n"
+                    echo "    source ~/.bashrc"
+                    echo ""
+                    ;;
+                zsh)
+                    echo "  ${GREEN}For Zsh:${NC}"
+                    printf "    echo 'export PATH=\"\$PATH:$INSTALL_DIR\"' >> ~/.zshrc\n"
+                    echo "    source ~/.zshrc"
+                    echo ""
+                    ;;
+                fish)
+                    echo "  ${GREEN}For Fish:${NC}"
+                    echo "    fish_add_path $INSTALL_DIR"
+                    echo ""
+                    ;;
+                *)
+                    echo "  ${GREEN}For Bash:${NC}"
+                    printf "    echo 'export PATH=\"\$PATH:$INSTALL_DIR\"' >> ~/.bashrc\n"
+                    echo "    source ~/.bashrc"
+                    echo ""
+                    echo "  ${GREEN}For Zsh:${NC}"
+                    printf "    echo 'export PATH=\"\$PATH:$INSTALL_DIR\"' >> ~/.zshrc\n"
+                    echo "    source ~/.zshrc"
+                    echo ""
+                    echo "  ${GREEN}For Fish:${NC}"
+                    echo "    fish_add_path $INSTALL_DIR"
+                    echo ""
+                    ;;
+            esac
+
+            echo "  ${GREEN}Or for this session only:${NC}"
+            echo "    export PATH=\"\$PATH:$INSTALL_DIR\""
             ;;
     esac
 
     echo ""
-    log_info "Usage:"
-    echo "  sc                    # Connect to default server (superchat.win)"
-    echo "  sc --server HOST:PORT # Connect to custom server"
-    echo "  scd                   # Run your own server"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "Installation Complete!"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    # Verify installation
+    if command_exists sc; then
+        echo "${GREEN}✓${NC} Client installed: $(command -v sc)"
+    else
+        echo "${YELLOW}⚠${NC} Client installed but not in PATH: $INSTALL_DIR/sc"
+    fi
+
+    if command_exists scd; then
+        echo "${GREEN}✓${NC} Server installed: $(command -v scd)"
+    else
+        echo "${YELLOW}⚠${NC} Server installed but not in PATH: $INSTALL_DIR/scd"
+    fi
+
+    echo ""
+    echo "Verify installation:"
+    echo "  sc --version"
+    echo ""
+    echo "Get started:"
+    echo "  sc                    ${GREEN}#${NC} Connect to default server"
+    echo "  sc --server HOST:PORT ${GREEN}#${NC} Connect to custom server"
+    echo "  sc --help             ${GREEN}#${NC} View all options"
+    echo ""
+    echo "Run your own server:"
+    echo "  scd                   ${GREEN}#${NC} Start server on port 6465"
+    echo "  scd --help            ${GREEN}#${NC} View server options"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 main "$@"

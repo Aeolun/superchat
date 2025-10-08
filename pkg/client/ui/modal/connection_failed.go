@@ -11,11 +11,14 @@ type ConnectionFailedRetryMsg struct{}
 // ConnectionFailedSwitchServerMsg is sent when user wants to switch to server selector
 type ConnectionFailedSwitchServerMsg struct{}
 
+// ConnectionFailedTryMethodMsg is sent when user wants to try a different connection method
+type ConnectionFailedTryMethodMsg struct{}
+
 // ConnectionFailedModal displays connection failure with recovery options
 type ConnectionFailedModal struct {
 	serverAddr   string
 	errorMessage string
-	cursor       int // 0 = Retry, 1 = Switch Server, 2 = Quit
+	cursor       int // 0 = Retry, 1 = Try Different Method, 2 = Switch Server, 3 = Quit
 }
 
 // NewConnectionFailedModal creates a new connection failed modal
@@ -42,7 +45,7 @@ func (m *ConnectionFailedModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd)
 		return true, m, nil
 
 	case "down", "j":
-		if m.cursor < 2 {
+		if m.cursor < 3 {
 			m.cursor++
 		}
 		return true, m, nil
@@ -51,6 +54,12 @@ func (m *ConnectionFailedModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd)
 		// Retry connection (shortcut)
 		return true, nil, func() tea.Msg {
 			return ConnectionFailedRetryMsg{}
+		}
+
+	case "m":
+		// Try different method (shortcut)
+		return true, nil, func() tea.Msg {
+			return ConnectionFailedTryMethodMsg{}
 		}
 
 	case "s", "ctrl+l":
@@ -70,11 +79,15 @@ func (m *ConnectionFailedModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd)
 			return true, nil, func() tea.Msg {
 				return ConnectionFailedRetryMsg{}
 			}
-		case 1: // Switch Server
+		case 1: // Try Different Method
+			return true, nil, func() tea.Msg {
+				return ConnectionFailedTryMethodMsg{}
+			}
+		case 2: // Switch Server
 			return true, nil, func() tea.Msg {
 				return ConnectionFailedSwitchServerMsg{}
 			}
-		case 2: // Quit
+		case 3: // Quit
 			return true, nil, tea.Quit
 		}
 		return true, m, nil
@@ -136,15 +149,22 @@ func (m *ConnectionFailedModal) Render(width, height int) string {
 		content += optionStyle.Render("  Retry connection") + " " + keyHintStyle.Render("[R]") + "\n"
 	}
 
-	// Option 1: Switch Server
+	// Option 1: Try Different Method
 	if m.cursor == 1 {
+		content += selectedStyle.Render("→ Try different connection method") + " " + keyHintStyle.Render("[M]") + "\n"
+	} else {
+		content += optionStyle.Render("  Try different connection method") + " " + keyHintStyle.Render("[M]") + "\n"
+	}
+
+	// Option 2: Switch Server
+	if m.cursor == 2 {
 		content += selectedStyle.Render("→ Switch to different server") + " " + keyHintStyle.Render("[S]") + "\n"
 	} else {
 		content += optionStyle.Render("  Switch to different server") + " " + keyHintStyle.Render("[S]") + "\n"
 	}
 
-	// Option 2: Quit
-	if m.cursor == 2 {
+	// Option 3: Quit
+	if m.cursor == 3 {
 		content += selectedStyle.Render("→ Quit") + " " + keyHintStyle.Render("[Q]") + "\n"
 	} else {
 		content += optionStyle.Render("  Quit") + " " + keyHintStyle.Render("[Q]") + "\n"

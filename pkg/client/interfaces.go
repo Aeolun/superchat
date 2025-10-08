@@ -13,6 +13,7 @@ type ConnectionInterface interface {
 	Close()
 	IsConnected() bool
 	GetAddress() string
+	GetRawAddress() string
 
 	// Message sending
 	Send(frame *protocol.Frame) error
@@ -30,6 +31,9 @@ type ConnectionInterface interface {
 	// Traffic statistics
 	GetBytesSent() uint64
 	GetBytesReceived() uint64
+
+	// Connection information
+	GetConnectionType() string
 }
 
 // StateInterface defines the interface for client state persistence

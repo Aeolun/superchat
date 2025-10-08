@@ -143,6 +143,16 @@ func main() {
 		log.Printf("SSH server disabled (ssh_port=%d)", serverConfig.SSHPort)
 	}
 
+	// Display available connection methods
+	log.Printf("Available connection methods:")
+	log.Printf("  - Binary Protocol (TCP): port %d", serverConfig.TCPPort)
+	if serverConfig.SSHPort > 0 {
+		log.Printf("  - SSH: port %d", serverConfig.SSHPort)
+	}
+	if serverConfig.HTTPPort > 0 {
+		log.Printf("  - WebSocket: port %d (ws://server:%d/ws)", serverConfig.HTTPPort, serverConfig.HTTPPort)
+	}
+
 	// Start pprof HTTP server for profiling
 	go func() {
 		log.Println("Starting pprof server on http://localhost:6060")

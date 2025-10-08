@@ -54,10 +54,12 @@ const (
 // Model represents the application state
 type Model struct {
 	// Connection and state
-	conn             client.ConnectionInterface
-	state            client.StateInterface
-	connectionState  ConnectionState
-	reconnectAttempt int
+	conn                  client.ConnectionInterface
+	state                 client.StateInterface
+	connectionState       ConnectionState
+	reconnectAttempt      int
+	switchingMethod       bool   // True when user is trying a different connection method
+	connGeneration        uint64 // Incremented each time we replace the connection
 
 	// Directory mode (for server discovery)
 	directoryMode      bool
@@ -240,7 +242,11 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 		m.connectionState = StateDisconnected
 	} else if directoryMode {
 		// If in directory mode, show server selector immediately
-		m.modalStack.Push(modal.NewServerSelectorLoading())
+		// Check if this is first launch (no saved server)
+		savedServer, _ := state.GetConfig("directory_selected_server")
+		isFirstLaunch := savedServer == ""
+		connType := conn.GetConnectionType()
+		m.modalStack.Push(modal.NewServerSelectorLoading(isFirstLaunch, connType))
 		m.awaitingServerList = true
 	}
 
@@ -293,7 +299,9 @@ func (m *Model) registerCommands() {
 			model := i.(*Model)
 			// Show loading modal immediately and request server list
 			// If server doesn't support directory, error will show in modal
-			serverModal := modal.NewServerSelectorLoading()
+			// Not first launch when using Ctrl+L (they're switching servers)
+			connType := model.conn.GetConnectionType()
+			serverModal := modal.NewServerSelectorLoading(false, connType)
 			model.modalStack.Push(serverModal)
 			return model, model.requestServerList()
 		}).
@@ -461,7 +469,7 @@ func (m *Model) registerCommands() {
 				func(msgID uint64) tea.Cmd {
 					model.statusMessage = "Deleting message..."
 					return tea.Batch(
-						listenForServerFrames(model.conn),
+						listenForServerFrames(model.conn, model.connGeneration),
 						model.sendDeleteMessage(msgID),
 					)
 				},
@@ -1068,7 +1076,7 @@ func (m *Model) showCreateChannelModal() {
 		func(name, displayName, description string, channelType uint8) tea.Cmd {
 			m.statusMessage = "Creating channel..."
 			return tea.Batch(
-				listenForServerFrames(m.conn),
+				listenForServerFrames(m.conn, m.connGeneration),
 				m.sendCreateChannel(name, displayName, description, channelType),
 			)
 		},
@@ -1097,7 +1105,8 @@ type ConnectedMsg struct{}
 
 // DisconnectedMsg is sent when connection is lost
 type DisconnectedMsg struct {
-	Err error
+	Err        error
+	Generation uint64 // Which connection generation sent this message
 }
 
 // ReconnectingMsg is sent when attempting to reconnect
@@ -1120,10 +1129,17 @@ type WindowSizeMsg struct {
 	Height int
 }
 
+// ConnectionAttemptResultMsg is sent when an async connection attempt completes
+type ConnectionAttemptResultMsg struct {
+	Success bool
+	Method  string
+	Error   error
+}
+
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		listenForServerFrames(m.conn), // Always listen for frames
+		listenForServerFrames(m.conn, m.connGeneration), // Always listen for frames
 		tickCmd(),
 		m.spinner.Tick,
 		checkForUpdates(m.currentVersion), // Check for updates in background
@@ -1148,7 +1164,7 @@ func (m Model) Init() tea.Cmd {
 }
 
 // listenForServerFrames listens for incoming server frames and connection state changes
-func listenForServerFrames(conn client.ConnectionInterface) tea.Cmd {
+func listenForServerFrames(conn client.ConnectionInterface, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case frame := <-conn.Incoming():
@@ -1160,7 +1176,8 @@ func listenForServerFrames(conn client.ConnectionInterface) tea.Cmd {
 			case client.StateTypeConnected:
 				return ConnectedMsg{}
 			case client.StateTypeDisconnected:
-				return DisconnectedMsg{Err: stateUpdate.Err}
+				// DEBUG: Add logging here if we had access to logger
+				return DisconnectedMsg{Err: stateUpdate.Err, Generation: generation}
 			case client.StateTypeReconnecting:
 				return ReconnectingMsg{Attempt: stateUpdate.Attempt}
 			}
