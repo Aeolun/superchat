@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -75,6 +76,12 @@ CREATE TABLE IF NOT EXISTS ReadState (
 	channel_id INTEGER PRIMARY KEY,
 	last_read_at INTEGER NOT NULL,
 	last_read_message_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS ConnectionHistory (
+	server_address TEXT PRIMARY KEY,
+	last_successful_method TEXT NOT NULL,
+	last_success_at INTEGER NOT NULL
 );
 `
 	_, err := s.db.Exec(schema)
@@ -168,6 +175,31 @@ func (s *State) UpdateReadState(channelID uint64, timestamp int64, messageID *ui
 		VALUES (?, ?, ?)
 	`, channelID, timestamp, msgID)
 
+	return err
+}
+
+// GetLastSuccessfulMethod retrieves the last successful connection method for a server
+func (s *State) GetLastSuccessfulMethod(serverAddress string) (string, error) {
+	var method string
+	err := s.db.QueryRow(`
+		SELECT last_successful_method
+		FROM ConnectionHistory
+		WHERE server_address = ?
+	`, serverAddress).Scan(&method)
+
+	if err == sql.ErrNoRows {
+		return "", nil // No history for this server
+	}
+	return method, err
+}
+
+// SaveSuccessfulConnection records a successful connection method for a server
+func (s *State) SaveSuccessfulConnection(serverAddress string, method string) error {
+	now := time.Now().Unix()
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO ConnectionHistory (server_address, last_successful_method, last_success_at)
+		VALUES (?, ?, ?)
+	`, serverAddress, method, now)
 	return err
 }
 

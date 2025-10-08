@@ -212,5 +212,15 @@ func (s *MockState) Clear() {
 	s.readState = make(map[uint64]ReadStateData)
 }
 
+// GetLastSuccessfulMethod retrieves the last successful connection method (mock)
+func (s *MockState) GetLastSuccessfulMethod(serverAddress string) (string, error) {
+	return "", nil // Mock: no history
+}
+
+// SaveSuccessfulConnection records a successful connection method (mock)
+func (s *MockState) SaveSuccessfulConnection(serverAddress string, method string) error {
+	return nil // Mock: no-op
+}
+
 // Verify that MockState implements StateInterface
 var _ StateInterface = (*MockState)(nil)

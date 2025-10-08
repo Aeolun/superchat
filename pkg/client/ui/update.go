@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -75,6 +76,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listenForServerFrames(m.conn, m.connGeneration)
 
 	case ConnectedMsg:
+		if m.logger != nil {
+			m.logger.Printf("Received ConnectedMsg - handling connection success")
+		}
 		return m.handleReconnected()
 
 	case DisconnectedMsg:
@@ -803,11 +807,14 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 		// Check if nickname is registered (V2)
 		if strings.Contains(strings.ToLower(msg.Message), "registered") ||
 		   strings.Contains(strings.ToLower(msg.Message), "password") {
-			// Nickname is registered, show password modal
-			m.authErrorMessage = ""
-			m.authAttempts = 0
-			m.authCooldownUntil = time.Time{}
-			m.showPasswordModal()
+			// Nickname is registered - only show password modal if NOT in directory mode
+			// (directory connections are just for browsing servers, not authenticating)
+			if !m.directoryMode {
+				m.authErrorMessage = ""
+				m.authAttempts = 0
+				m.authCooldownUntil = time.Time{}
+				m.showPasswordModal()
+			}
 		} else {
 			// Other error (invalid nickname, etc.)
 			m.errorMessage = msg.Message
@@ -2043,8 +2050,77 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 	// Disconnect from directory server
 	m.conn.Disconnect()
 
+	// Check if we have a successful connection history for this server
+	// Try multiple address formats (with different ports) since fallback might have saved with a different port
+	host, _, _ := net.SplitHostPort(serverAddr)
+	lookupAddrs := []string{serverAddr, serverAddr}
+	if host != "" {
+		lookupAddrs = []string{serverAddr, host + ":8080", host + ":6465"}
+	}
+
+	var lastMethod string
+	for _, addr := range lookupAddrs {
+		method, err := m.state.GetLastSuccessfulMethod(addr)
+		if err == nil && method != "" {
+			lastMethod = method
+			if m.logger != nil {
+				m.logger.Printf("Found connection history for %s: %s", addr, method)
+			}
+			break
+		}
+	}
+
+	// Use the last successful method if available, otherwise default to sc:// (TCP)
+	// For SSH and WebSocket, strip the port and let the connection handler add the default port
+	address := serverAddr
+	if lastMethod != "" {
+		switch lastMethod {
+		case "ssh":
+			// Strip port from serverAddr for SSH (it will use default 6466)
+			host, _, err := net.SplitHostPort(serverAddr)
+			if err != nil {
+				// No port in serverAddr, use as-is
+				address = "ssh://" + serverAddr
+			} else {
+				// Had a port, use just the host and let SSH add default port
+				address = "ssh://" + host
+			}
+		case "wss":
+			// Strip port from serverAddr for WSS (it will use default 8080)
+			host, _, err := net.SplitHostPort(serverAddr)
+			if err != nil {
+				// No port in serverAddr, use as-is
+				address = "wss://" + serverAddr
+			} else {
+				// Had a port, use just the host and let WSS add default port
+				address = "wss://" + host
+			}
+		case "ws", "websocket":
+			// Strip port from serverAddr for WebSocket (it will use default 8080)
+			host, _, err := net.SplitHostPort(serverAddr)
+			if err != nil {
+				// No port in serverAddr, use as-is
+				address = "ws://" + serverAddr
+			} else {
+				// Had a port, use just the host and let WebSocket add default port
+				address = "ws://" + host
+			}
+		default:
+			address = "sc://" + serverAddr
+		}
+		if m.logger != nil {
+			m.logger.Printf("Using last successful method %s for %s", lastMethod, serverAddr)
+		}
+	} else {
+		// No history, default to sc:// (TCP)
+		address = "sc://" + serverAddr
+		if m.logger != nil {
+			m.logger.Printf("No connection history for %s, defaulting to TCP", serverAddr)
+		}
+	}
+
 	// Create connection to new server (returns concrete *Connection type)
-	conn, err := client.NewConnection(serverAddr)
+	conn, err := client.NewConnection(address)
 	if err != nil {
 		m.errorMessage = fmt.Sprintf("Failed to create connection: %v", err)
 		return m, nil
@@ -2075,6 +2151,21 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 	m.connectionState = StateConnected
 	m.directoryMode = false
 	m.statusMessage = fmt.Sprintf("Connected to %s", server.Name)
+
+	// Save successful connection method for future use
+	// Check the actual connection address to distinguish between ws:// and wss://
+	connType := conn.GetConnectionType()
+	connAddr := conn.GetAddress()
+	if connType == "websocket" {
+		if strings.HasPrefix(connAddr, "wss://") {
+			connType = "wss"
+		} else if strings.HasPrefix(connAddr, "ws://") {
+			connType = "ws"
+		}
+	}
+	if err := m.state.SaveSuccessfulConnection(serverAddr, connType); err != nil && m.logger != nil {
+		m.logger.Printf("Failed to save successful connection method: %v", err)
+	}
 
 	// Close the server selector modal
 	m.modalStack.Pop()
@@ -2149,6 +2240,21 @@ func (m Model) handleConnectionRetry() (tea.Model, tea.Cmd) {
 	m.statusMessage = "Connected successfully"
 	if m.logger != nil {
 		m.logger.Printf("Retry connection succeeded")
+	}
+
+	// Save successful connection method for future use
+	connType := m.conn.GetConnectionType()
+	connAddr := m.conn.GetAddress()
+	if connType == "websocket" {
+		if strings.HasPrefix(connAddr, "wss://") {
+			connType = "wss"
+		} else if strings.HasPrefix(connAddr, "ws://") {
+			connType = "ws"
+		}
+	}
+	serverAddr := m.conn.GetRawAddress()
+	if err := m.state.SaveSuccessfulConnection(serverAddr, connType); err != nil && m.logger != nil {
+		m.logger.Printf("Failed to save successful connection method: %v", err)
 	}
 
 	// Start normal operation
@@ -2239,14 +2345,31 @@ func (m Model) handleConnectionMethodSelected(msg modal.ConnectionMethodSelected
 	m.modalStack.Push(connectingModal)
 
 	// Construct the appropriate URL scheme with the raw address
+	// For SSH and WebSocket, strip the port and let the connection handler add the default port
 	var address string
 	switch msg.Method {
 	case modal.MethodTCP:
 		address = "sc://" + rawAddr
 	case modal.MethodSSH:
-		address = "ssh://" + rawAddr
+		// Strip port from rawAddr for SSH (it will use default 6466)
+		host, _, err := net.SplitHostPort(rawAddr)
+		if err != nil {
+			// No port in rawAddr, use as-is
+			address = "ssh://" + rawAddr
+		} else {
+			// Had a port, use just the host and let SSH add default port
+			address = "ssh://" + host
+		}
 	case modal.MethodWebSocket:
-		address = "ws://" + rawAddr
+		// Strip port from rawAddr for WebSocket (it will use default 6467)
+		host, _, err := net.SplitHostPort(rawAddr)
+		if err != nil {
+			// No port in rawAddr, use as-is
+			address = "ws://" + rawAddr
+		} else {
+			// Had a port, use just the host and let WebSocket add default port
+			address = "ws://" + host
+		}
 	}
 
 	// Create new connection with the selected method
@@ -2322,6 +2445,13 @@ func (m Model) handleConnectionAttemptResult(msg ConnectionAttemptResultMsg) (te
 	m.statusMessage = fmt.Sprintf("Connected via %s", msg.Method)
 	if m.logger != nil {
 		m.logger.Printf("Connection with method %s succeeded", msg.Method)
+	}
+
+	// Save successful connection method for future use
+	if err := m.state.SaveSuccessfulConnection(m.conn.GetRawAddress(), msg.Method); err != nil {
+		if m.logger != nil {
+			m.logger.Printf("Failed to save successful connection method: %v", err)
+		}
 	}
 
 	// Start normal operation

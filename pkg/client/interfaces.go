@@ -59,6 +59,10 @@ type StateInterface interface {
 	GetFirstRun() bool
 	SetFirstRunComplete() error
 
+	// Connection history
+	GetLastSuccessfulMethod(serverAddress string) (string, error)
+	SaveSuccessfulConnection(serverAddress string, method string) error
+
 	// State directory
 	GetStateDir() string
 

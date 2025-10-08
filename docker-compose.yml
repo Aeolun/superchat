@@ -7,7 +7,9 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "6465:6465" # Must expose port for TCP protocol
+      - "6465:6465" # TCP protocol
+      - "6466:6466" # SSH protocol
+      - "8080:8080" # WebSocket/HTTP
     volumes:
       - superchat-data:/data
     restart: unless-stopped

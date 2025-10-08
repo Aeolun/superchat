@@ -165,7 +165,7 @@ func (m *ConnectionMethodModal) Render(width, height int) string {
 			methodDesc = "Encrypted connection on port 6466 (requires keys)"
 		case MethodWebSocket:
 			methodName = "WebSocket"
-			methodDesc = "HTTP-based connection on port 6467 (firewall-friendly)"
+			methodDesc = "HTTP-based connection on port 8080 (firewall-friendly)"
 		}
 
 		indicator := "  "

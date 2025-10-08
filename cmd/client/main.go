@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/client/ui"
@@ -136,23 +138,122 @@ func main() {
 
 	if *server != "" {
 		// Explicit --server flag: direct connection
-		serverAddr = *server
+		// If no scheme specified, check connection history to use last successful method
+		if !strings.Contains(*server, "://") {
+			// Try exact match first, then try with common ports
+			lookupAddrs := []string{*server, *server + ":6465", *server + ":8080"}
+			var lastMethod string
+			for _, addr := range lookupAddrs {
+				method, err := state.GetLastSuccessfulMethod(addr)
+				if err == nil && method != "" {
+					lastMethod = method
+					break
+				}
+			}
+
+			if lastMethod != "" {
+				// Use last successful method
+				switch lastMethod {
+				case "ssh":
+					serverAddr = "ssh://" + *server
+				case "wss":
+					serverAddr = "wss://" + *server
+				case "ws", "websocket":
+					serverAddr = "ws://" + *server
+				default:
+					serverAddr = *server // Default to TCP
+				}
+			} else {
+				serverAddr = *server
+			}
+		} else {
+			serverAddr = *server
+		}
 	} else if *directory != "" {
 		// Explicit --directory flag: use directory mode
-		directoryServerAddr = *directory
+		// Check connection history if no scheme specified
+		if !strings.Contains(*directory, "://") {
+			lastMethod, err := state.GetLastSuccessfulMethod(*directory)
+			if err == nil && lastMethod != "" {
+				switch lastMethod {
+				case "ssh":
+					directoryServerAddr = "ssh://" + *directory
+				case "wss":
+					directoryServerAddr = "wss://" + *directory
+				case "ws", "websocket":
+					directoryServerAddr = "ws://" + *directory
+				default:
+					directoryServerAddr = *directory
+				}
+			} else {
+				directoryServerAddr = *directory
+			}
+		} else {
+			directoryServerAddr = *directory
+		}
 		useDirectory = true
 	} else {
 		// Check if we have a saved server from previous directory selection
 		savedServer, err := state.GetConfig("directory_selected_server")
 		if err == nil && savedServer != "" {
 			// User has previously selected a server, connect directly to it
-			serverAddr = savedServer
+			// Check connection history if no scheme in saved address
+			if !strings.Contains(savedServer, "://") {
+				// Try exact match first, then try with common ports
+				lookupAddrs := []string{savedServer, savedServer + ":8080"}
+				// Also try without port if it has one
+				if host, _, err := net.SplitHostPort(savedServer); err == nil {
+					lookupAddrs = append(lookupAddrs, host, host+":8080", host+":6465")
+				}
+
+				var lastMethod string
+				for _, addr := range lookupAddrs {
+					method, err := state.GetLastSuccessfulMethod(addr)
+					if err == nil && method != "" {
+						lastMethod = method
+						break
+					}
+				}
+
+				if lastMethod != "" {
+					// Use last successful method
+					switch lastMethod {
+					case "ssh":
+						serverAddr = "ssh://" + savedServer
+					case "wss":
+						serverAddr = "wss://" + savedServer
+					case "ws", "websocket":
+						serverAddr = "ws://" + savedServer
+					default:
+						serverAddr = savedServer
+					}
+				} else {
+					serverAddr = savedServer
+				}
+			} else {
+				serverAddr = savedServer
+			}
 		} else {
 			// No saved server (first run or reset) - use directory mode
 			// This shows the server selector and lets user choose
 			directoryServerAddr = config.GetServerAddress()
 			if directoryServerAddr == "" {
 				directoryServerAddr = "superchat.win:6465" // Default directory server
+			}
+			// Check connection history for directory server
+			if !strings.Contains(directoryServerAddr, "://") {
+				lastMethod, err := state.GetLastSuccessfulMethod(directoryServerAddr)
+				if err == nil && lastMethod != "" {
+					switch lastMethod {
+					case "ssh":
+						directoryServerAddr = "ssh://" + directoryServerAddr
+					case "wss":
+						directoryServerAddr = "wss://" + directoryServerAddr
+					case "ws", "websocket":
+						directoryServerAddr = "ws://" + directoryServerAddr
+					}
+					// else: keep default TCP address
+				}
 			}
 			useDirectory = true
 		}
@@ -210,6 +311,23 @@ func main() {
 		}
 		// Don't exit - let UI show error and offer recovery options
 		initialConnErr = err
+	} else {
+		// Connection successful - save the connection method for future use
+		connType := c.GetConnectionType()
+		connAddr := c.GetAddress()
+		if connType == "websocket" {
+			if strings.HasPrefix(connAddr, "wss://") {
+				connType = "wss"
+			} else if strings.HasPrefix(connAddr, "ws://") {
+				connType = "ws"
+			}
+		}
+		serverAddr := c.GetRawAddress()
+		if err := state.SaveSuccessfulConnection(serverAddr, connType); err != nil && logger != nil {
+			logger.Printf("Failed to save successful connection method: %v", err)
+		} else if logger != nil {
+			logger.Printf("Saved successful connection method: %s for %s", connType, serverAddr)
+		}
 	}
 	defer c.Close()
 

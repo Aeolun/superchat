@@ -2,9 +2,11 @@ package client
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,10 +25,16 @@ type WebSocketConn struct {
 	addr    string // Store the address for RemoteAddr()
 }
 
-// DialWebSocket connects to a WebSocket server
-func DialWebSocket(addr string) (*WebSocketConn, error) {
+// DialWebSocket connects to a WebSocket server using the specified scheme (ws or wss)
+func DialWebSocket(addr string, useTLS bool) (*WebSocketConn, error) {
+	// Determine scheme based on TLS flag
+	scheme := "ws"
+	if useTLS {
+		scheme = "wss"
+	}
+
 	// Parse address to construct WebSocket URL
-	u := url.URL{Scheme: "ws", Host: addr, Path: "/ws"}
+	u := url.URL{Scheme: scheme, Host: addr, Path: "/ws"}
 
 	// Connect with timeout
 	dialer := &websocket.Dialer{
@@ -37,6 +45,15 @@ func DialWebSocket(addr string) (*WebSocketConn, error) {
 
 	ws, _, err := dialer.Dial(u.String(), nil)
 	if err != nil {
+		// Improve error message for common TLS/handshake issues
+		errStr := err.Error()
+		if strings.Contains(errStr, "bad handshake") {
+			if useTLS {
+				return nil, fmt.Errorf("TLS handshake failed - server may not support WSS (try ws:// instead): %w", err)
+			} else {
+				return nil, fmt.Errorf("handshake failed - server may require WSS/TLS (try wss:// instead): %w", err)
+			}
+		}
 		return nil, err
 	}
 
