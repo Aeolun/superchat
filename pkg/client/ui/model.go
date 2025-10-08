@@ -129,6 +129,9 @@ type Model struct {
 	authCooldownUntil time.Time // For rate limiting
 	authErrorMessage  string    // For displaying errors in password modal
 
+	// First post warning (session-level, resets on restart)
+	firstPostWarningAskedThisSession bool // True if warning was shown this session
+
 	// Initialization state machine
 	initStateMachine *InitStateMachine
 
@@ -385,7 +388,7 @@ func (m *Model) registerCommands() {
 				return model, nil
 			}
 
-			model.showComposeModal(modal.ComposeModeReply, "")
+			model.showComposeWithWarning(modal.ComposeModeReply, "")
 			return model, nil
 		}).
 		Priority(20).
@@ -626,7 +629,7 @@ func (m *Model) registerCommands() {
 				return model, nil
 			}
 
-			model.showComposeModal(modal.ComposeModeNewThread, "")
+			model.showComposeWithWarning(modal.ComposeModeNewThread, "")
 			return model, nil
 		}).
 		Priority(60).
@@ -1086,6 +1089,73 @@ func (m *Model) showCreateChannelModal() {
 		},
 	)
 	m.modalStack.Push(createChannelModal)
+}
+
+// showRegistrationWarningModal displays the first post warning modal
+func (m *Model) showRegistrationWarningModal(onProceed func() tea.Cmd) {
+	registrationWarningModal := modal.NewRegistrationWarningModal(
+		func() tea.Cmd {
+			// Post anonymously and don't ask again
+			m.state.SetFirstPostWarningDismissed()
+			m.firstPostWarningAskedThisSession = true
+			if onProceed != nil {
+				return onProceed()
+			}
+			return nil
+		},
+		func() tea.Cmd {
+			// Post anonymously but ask again later
+			m.firstPostWarningAskedThisSession = true
+			if onProceed != nil {
+				return onProceed()
+			}
+			return nil
+		},
+		func() tea.Cmd {
+			// Register first
+			m.showRegistrationModal()
+			return nil
+		},
+		func() tea.Cmd {
+			// Cancel posting
+			return nil
+		},
+	)
+	m.modalStack.Push(registrationWarningModal)
+}
+
+// shouldShowRegistrationWarning returns true if we should show the registration warning
+func (m *Model) shouldShowRegistrationWarning() bool {
+	// Don't show if user is authenticated (registered)
+	if m.authState == AuthStateAuthenticated && m.userID != nil {
+		return false
+	}
+
+	// Don't show if permanently dismissed
+	if m.state.GetFirstPostWarningDismissed() {
+		return false
+	}
+
+	// Don't show if already asked this session
+	if m.firstPostWarningAskedThisSession {
+		return false
+	}
+
+	return true
+}
+
+// showComposeWithWarning shows the compose modal, potentially with registration warning first
+func (m *Model) showComposeWithWarning(mode modal.ComposeMode, initialContent string) {
+	if m.shouldShowRegistrationWarning() {
+		// Show warning modal first, then compose modal when user proceeds
+		m.showRegistrationWarningModal(func() tea.Cmd {
+			m.showComposeModal(mode, initialContent)
+			return nil
+		})
+	} else {
+		// Go directly to compose
+		m.showComposeModal(mode, initialContent)
+	}
 }
 
 // Message types for bubbletea

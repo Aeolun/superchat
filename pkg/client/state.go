@@ -218,3 +218,14 @@ func (s *State) SetFirstRunComplete() error {
 func (s *State) GetStateDir() string {
 	return s.dir
 }
+
+// GetFirstPostWarningDismissed checks if the user has permanently dismissed the first post warning
+func (s *State) GetFirstPostWarningDismissed() bool {
+	val, _ := s.GetConfig("first_post_warning_dismissed")
+	return val == "true"
+}
+
+// SetFirstPostWarningDismissed marks the first post warning as permanently dismissed
+func (s *State) SetFirstPostWarningDismissed() error {
+	return s.SetConfig("first_post_warning_dismissed", "true")
+}

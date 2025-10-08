@@ -597,8 +597,21 @@ func (m Model) handleChatChannelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Send message if input is not empty
 		content := strings.TrimSpace(m.chatTextarea.Value())
 		if content != "" {
-			m.chatTextarea.Reset() // Clear textarea
-			return m.sendChatMessageWithContent(content)
+			// Check if we should show registration warning
+			if m.shouldShowRegistrationWarning() {
+				// Store content and show warning
+				m.showRegistrationWarningModal(func() tea.Cmd {
+					// Clear textarea and send message when user proceeds
+					m.chatTextarea.Reset()
+					_, cmd := m.sendChatMessageWithContent(content)
+					return cmd
+				})
+				return m, nil
+			} else {
+				// Send directly
+				m.chatTextarea.Reset() // Clear textarea
+				return m.sendChatMessageWithContent(content)
+			}
 		}
 		return m, nil
 

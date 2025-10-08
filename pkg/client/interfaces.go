@@ -59,6 +59,10 @@ type StateInterface interface {
 	GetFirstRun() bool
 	SetFirstRunComplete() error
 
+	// First post warning tracking
+	GetFirstPostWarningDismissed() bool
+	SetFirstPostWarningDismissed() error
+
 	// Connection history
 	GetLastSuccessfulMethod(serverAddress string) (string, error)
 	SaveSuccessfulConnection(serverAddress string, method string) error

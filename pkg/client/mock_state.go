@@ -222,5 +222,16 @@ func (s *MockState) SaveSuccessfulConnection(serverAddress string, method string
 	return nil // Mock: no-op
 }
 
+// GetFirstPostWarningDismissed checks if the first post warning has been dismissed (mock)
+func (s *MockState) GetFirstPostWarningDismissed() bool {
+	val, _ := s.GetConfig("first_post_warning_dismissed")
+	return val == "true"
+}
+
+// SetFirstPostWarningDismissed marks the first post warning as dismissed (mock)
+func (s *MockState) SetFirstPostWarningDismissed() error {
+	return s.SetConfig("first_post_warning_dismissed", "true")
+}
+
 // Verify that MockState implements StateInterface
 var _ StateInterface = (*MockState)(nil)
