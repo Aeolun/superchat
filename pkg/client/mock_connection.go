@@ -90,6 +90,16 @@ func (m *MockConnection) GetAddress() string {
 	return m.address
 }
 
+// GetRawAddress returns the raw address without scheme
+func (m *MockConnection) GetRawAddress() string {
+	return m.address
+}
+
+// GetConnectionType returns the connection type (always "tcp" for mock)
+func (m *MockConnection) GetConnectionType() string {
+	return "tcp"
+}
+
 // Send sends a frame (records it for verification)
 func (m *MockConnection) Send(frame *protocol.Frame) error {
 	m.mu.Lock()

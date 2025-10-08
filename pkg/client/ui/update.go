@@ -2050,73 +2050,33 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 	// Disconnect from directory server
 	m.conn.Disconnect()
 
-	// Check if we have a successful connection history for this server
-	// Try multiple address formats (with different ports) since fallback might have saved with a different port
-	host, _, _ := net.SplitHostPort(serverAddr)
-	lookupAddrs := []string{serverAddr, serverAddr}
-	if host != "" {
-		lookupAddrs = []string{serverAddr, host + ":8080", host + ":6465"}
+	// Use helper function to resolve connection method based on history
+	address := client.ResolveConnectionMethod(serverAddr, m.state, m.logger)
+	
+	// For SSH and WebSocket connections, we may need to strip the port
+	// since the connection handler will add the default port
+	if strings.HasPrefix(address, "ssh://") || strings.HasPrefix(address, "ws://") || strings.HasPrefix(address, "wss://") {
+		// Extract scheme and host
+		if idx := strings.Index(address, "://"); idx != -1 {
+			scheme := address[:idx+3]
+			hostPart := address[idx+3:]
+			
+			// Strip port if present for SSH and WebSocket
+			if scheme == "ssh://" || scheme == "ws://" || scheme == "wss://" {
+				if host, _, err := net.SplitHostPort(hostPart); err == nil {
+					// Had a port, use just the host
+					address = scheme + host
+				}
+				// Otherwise keep as-is (no port to strip)
+			}
+		}
+	} else if !strings.Contains(address, "://") {
+		// No scheme returned, add default sc:// for TCP
+		address = "sc://" + address
 	}
 
-	var lastMethod string
-	for _, addr := range lookupAddrs {
-		method, err := m.state.GetLastSuccessfulMethod(addr)
-		if err == nil && method != "" {
-			lastMethod = method
-			if m.logger != nil {
-				m.logger.Printf("Found connection history for %s: %s", addr, method)
-			}
-			break
-		}
-	}
-
-	// Use the last successful method if available, otherwise default to sc:// (TCP)
-	// For SSH and WebSocket, strip the port and let the connection handler add the default port
-	address := serverAddr
-	if lastMethod != "" {
-		switch lastMethod {
-		case "ssh":
-			// Strip port from serverAddr for SSH (it will use default 6466)
-			host, _, err := net.SplitHostPort(serverAddr)
-			if err != nil {
-				// No port in serverAddr, use as-is
-				address = "ssh://" + serverAddr
-			} else {
-				// Had a port, use just the host and let SSH add default port
-				address = "ssh://" + host
-			}
-		case "wss":
-			// Strip port from serverAddr for WSS (it will use default 8080)
-			host, _, err := net.SplitHostPort(serverAddr)
-			if err != nil {
-				// No port in serverAddr, use as-is
-				address = "wss://" + serverAddr
-			} else {
-				// Had a port, use just the host and let WSS add default port
-				address = "wss://" + host
-			}
-		case "ws", "websocket":
-			// Strip port from serverAddr for WebSocket (it will use default 8080)
-			host, _, err := net.SplitHostPort(serverAddr)
-			if err != nil {
-				// No port in serverAddr, use as-is
-				address = "ws://" + serverAddr
-			} else {
-				// Had a port, use just the host and let WebSocket add default port
-				address = "ws://" + host
-			}
-		default:
-			address = "sc://" + serverAddr
-		}
-		if m.logger != nil {
-			m.logger.Printf("Using last successful method %s for %s", lastMethod, serverAddr)
-		}
-	} else {
-		// No history, default to sc:// (TCP)
-		address = "sc://" + serverAddr
-		if m.logger != nil {
-			m.logger.Printf("No connection history for %s, defaulting to TCP", serverAddr)
-		}
+	if m.logger != nil {
+		m.logger.Printf("Resolved connection address: %s", address)
 	}
 
 	// Create connection to new server (returns concrete *Connection type)

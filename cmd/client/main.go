@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +126,16 @@ func main() {
 	}
 	defer state.Close()
 
+	// Set up debug logger early (before determining connection address)
+	logger, logFile, err := setupLogger(state.GetStateDir())
+	if err != nil {
+		log.Printf("Warning: Failed to set up debug logging: %v", err)
+		// Continue without logging - not a fatal error
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
+
 	// Determine connection mode:
 	// - If --server flag: connect directly to that server
 	// - If --directory flag: connect to directory server to fetch server list
@@ -138,101 +147,20 @@ func main() {
 
 	if *server != "" {
 		// Explicit --server flag: direct connection
-		// If no scheme specified, check connection history to use last successful method
-		if !strings.Contains(*server, "://") {
-			// Try exact match first, then try with common ports
-			lookupAddrs := []string{*server, *server + ":6465", *server + ":8080"}
-			var lastMethod string
-			for _, addr := range lookupAddrs {
-				method, err := state.GetLastSuccessfulMethod(addr)
-				if err == nil && method != "" {
-					lastMethod = method
-					break
-				}
-			}
-
-			if lastMethod != "" {
-				// Use last successful method
-				switch lastMethod {
-				case "ssh":
-					serverAddr = "ssh://" + *server
-				case "wss":
-					serverAddr = "wss://" + *server
-				case "ws", "websocket":
-					serverAddr = "ws://" + *server
-				default:
-					serverAddr = *server // Default to TCP
-				}
-			} else {
-				serverAddr = *server
-			}
-		} else {
-			serverAddr = *server
-		}
+		// Use helper function to resolve connection method based on history
+		serverAddr = client.ResolveConnectionMethod(*server, state, logger)
 	} else if *directory != "" {
 		// Explicit --directory flag: use directory mode
-		// Check connection history if no scheme specified
-		if !strings.Contains(*directory, "://") {
-			lastMethod, err := state.GetLastSuccessfulMethod(*directory)
-			if err == nil && lastMethod != "" {
-				switch lastMethod {
-				case "ssh":
-					directoryServerAddr = "ssh://" + *directory
-				case "wss":
-					directoryServerAddr = "wss://" + *directory
-				case "ws", "websocket":
-					directoryServerAddr = "ws://" + *directory
-				default:
-					directoryServerAddr = *directory
-				}
-			} else {
-				directoryServerAddr = *directory
-			}
-		} else {
-			directoryServerAddr = *directory
-		}
+		// Use helper function to resolve connection method based on history
+		directoryServerAddr = client.ResolveConnectionMethod(*directory, state, logger)
 		useDirectory = true
 	} else {
 		// Check if we have a saved server from previous directory selection
 		savedServer, err := state.GetConfig("directory_selected_server")
 		if err == nil && savedServer != "" {
 			// User has previously selected a server, connect directly to it
-			// Check connection history if no scheme in saved address
-			if !strings.Contains(savedServer, "://") {
-				// Try exact match first, then try with common ports
-				lookupAddrs := []string{savedServer, savedServer + ":8080"}
-				// Also try without port if it has one
-				if host, _, err := net.SplitHostPort(savedServer); err == nil {
-					lookupAddrs = append(lookupAddrs, host, host+":8080", host+":6465")
-				}
-
-				var lastMethod string
-				for _, addr := range lookupAddrs {
-					method, err := state.GetLastSuccessfulMethod(addr)
-					if err == nil && method != "" {
-						lastMethod = method
-						break
-					}
-				}
-
-				if lastMethod != "" {
-					// Use last successful method
-					switch lastMethod {
-					case "ssh":
-						serverAddr = "ssh://" + savedServer
-					case "wss":
-						serverAddr = "wss://" + savedServer
-					case "ws", "websocket":
-						serverAddr = "ws://" + savedServer
-					default:
-						serverAddr = savedServer
-					}
-				} else {
-					serverAddr = savedServer
-				}
-			} else {
-				serverAddr = savedServer
-			}
+			// Use helper function to resolve connection method based on history
+			serverAddr = client.ResolveConnectionMethod(savedServer, state, logger)
 		} else {
 			// No saved server (first run or reset) - use directory mode
 			// This shows the server selector and lets user choose
@@ -240,33 +168,10 @@ func main() {
 			if directoryServerAddr == "" {
 				directoryServerAddr = "superchat.win:6465" // Default directory server
 			}
-			// Check connection history for directory server
-			if !strings.Contains(directoryServerAddr, "://") {
-				lastMethod, err := state.GetLastSuccessfulMethod(directoryServerAddr)
-				if err == nil && lastMethod != "" {
-					switch lastMethod {
-					case "ssh":
-						directoryServerAddr = "ssh://" + directoryServerAddr
-					case "wss":
-						directoryServerAddr = "wss://" + directoryServerAddr
-					case "ws", "websocket":
-						directoryServerAddr = "ws://" + directoryServerAddr
-					}
-					// else: keep default TCP address
-				}
-			}
+			// Use helper function to resolve connection method for directory server
+			directoryServerAddr = client.ResolveConnectionMethod(directoryServerAddr, state, logger)
 			useDirectory = true
 		}
-	}
-
-	// Set up debug logger
-	logger, logFile, err := setupLogger(state.GetStateDir())
-	if err != nil {
-		log.Printf("Warning: Failed to set up debug logging: %v", err)
-		// Continue without logging - not a fatal error
-	}
-	if logFile != nil {
-		defer logFile.Close()
 	}
 
 	// Create connection - either to chat server directly or to directory server
