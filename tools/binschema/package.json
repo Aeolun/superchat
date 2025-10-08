@@ -1,0 +1,26 @@
+{
+  "name": "binschema",
+  "version": "0.1.0",
+  "description": "Bit-level binary serialization schema and code generator",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test",
+    "watch": "tsc --watch"
+  },
+  "keywords": [
+    "binary",
+    "serialization",
+    "codegen",
+    "protocol"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
+  }
+}
