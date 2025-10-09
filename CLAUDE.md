@@ -186,6 +186,13 @@ make clean
 # Run load/performance tests
 go build -o loadtest ./cmd/loadtest
 ./loadtest --server localhost:6465 --clients 200 --duration 10s --min-delay 100ms --max-delay 500ms
+
+# BinSchema tests (in tools/binschema/)
+cd tools/binschema
+npm test                                       # Run all BinSchema tests (~0.15s with bun!)
+bun run src/run-tests.ts --filter=<pattern>   # Run specific tests
+bun run src/run-tests.ts --filter=uint16      # Example: only uint16 tests
+bun run src/run-tests.ts --filter=optional    # Example: only optional tests
 ```
 
 ### Load Testing

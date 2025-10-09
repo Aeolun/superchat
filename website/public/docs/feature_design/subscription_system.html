@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscription-Based Message Broadcasting - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>Subscription-Based Message Broadcasting</h1>
+<p><strong>Status:</strong> ✅ IMPLEMENTED - This is a historical design document</p>
+<p><strong>Implementation:</strong> The subscription system is fully implemented as of V1. See:</p>
+<ul>
+<li>Protocol messages: <code>pkg/protocol/messages.go</code> (0x51-0x54, 0x99)</li>
+<li>Server handlers: <code>pkg/server/handlers.go</code> (<code>handleSubscribeThread</code>, <code>handleSubscribeChannel</code>)</li>
+<li>Client implementation: <code>pkg/client/ui/update.go</code> (subscription management)</li>
+</ul>
+<hr>
+<h2>Original Problem Statement (Historical)</h2>
+<p>Currently, the server broadcasts NEW_MESSAGE events to all clients in a channel, regardless of whether they care about those specific messages. With 2000 concurrent clients, this causes:</p>
+<ul>
+<li>High response latency (~978ms vs 11ms with 500 clients)</li>
+<li>Wasted bandwidth sending messages clients don&#39;t need</li>
+<li>Clients receiving broadcasts while waiting for POST responses</li>
+</ul>
+<h2>Proposed Solution</h2>
+<p>Implement explicit subscription model where clients subscribe to specific threads or channels they&#39;re actively viewing.</p>
+<h3>Protocol Messages</h3>
+<p><strong>Client → Server:</strong></p>
+<pre><code>SUBSCRIBE_THREAD (0x51)
+  thread_id: uint64     // Root message ID of thread to subscribe to
+
+UNSUBSCRIBE_THREAD (0x52)
+  thread_id: uint64
+
+SUBSCRIBE_CHANNEL (0x53)
+  channel_id: uint64
+  subchannel_id: Optional uint64  // If present, subscribe to subchannel
+
+UNSUBSCRIBE_CHANNEL (0x54)
+  channel_id: uint64
+  subchannel_id: Optional uint64
+</code></pre>
+<p><strong>Server → Client:</strong></p>
+<pre><code>SUBSCRIBE_OK (0x99)
+  type: uint8           // 1=thread, 2=channel
+  id: uint64           // thread_id or channel_id
+  subchannel_id: Optional uint64  // Present if subscribing to subchannel
+</code></pre>
+<p><strong>Error Responses</strong> (reuses existing ERROR 0x91):</p>
+<pre><code>ERROR (0x91)
+  error_code: uint32
+  error_message: string
+
+Error codes for subscriptions:
+  4001: Thread does not exist
+  4004: Channel/subchannel does not exist
+  5004: Thread subscription limit exceeded (max 50 per session)
+  5005: Channel subscription limit exceeded (max 10 per session)
+</code></pre>
+<h3>Session State Changes</h3>
+<p>Add to <code>Session</code> struct:</p>
+<pre><code class="language-go">type ChannelSubscription struct {
+    ChannelID    uint64
+    SubchannelID *uint64  // nil for main channel
+}
+
+type Session struct {
+    // ... existing fields ...
+
+    // Subscriptions
+    subscribedThreads  map[uint64]bool              // thread_id -&gt; true
+    subscribedChannels map[ChannelSubscription]bool // channel/subchannel -&gt; true
+    subMu             sync.RWMutex                  // protects subscription maps
+}
+</code></pre>
+<h3>Broadcast Logic Changes</h3>
+<p><strong>Current:</strong></p>
+<pre><code class="language-go">func (sm *SessionManager) BroadcastToChannel(channelID int64, frame *protocol.Frame) {
+    for _, sess := range sm.sessions {
+        if sess.JoinedChannel == channelID {
+            sess.Conn.EncodeFrame(frame)
+        }
+    }
+}
+</code></pre>
+<p><strong>Proposed (with encode-once optimization):</strong></p>
+<pre><code class="language-go">func (sm *SessionManager) BroadcastNewMessage(msg *protocol.NewMessageMessage) error {
+    // Determine if this is a top-level thread or a reply
+    isTopLevel := msg.ParentID == nil || !*msg.ParentID
+    threadRootID := msg.ThreadRootID  // Client provides this in POST_MESSAGE
+
+    // Encode frame ONCE (not per-recipient)
+    var buf bytes.Buffer
+    frame := &amp;protocol.Frame{
+        Version: protocol.ProtocolVersion,
+        Type:    protocol.TypeNewMessage,
+        Flags:   0,
+        Payload: msg,
+    }
+    if err := protocol.EncodeFrame(&amp;buf, frame); err != nil {
+        return err
+    }
+    frameBytes := buf.Bytes()
+
+    // Build channel subscription key
+    channelSub := ChannelSubscription{
+        ChannelID:    msg.ChannelID,
+        SubchannelID: msg.SubchannelID,
+    }
+
+    // Broadcast to subscribers only
+    sm.mu.RLock()
+    defer sm.mu.RUnlock()
+
+    for _, sess := range sm.sessions {
+        sess.subMu.RLock()
+        shouldSend := false
+
+        if isTopLevel {
+            // Top-level: send to channel subscribers
+            shouldSend = sess.subscribedChannels[channelSub]
+        } else {
+            // Reply: send to thread subscribers
+            shouldSend = sess.subscribedThreads[threadRootID]
+        }
+        sess.subMu.RUnlock()
+
+        if shouldSend {
+            // Write pre-encoded bytes (no re-encoding)
+            sess.Conn.writeMu.Lock()
+            sess.Conn.Write(frameBytes)
+            sess.Conn.writeMu.Unlock()
+        }
+    }
+
+    return nil
+}
+</code></pre>
+<h3>Client Behavior Changes</h3>
+<p><strong>Channel List View:</strong></p>
+<ul>
+<li>No subscriptions active (just shows channels, no messages)</li>
+</ul>
+<p><strong>Thread List View:</strong></p>
+<ul>
+<li><code>SUBSCRIBE_CHANNEL &lt;channel_id&gt;</code> when entering view</li>
+<li><code>UNSUBSCRIBE_CHANNEL &lt;channel_id&gt;</code> when leaving view</li>
+<li>Receives NEW_MESSAGE for new top-level threads only</li>
+</ul>
+<p><strong>Thread View:</strong></p>
+<ul>
+<li><code>SUBSCRIBE_THREAD &lt;thread_id&gt;</code> when entering thread</li>
+<li><code>UNSUBSCRIBE_THREAD &lt;thread_id&gt;</code> when leaving thread</li>
+<li>Receives NEW_MESSAGE for all replies in that thread</li>
+</ul>
+<p><strong>Message Composition:</strong></p>
+<ul>
+<li>Keep existing subscriptions active</li>
+<li>Client buffers incoming NEW_MESSAGE events (already does this)</li>
+</ul>
+<h3>Backward Compatibility</h3>
+<p><strong>V1 Implementation:</strong></p>
+<ul>
+<li>These are new message types (0x51-0x54, 0x99)</li>
+<li>Reuses existing ERROR (0x91) with new error codes</li>
+<li>Can be added incrementally without breaking existing clients</li>
+<li>Add subscription support in V1 Phase 2 (after core stability)</li>
+</ul>
+<p><strong>Migration Path:</strong></p>
+<ol>
+<li>Add protocol message definitions (SUBSCRIBE_*, SUBSCRIBE_OK)</li>
+<li>Update POST_MESSAGE to include thread_root_id field</li>
+<li>Add session subscription tracking (ChannelSubscription struct, maps, locks)</li>
+<li>Implement SUBSCRIBE/UNSUBSCRIBE handlers with validation</li>
+<li>Update broadcast logic to check subscriptions and use encode-once</li>
+<li>Update client to send subscribe/unsubscribe messages</li>
+<li>Update client to provide thread_root_id when posting replies</li>
+<li>Test under load (expect &lt;50ms at 2000 clients)</li>
+</ol>
+<h3>Error Cases</h3>
+<p><strong>ERROR (0x91) codes for subscriptions:</strong></p>
+<ul>
+<li><code>4001</code>: Thread does not exist (validated on SUBSCRIBE_THREAD)</li>
+<li><code>4004</code>: Channel/subchannel does not exist (validated on SUBSCRIBE_CHANNEL)</li>
+<li><code>5004</code>: Thread subscription limit exceeded (max 50 per session)</li>
+<li><code>5005</code>: Channel subscription limit exceeded (max 10 per session)</li>
+</ul>
+<p><strong>Note:</strong> Duplicate subscriptions are idempotent (return SUBSCRIBE_OK, no error).</p>
+<p><strong>Subscription Limits:</strong></p>
+<ul>
+<li>Max 50 thread subscriptions per session</li>
+<li>Max 10 channel subscriptions per session</li>
+<li>Automatically clean up on session disconnect</li>
+</ul>
+<h3>Performance Expectations</h3>
+<p><strong>With 2000 clients:</strong></p>
+<ul>
+<li>Assume 50 channels, ~40 clients per channel</li>
+<li>If viewing thread list: ~40 subscribers per channel (vs 2000 previously)</li>
+<li>If viewing specific thread: ~5-10 subscribers per thread on average</li>
+<li><strong>Expected improvement:</strong> 20-50x reduction in broadcast fan-out</li>
+</ul>
+<p><strong>Latency improvement:</strong></p>
+<ul>
+<li>Current: 978ms average response time</li>
+<li>Expected: &lt;50ms (closer to 500-client performance of 11ms)</li>
+</ul>
+<h3>Design Decisions</h3>
+<ol>
+<li><p><strong>JOIN_CHANNEL does NOT auto-subscribe</strong></p>
+<ul>
+<li>Subscriptions are explicit - client must send SUBSCRIBE_CHANNEL after joining</li>
+<li>Prevents unwanted broadcasts before user navigates to thread list</li>
+<li>Single round-trip cost (&lt;1ms) is negligible</li>
+</ul>
+</li>
+<li><p><strong>Disconnect/reconnect behavior</strong></p>
+<ul>
+<li>All subscriptions cleared on disconnect</li>
+<li>Client tracks active subscriptions in local state</li>
+<li>On reconnect: client re-joins channel and re-subscribes as needed</li>
+</ul>
+</li>
+<li><p><strong>No batch operations (for now)</strong></p>
+<ul>
+<li>Users typically view one thread at a time</li>
+<li>Can add SUBSCRIBE_BATCH in V2 if profiling shows need</li>
+<li>YAGNI - avoid premature optimization</li>
+</ul>
+</li>
+<li><p><strong>Thread root resolution: Client provides thread_root_id</strong></p>
+<ul>
+<li>Client knows the thread root (fetched when entering thread view)</li>
+<li>POST_MESSAGE includes thread_root_id field for replies</li>
+<li>Avoids database lookup in server&#39;s critical broadcast path</li>
+<li>For top-level messages, thread_root_id = message_id (self-referential)</li>
+</ul>
+</li>
+<li><p><strong>No server-initiated unsubscribe on thread deletion</strong></p>
+<ul>
+<li>Existing MESSAGE_DELETED (0x8C) broadcasts deletions</li>
+<li>Client receives deletion, removes thread from UI, implicitly unsubscribes</li>
+<li>Stale subscriptions in server are harmless (no messages will match)</li>
+</ul>
+</li>
+</ol>
+<h2>Implementation Summary</h2>
+<p><strong>Technical Review: APPROVED with modifications</strong> (all critical issues addressed in this spec)</p>
+<p><strong>Recommendation:</strong> Implement in <strong>V1 Phase 2</strong> (after core stability, before public launch)</p>
+<p><strong>Priority:</strong> High (20-50x performance improvement at scale)</p>
+<p><strong>Risk:</strong> Low (additive change, no breaking changes, rollback available)</p>
+<p><strong>Effort:</strong> ~8 hours (protocol + server + client + testing)</p>
+<p><strong>Critical Fixes Applied:</strong></p>
+<ul>
+<li>✅ Client provides thread_root_id in POST_MESSAGE (avoids thread hierarchy bug)</li>
+<li>✅ Message type changed to 0x99 for SUBSCRIBE_OK (avoids conflict with ERROR 0x91)</li>
+<li>✅ Error codes use 4xxx/5xxx ranges (avoids conflicts with existing 1xxx codes)</li>
+<li>✅ Added subchannel support (ChannelSubscription struct)</li>
+<li>✅ Encode-once optimization (encode frame once, write N times)</li>
+<li>✅ Subscription validation on subscribe (check thread/channel exists)</li>
+<li>✅ Idempotent duplicate subscriptions (no error)</li>
+</ul>
+<p><strong>Expected Performance:</strong></p>
+<ul>
+<li>Current (2000 clients): 978ms average response time</li>
+<li>With subscriptions: &lt;50ms average response time</li>
+<li>At 10k clients: bottleneck shifts to database (good!)</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

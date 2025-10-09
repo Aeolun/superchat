@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat Deployment Guide - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat Deployment Guide</h1>
+<p>Complete guide for deploying SuperChat server in production.</p>
+<h2>Table of Contents</h2>
+<ul>
+<li><a href="#prerequisites">Prerequisites</a></li>
+<li><a href="#deployment-methods">Deployment Methods</a><ul>
+<li><a href="#binary-installation-recommended">Binary Installation (Recommended)</a></li>
+<li><a href="#docker-deployment">Docker Deployment</a></li>
+<li><a href="#building-from-source">Building from Source</a></li>
+</ul>
+</li>
+<li><a href="#initial-setup">Initial Setup</a></li>
+<li><a href="#process-management">Process Management</a></li>
+<li><a href="#verification">Verification</a></li>
+<li><a href="#quick-start-checklist">Quick Start Checklist</a></li>
+<li><a href="#troubleshooting">Troubleshooting</a></li>
+</ul>
+<h2>Prerequisites</h2>
+<h3>System Requirements</h3>
+<p><strong>Minimum:</strong></p>
+<ul>
+<li>CPU: 1 core (2.0 GHz)</li>
+<li>RAM: 512 MB</li>
+<li>Disk: 1 GB free space</li>
+<li>OS: Linux (Ubuntu 20.04+, Debian 11+, CentOS 8+, Arch), macOS, FreeBSD</li>
+</ul>
+<p><strong>Recommended for Production:</strong></p>
+<ul>
+<li>CPU: 4 cores (3.0 GHz+)</li>
+<li>RAM: 4 GB</li>
+<li>Disk: 10 GB free space (for logs and database)</li>
+<li>OS: Linux (Ubuntu 22.04 LTS or Debian 12)</li>
+</ul>
+<p><strong>Performance Targets:</strong></p>
+<ul>
+<li>Up to 10,000 concurrent connections per server</li>
+<li>Average response time: ~75ms</li>
+<li>CPU is the limiting factor (not memory or I/O)</li>
+</ul>
+<h3>Network Requirements</h3>
+<p><strong>Required Ports:</strong></p>
+<ul>
+<li><strong>6465</strong> (TCP) - Binary protocol connections</li>
+<li><strong>6466</strong> (TCP) - SSH connections (optional, for V2 SSH auth)</li>
+<li><strong>6467</strong> (TCP) - WebSocket connections (HTTP/WS)</li>
+</ul>
+<p><strong>Optional Ports:</strong></p>
+<ul>
+<li><strong>9090</strong> (TCP) - Prometheus metrics (<strong>NEVER expose publicly!</strong>)</li>
+<li><strong>6060</strong> (TCP) - pprof profiling (<strong>NEVER expose publicly!</strong>)</li>
+</ul>
+<h3>Software Dependencies</h3>
+<ul>
+<li><strong>For binary installation:</strong> None (statically compiled binaries)</li>
+<li><strong>For Docker:</strong> Docker 20.10+ and Docker Compose 2.0+</li>
+<li><strong>For source build:</strong> Go 1.23+, make, git</li>
+</ul>
+<h3>Firewall Configuration</h3>
+<p><strong>iptables example (Ubuntu/Debian):</strong></p>
+<pre><code class="language-bash"># Allow SuperChat ports
+sudo iptables -A INPUT -p tcp --dport 6465 -j ACCEPT  # Binary TCP
+sudo iptables -A INPUT -p tcp --dport 6466 -j ACCEPT  # SSH
+sudo iptables -A INPUT -p tcp --dport 6467 -j ACCEPT  # WebSocket
+
+# DENY metrics and profiling ports (security critical!)
+sudo iptables -A INPUT -p tcp --dport 9090 -j DROP
+sudo iptables -A INPUT -p tcp --dport 6060 -j DROP
+
+# Save rules
+sudo netfilter-persistent save
+</code></pre>
+<p><strong>ufw example (Ubuntu):</strong></p>
+<pre><code class="language-bash">sudo ufw allow 6465/tcp comment &#39;SuperChat Binary&#39;
+sudo ufw allow 6466/tcp comment &#39;SuperChat SSH&#39;
+sudo ufw allow 6467/tcp comment &#39;SuperChat WebSocket&#39;
+sudo ufw deny 9090/tcp comment &#39;SuperChat Metrics (internal only)&#39;
+sudo ufw deny 6060/tcp comment &#39;SuperChat pprof (internal only)&#39;
+sudo ufw enable
+</code></pre>
+<h2>Deployment Methods</h2>
+<h3>Binary Installation (Recommended)</h3>
+<p>Binary installation is the recommended method for production deployments.</p>
+<h4>1. Create dedicated user (recommended)</h4>
+<pre><code class="language-bash"># Create system user for SuperChat
+sudo useradd -r -s /bin/false -d /var/lib/superchat superchat
+
+# Create required directories
+sudo mkdir -p /var/lib/superchat
+sudo mkdir -p /etc/superchat
+sudo chown superchat:superchat /var/lib/superchat
+</code></pre>
+<h4>2. Download and install binaries</h4>
+<p><strong>Automated installation (user-level):</strong></p>
+<pre><code class="language-bash"># Install to ~/.local/bin (no sudo required)
+curl -fsSL https://raw.githubusercontent.com/aeolun/superchat/main/install.sh | sh
+</code></pre>
+<p><strong>Automated installation (system-wide):</strong></p>
+<pre><code class="language-bash"># Install to /usr/bin (requires sudo)
+curl -fsSL https://raw.githubusercontent.com/aeolun/superchat/main/install.sh | sudo sh -s -- --global
+</code></pre>
+<p><strong>Manual installation:</strong></p>
+<pre><code class="language-bash"># Download latest release
+VERSION=&quot;v1.0.0&quot;  # Replace with latest version
+OS=&quot;linux&quot;        # linux, darwin, freebsd
+ARCH=&quot;amd64&quot;      # amd64, arm64
+
+# Download server binary
+curl -fsSL -o scd \
+  &quot;https://github.com/aeolun/superchat/releases/download/${VERSION}/superchat-server-${OS}-${ARCH}&quot;
+
+# Install binary
+sudo mv scd /usr/local/bin/scd
+sudo chmod +x /usr/local/bin/scd
+sudo chown root:root /usr/local/bin/scd
+
+# Verify installation
+scd --version
+</code></pre>
+<h4>3. Create configuration file</h4>
+<pre><code class="language-bash"># Create configuration
+sudo tee /etc/superchat/config.toml &gt; /dev/null &lt;&lt;&#39;EOF&#39;
+[server]
+tcp_port = 6465
+ssh_port = 6466
+websocket_port = 6467
+database_path = &quot;/var/lib/superchat/superchat.db&quot;
+
+[limits]
+max_connections = 10000
+rate_limit_messages_per_minute = 10
+session_timeout_seconds = 60
+
+[retention]
+default_message_retention_hours = 168  # 7 days
+
+[discovery]
+enabled = true
+server_name = &quot;My SuperChat Server&quot;
+server_description = &quot;A friendly SuperChat community&quot;
+EOF
+
+sudo chown superchat:superchat /etc/superchat/config.toml
+sudo chmod 600 /etc/superchat/config.toml
+</code></pre>
+<h4>4. Test server manually</h4>
+<pre><code class="language-bash"># Test as superchat user
+sudo -u superchat scd --config /etc/superchat/config.toml
+
+# Server should start and show:
+# SuperChat Server v1.0.0
+# Binary TCP server listening on :6465
+# SSH server listening on :6466
+# WebSocket server listening on :6467
+# Press Ctrl+C to stop
+
+# Press Ctrl+C to stop
+</code></pre>
+<h3>Docker Deployment</h3>
+<p>Docker deployment provides isolation and easier management.</p>
+<h4>1. Using Docker Compose (Recommended)</h4>
+<pre><code class="language-bash"># Clone repository (for docker-compose.yml)
+git clone https://github.com/aeolun/superchat.git
+cd superchat
+
+# Create data directory
+mkdir -p data
+
+# Start server
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop server
+docker-compose down
+</code></pre>
+<p><strong>Custom docker-compose.yml:</strong></p>
+<pre><code class="language-yaml">version: &#39;3.8&#39;
+
+services:
+  superchat:
+    image: ghcr.io/aeolun/superchat:latest
+    container_name: superchat
+    restart: unless-stopped
+    ports:
+      - &quot;6465:6465&quot;  # Binary TCP
+      - &quot;6466:6466&quot;  # SSH
+      - &quot;6467:6467&quot;  # WebSocket
+    volumes:
+      - ./data:/var/lib/superchat
+      - ./config.toml:/etc/superchat/config.toml:ro
+    environment:
+      - SUPERCHAT_CONFIG=/etc/superchat/config.toml
+    healthcheck:
+      test: [&quot;CMD&quot;, &quot;curl&quot;, &quot;-f&quot;, &quot;http://localhost:9090/health&quot;]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+</code></pre>
+<h4>2. Using Docker directly</h4>
+<pre><code class="language-bash"># Pull image
+docker pull ghcr.io/aeolun/superchat:latest
+
+# Run server
+docker run -d \
+  --name superchat \
+  --restart unless-stopped \
+  -p 6465:6465 \
+  -p 6466:6466 \
+  -p 6467:6467 \
+  -v $(pwd)/data:/var/lib/superchat \
+  ghcr.io/aeolun/superchat:latest
+
+# View logs
+docker logs -f superchat
+
+# Stop server
+docker stop superchat
+</code></pre>
+<h3>Building from Source</h3>
+<p>For development or custom builds.</p>
+<h4>1. Clone repository</h4>
+<pre><code class="language-bash">git clone https://github.com/aeolun/superchat.git
+cd superchat
+</code></pre>
+<h4>2. Build binaries</h4>
+<pre><code class="language-bash"># Build both client and server
+make build
+
+# Output:
+# ./superchat (client)
+# ./superchat-server (server)
+
+# Or build individually
+go build -o scd ./cmd/server
+go build -o sc ./cmd/client
+</code></pre>
+<h4>3. Run tests (optional)</h4>
+<pre><code class="language-bash"># Run all tests
+make test
+
+# Run with coverage
+make coverage
+
+# Protocol package coverage (enforced 85%+)
+make coverage-protocol
+</code></pre>
+<h4>4. Install binaries</h4>
+<pre><code class="language-bash"># Install to /usr/local/bin
+sudo make install
+
+# Or copy manually
+sudo cp superchat-server /usr/local/bin/scd
+sudo cp superchat /usr/local/bin/sc
+sudo chmod +x /usr/local/bin/{scd,sc}
+</code></pre>
+<h2>Initial Setup</h2>
+<h3>1. Database Initialization</h3>
+<p>The database is automatically created on first startup.</p>
+<p><strong>Location:</strong> <code>/var/lib/superchat/superchat.db</code> (configurable)</p>
+<p><strong>Automatic migrations:</strong></p>
+<ul>
+<li>Run on server startup before loading data</li>
+<li>Create timestamped backup before applying</li>
+<li>Track applied migrations in <code>schema_migrations</code> table</li>
+</ul>
+<p><strong>Manual backup before first start (recommended):</strong></p>
+<pre><code class="language-bash"># No backup needed for first start (database doesn&#39;t exist yet)
+# Backups are created automatically before migrations
+</code></pre>
+<h3>2. Create Initial Channels</h3>
+<p>SuperChat doesn&#39;t create any channels by default. You must create them.</p>
+<p><strong>Option A: Via SQL (before first start)</strong></p>
+<pre><code class="language-bash"># Create initial channels
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db &lt;&lt;&#39;EOF&#39;
+INSERT INTO Channel (name, display_name, description, channel_type, message_retention_hours, created_at)
+VALUES
+  (&#39;general&#39;, &#39;General&#39;, &#39;General discussion&#39;, 1, 168, strftime(&#39;%s&#39;, &#39;now&#39;)),
+  (&#39;announcements&#39;, &#39;Announcements&#39;, &#39;Server announcements&#39;, 1, 720, strftime(&#39;%s&#39;, &#39;now&#39;));
+EOF
+</code></pre>
+<p><strong>Option B: Via client (after server is running)</strong></p>
+<pre><code class="language-bash"># Connect as admin user (requires registration + admin flag)
+# 1. Register a user
+# 2. Manually set admin flag in database:
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db \
+  &quot;UPDATE User SET user_flags = 1 WHERE nickname = &#39;admin&#39;;&quot;
+# 3. Restart server to reload user data
+# 4. Connect and create channels via UI (Ctrl+N)
+</code></pre>
+<p><strong>Option C: Via future admin CLI tool</strong></p>
+<pre><code class="language-bash"># TODO: Not yet implemented (see IMPROVEMENTS_ROADMAP.md item 28)
+# superchat-admin channel create general --description &quot;General discussion&quot;
+</code></pre>
+<h3>3. Configure Admin User</h3>
+<p><strong>Create admin user:</strong></p>
+<pre><code class="language-bash"># 1. Start server
+sudo systemctl start superchat
+
+# 2. Connect with client and register
+sc --server localhost:6465
+# Press Ctrl+R to register
+
+# 3. Grant admin privileges (requires direct DB access)
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db &lt;&lt;EOF
+UPDATE User SET user_flags = 1 WHERE nickname = &#39;yourusername&#39;;
+EOF
+
+# 4. Restart server to reload user flags
+sudo systemctl restart superchat
+</code></pre>
+<p><strong>Admin flag values:</strong></p>
+<ul>
+<li><code>0x01</code> (1) - Admin (full privileges)</li>
+<li><code>0x02</code> (2) - Moderator (message moderation)</li>
+<li><code>0x03</code> (3) - Admin + Moderator (both)</li>
+</ul>
+<h2>Process Management</h2>
+<h3>systemd Service (Recommended)</h3>
+<p><strong>Create service file:</strong></p>
+<pre><code class="language-bash">sudo tee /etc/systemd/system/superchat.service &gt; /dev/null &lt;&lt;&#39;EOF&#39;
+[Unit]
+Description=SuperChat Server
+After=network.target
+Documentation=https://superchat.win/docs
+
+[Service]
+Type=simple
+User=superchat
+Group=superchat
+WorkingDirectory=/var/lib/superchat
+
+ExecStart=/usr/local/bin/scd --config /etc/superchat/config.toml
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/superchat
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=5
+StartLimitIntervalSec=60s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=superchat
+
+[Install]
+WantedBy=multi-user.target
+EOF
+</code></pre>
+<p><strong>Enable and start service:</strong></p>
+<pre><code class="language-bash"># Reload systemd
+sudo systemctl daemon-reload
+
+# Enable service (start on boot)
+sudo systemctl enable superchat
+
+# Start service
+sudo systemctl start superchat
+
+# Check status
+sudo systemctl status superchat
+
+# View logs
+sudo journalctl -u superchat -f
+
+# Restart service
+sudo systemctl restart superchat
+
+# Stop service
+sudo systemctl stop superchat
+</code></pre>
+<h3>Manual Process Management (Development)</h3>
+<p><strong>Using tmux/screen:</strong></p>
+<pre><code class="language-bash"># Start in tmux session
+tmux new -s superchat
+scd --config /etc/superchat/config.toml
+# Detach: Ctrl+B, then D
+
+# Reattach
+tmux attach -t superchat
+</code></pre>
+<p><strong>Background process:</strong></p>
+<pre><code class="language-bash"># Start in background
+nohup scd --config /etc/superchat/config.toml &gt; /var/log/superchat/server.log 2&gt;&amp;1 &amp;
+
+# Save PID
+echo $! &gt; /var/run/superchat.pid
+
+# Stop server
+kill $(cat /var/run/superchat.pid)
+</code></pre>
+<h2>Verification</h2>
+<h3>Quick Health Check</h3>
+<pre><code class="language-bash"># 1. Check if server is listening
+sudo netstat -tlnp | grep scd
+# Should show:
+# tcp6  0  0 :::6465  :::*  LISTEN  12345/scd
+# tcp6  0  0 :::6466  :::*  LISTEN  12345/scd
+# tcp6  0  0 :::6467  :::*  LISTEN  12345/scd
+
+# 2. Check health endpoint
+curl http://localhost:9090/health
+# Should return: {&quot;status&quot;:&quot;ok&quot;,&quot;uptime&quot;:123,&quot;sessions&quot;:0,&quot;database&quot;:&quot;ok&quot;,&quot;directory_enabled&quot;:true}
+
+# 3. Test connection with client
+sc --server localhost:6465
+# Should connect successfully
+</code></pre>
+<h3>Comprehensive Verification</h3>
+<pre><code class="language-bash"># 1. Binary TCP connection
+telnet localhost 6465
+# Should connect (press Ctrl+] then quit)
+
+# 2. WebSocket connection
+curl -i -N -H &quot;Connection: Upgrade&quot; -H &quot;Upgrade: websocket&quot; \
+  -H &quot;Sec-WebSocket-Version: 13&quot; -H &quot;Sec-WebSocket-Key: test&quot; \
+  http://localhost:6467/ws
+# Should return HTTP 101 Switching Protocols
+
+# 3. Database accessible
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db &quot;SELECT COUNT(*) FROM Channel;&quot;
+# Should return number of channels
+
+# 4. Metrics endpoint (only from localhost!)
+curl http://localhost:9090/metrics
+# Should return Prometheus metrics
+
+# 5. Check logs for errors
+sudo journalctl -u superchat --since &quot;10 minutes ago&quot; | grep -i error
+# Should return no errors
+</code></pre>
+<h3>Post-Deployment Checklist</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Server starts without errors</li>
+<li><input disabled="" type="checkbox"> All required ports are listening (6465, 6466, 6467)</li>
+<li><input disabled="" type="checkbox"> Firewall allows required ports, blocks metrics/pprof</li>
+<li><input disabled="" type="checkbox"> Health check endpoint returns <code>{&quot;status&quot;:&quot;ok&quot;}</code></li>
+<li><input disabled="" type="checkbox"> Client can connect successfully</li>
+<li><input disabled="" type="checkbox"> At least one channel exists</li>
+<li><input disabled="" type="checkbox"> Admin user can create channels</li>
+<li><input disabled="" type="checkbox"> Logs are being written</li>
+<li><input disabled="" type="checkbox"> systemd service restarts on failure</li>
+<li><input disabled="" type="checkbox"> Database backups are scheduled (see BACKUP_AND_RECOVERY.md)</li>
+<li><input disabled="" type="checkbox"> Monitoring is configured (see MONITORING.md)</li>
+</ul>
+<h2>Quick Start Checklist</h2>
+<p><strong>30-Minute Production Deployment:</strong></p>
+<ol>
+<li><p><strong>Provision server</strong> (5 min)</p>
+<ul>
+<li>Ubuntu 22.04 LTS, 4 CPU, 4 GB RAM</li>
+<li>Configure firewall (6465, 6466, 6467 open; 9090, 6060 blocked)</li>
+</ul>
+</li>
+<li><p><strong>Install SuperChat</strong> (5 min)</p>
+<pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/aeolun/superchat/main/install.sh | sudo sh -s -- --global
+sudo useradd -r -s /bin/false -d /var/lib/superchat superchat
+sudo mkdir -p /var/lib/superchat /etc/superchat
+sudo chown superchat:superchat /var/lib/superchat
+</code></pre>
+</li>
+<li><p><strong>Configure</strong> (5 min)</p>
+<pre><code class="language-bash"># Create config (customize server name/description)
+sudo nano /etc/superchat/config.toml
+</code></pre>
+</li>
+<li><p><strong>Create systemd service</strong> (5 min)</p>
+<pre><code class="language-bash"># Copy service file from this guide
+sudo systemctl daemon-reload
+sudo systemctl enable superchat
+sudo systemctl start superchat
+</code></pre>
+</li>
+<li><p><strong>Create initial channels</strong> (5 min)</p>
+<pre><code class="language-bash">sudo -u superchat sqlite3 /var/lib/superchat/superchat.db &lt;&lt;&#39;EOF&#39;
+INSERT INTO Channel (name, display_name, description, channel_type, message_retention_hours, created_at)
+VALUES (&#39;general&#39;, &#39;General&#39;, &#39;General discussion&#39;, 1, 168, strftime(&#39;%s&#39;, &#39;now&#39;));
+EOF
+</code></pre>
+</li>
+<li><p><strong>Verify</strong> (5 min)</p>
+<pre><code class="language-bash">sudo systemctl status superchat
+curl http://localhost:9090/health
+sc --server localhost:6465  # Test connection
+</code></pre>
+</li>
+</ol>
+<p><strong>Done!</strong> Your SuperChat server is running.</p>
+<h2>Troubleshooting</h2>
+<h3>Server won&#39;t start</h3>
+<p><strong>Check logs:</strong></p>
+<pre><code class="language-bash">sudo journalctl -u superchat -n 50
+</code></pre>
+<p><strong>Common issues:</strong></p>
+<ul>
+<li>Port already in use: <code>sudo netstat -tlnp | grep 6465</code></li>
+<li>Database locked: <code>sudo lsof /var/lib/superchat/superchat.db</code></li>
+<li>Permission denied: <code>sudo chown -R superchat:superchat /var/lib/superchat</code></li>
+<li>Migration failure: Check <code>/var/lib/superchat/superchat.db.backup-*</code> for backup</li>
+</ul>
+<h3>Connection refused</h3>
+<p><strong>Check if server is listening:</strong></p>
+<pre><code class="language-bash">sudo netstat -tlnp | grep scd
+</code></pre>
+<p><strong>Check firewall:</strong></p>
+<pre><code class="language-bash">sudo ufw status
+sudo iptables -L -n -v
+</code></pre>
+<p><strong>Test locally first:</strong></p>
+<pre><code class="language-bash"># From server
+sc --server localhost:6465
+
+# If works locally, issue is firewall/network
+# If fails locally, issue is server configuration
+</code></pre>
+<h3>High CPU usage</h3>
+<p><strong>Check connection count:</strong></p>
+<pre><code class="language-bash">curl http://localhost:9090/metrics | grep superchat_active_sessions
+</code></pre>
+<p><strong>Profile CPU usage:</strong></p>
+<pre><code class="language-bash"># SSH tunnel to pprof (NEVER expose port 6060 publicly!)
+ssh -L 6060:localhost:6060 user@server
+
+# Capture 30s CPU profile
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+</code></pre>
+<p>See MONITORING.md for more troubleshooting guidance.</p>
+<h2>Next Steps</h2>
+<ul>
+<li><a href="CONFIGURATION.md">CONFIGURATION.md</a> - Complete configuration reference</li>
+<li><a href="SECURITY.md">SECURITY.md</a> - Security hardening guide</li>
+<li><a href="MONITORING.md">MONITORING.md</a> - Monitoring and observability</li>
+<li><a href="BACKUP_AND_RECOVERY.md">BACKUP_AND_RECOVERY.md</a> - Backup strategies</li>
+</ul>
+<h2>Support</h2>
+<ul>
+<li>GitHub Issues: <a href="https://github.com/aeolun/superchat/issues">https://github.com/aeolun/superchat/issues</a></li>
+<li>Documentation: <a href="https://superchat.win/docs">https://superchat.win/docs</a></li>
+<li>Community: Connect to superchat.win with the client</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

@@ -5,26 +5,21 @@
   "types": {
     "String": {
       "description": "Length-prefixed UTF-8 string",
-      "fields": [
-        {
-          "name": "data",
-          "type": "array",
-          "kind": "length_prefixed",
-          "length_type": "uint16",
-          "items": { "type": "uint8" }
-        }
-      ]
+      "type": "array",
+      "kind": "length_prefixed",
+      "length_type": "uint16",
+      "items": { "type": "uint8" }
     },
     "Optional<T>": {
       "description": "Optional field with presence byte",
-      "fields": [
+      "sequence": [
         { "name": "present", "type": "uint8" },
         { "name": "value", "type": "T", "conditional": "present == 1" }
       ]
     },
     "FrameHeader": {
       "description": "All messages use this frame format",
-      "fields": [
+      "sequence": [
         { "name": "length", "type": "uint32" },
         { "name": "version", "type": "uint8" },
         { "name": "type", "type": "uint8" },
@@ -33,14 +28,14 @@
     },
     "AuthRequest": {
       "description": "Authentication request with password",
-      "fields": [
+      "sequence": [
         { "name": "nickname", "type": "String" },
         { "name": "password", "type": "String" }
       ]
     },
     "AuthResponse": {
       "description": "Authentication response",
-      "fields": [
+      "sequence": [
         { "name": "success", "type": "uint8" },
         { "name": "user_id", "type": "Optional<uint64>" },
         { "name": "nickname", "type": "Optional<String>" },
@@ -49,43 +44,48 @@
     },
     "SetNickname": {
       "description": "Set or change nickname",
-      "fields": [
+      "sequence": [
         { "name": "nickname", "type": "String" }
       ]
     },
     "NicknameResponse": {
       "description": "Nickname change result",
-      "fields": [
+      "sequence": [
         { "name": "success", "type": "uint8" },
-        { "name": "nickname", "type": "String" },
         { "name": "message", "type": "String" }
       ]
     },
     "PostMessage": {
       "description": "Post a new message",
-      "fields": [
+      "sequence": [
         { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" },
         { "name": "parent_id", "type": "Optional<uint64>" },
         { "name": "content", "type": "String" }
       ]
     },
     "MessagePosted": {
       "description": "Message post confirmation",
-      "fields": [
+      "sequence": [
         { "name": "success", "type": "uint8" },
-        { "name": "message_id", "type": "uint64" },
-        { "name": "error", "type": "Optional<String>" }
+        { "name": "message_id", "type": "Optional<uint64>" },
+        { "name": "message", "type": "String" }
       ]
     },
     "NewMessage": {
       "description": "Real-time message notification",
-      "fields": [
+      "sequence": [
         { "name": "message_id", "type": "uint64" },
         { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" },
         { "name": "parent_id", "type": "Optional<uint64>" },
-        { "name": "author", "type": "String" },
+        { "name": "author_user_id", "type": "Optional<uint64>" },
+        { "name": "author_nickname", "type": "String" },
         { "name": "content", "type": "String" },
-        { "name": "created_at", "type": "int64" }
+        { "name": "created_at", "type": "int64" },
+        { "name": "edited_at", "type": "Optional<int64>" },
+        { "name": "thread_depth", "type": "uint8" },
+        { "name": "reply_count", "type": "uint32" }
       ]
     }
   }

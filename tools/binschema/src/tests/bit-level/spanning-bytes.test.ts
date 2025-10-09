@@ -16,7 +16,7 @@ export const spanningBytesTestSuite = defineTestSuite({
     },
     types: {
       "SpanningValue": {
-        fields: [
+        sequence: [
           { name: "flag", type: "bit", size: 1 },
           { name: "value", type: "bit", size: 8 },
         ]
@@ -83,7 +83,7 @@ export const spanningBytesLSBTestSuite = defineTestSuite({
     },
     types: {
       "SpanningValueLSB": {
-        fields: [
+        sequence: [
           { name: "flag", type: "bit", size: 1 },
           { name: "value", type: "bit", size: 8 },
         ]

@@ -7,6 +7,16 @@
 
     "header_format": "FrameHeader",
 
+    "header_size_field": "length",
+
+    "header_example": {
+      "decoded": {
+        "version": 1,
+        "type": 1,
+        "flags": 0
+      }
+    },
+
     "field_descriptions": {
       "FrameHeader.length": "Total size of Version + Type + Flags + Payload (excludes the length field itself)",
       "FrameHeader.version": "Protocol version (current: 1). Both client and server must validate on every message.",
@@ -24,23 +34,28 @@
       "SetNickname.nickname": "Desired nickname (3-32 characters, alphanumeric + underscore)",
 
       "NicknameResponse.success": "1 if nickname was set successfully, 0 if rejected",
-      "NicknameResponse.nickname": "The actual nickname that was set (may differ from request)",
-      "NicknameResponse.message": "Confirmation message or error description",
+      "NicknameResponse.message": "Confirmation message or error description (see notes for specific cases)",
 
       "PostMessage.channel_id": "Target channel ID",
+      "PostMessage.subchannel_id": "Target subchannel ID (optional, for channels with subchannels)",
       "PostMessage.parent_id": "Parent message ID for threaded replies (null for top-level posts)",
       "PostMessage.content": "Message content (max 4000 characters)",
 
       "MessagePosted.success": "1 if message was posted successfully, 0 if failed",
-      "MessagePosted.message_id": "The ID of the newly created message",
-      "MessagePosted.error": "Error description (only present if success=0)",
+      "MessagePosted.message_id": "The ID of the newly created message (only present if success=1)",
+      "MessagePosted.message": "Confirmation message on success, error description on failure",
 
       "NewMessage.message_id": "Unique message ID",
       "NewMessage.channel_id": "Channel this message belongs to",
+      "NewMessage.subchannel_id": "Subchannel ID (null if channel has no subchannels)",
       "NewMessage.parent_id": "Parent message ID (null for top-level messages)",
-      "NewMessage.author": "Nickname of the message author",
+      "NewMessage.author_user_id": "User ID of the message author (null for anonymous users)",
+      "NewMessage.author_nickname": "Nickname of the message author",
       "NewMessage.content": "Message text content",
-      "NewMessage.created_at": "Unix timestamp in milliseconds (server time)"
+      "NewMessage.created_at": "Unix timestamp in milliseconds (server time)",
+      "NewMessage.edited_at": "Unix timestamp of last edit (null if never edited)",
+      "NewMessage.thread_depth": "Thread nesting depth (0 = root message, 1+ = nested reply)",
+      "NewMessage.reply_count": "Total number of replies to this message (all descendants)"
     },
 
     "notes": [
@@ -63,8 +78,8 @@
           "description": "User 'alice' authenticating with password 'hunter2'",
           "bytes": [0, 5, 97, 108, 105, 99, 101, 0, 7, 104, 117, 110, 116, 101, 114, 50],
           "decoded": {
-            "nickname": { "data": [97, 108, 105, 99, 101] },
-            "password": { "data": [104, 117, 110, 116, 101, 114, 50] }
+            "nickname": "alice",
+            "password": "hunter2"
           }
         }
       },
@@ -74,7 +89,11 @@
         "direction": "server_to_client",
         "payload_type": "AuthResponse",
         "description": "Authentication result",
-        "notes": "Contains user_id and nickname if successful, error message if failed."
+        "notes": [
+          "**If success:** user_id contains the registered user's ID, nickname contains the authenticated user's registered nickname, message contains welcome message or empty.",
+          "**If failed:** user_id and nickname are omitted, message contains error description.",
+          "**NOTE:** The nickname field was added in V2 to support SSH authentication, where the client needs to know their authenticated nickname without sending SET_NICKNAME."
+        ]
       },
       {
         "code": "0x02",
@@ -82,7 +101,12 @@
         "direction": "client_to_server",
         "payload_type": "SetNickname",
         "description": "Set or change nickname",
-        "notes": "Used for initial nickname setup or changing nickname. Anonymous users (no auth) can use any available nickname."
+        "notes": [
+          "**Anonymous users:** Can change nickname freely to any available nickname. Nickname change only affects current session. Previous messages keep old nickname.",
+          "**Registered users:** Can change nickname to any available (unregistered) nickname. Nickname change updates all existing messages to show new nickname automatically (database UPDATE on User.nickname only - messages link via author_user_id FK).",
+          "Message.author_nickname is only used for anonymous users (where author_user_id is NULL).",
+          "Cannot change to a nickname already registered by another user."
+        ]
       },
       {
         "code": "0x82",
@@ -90,7 +114,13 @@
         "direction": "server_to_client",
         "payload_type": "NicknameResponse",
         "description": "Nickname change result",
-        "notes": "Confirms whether nickname was accepted or provides error (nickname taken, invalid format, etc.)"
+        "notes": [
+          "**Response cases:**",
+          "Nickname is registered and client is not authenticated: success=false, message='Nickname registered, password required'",
+          "Nickname is available: success=true, message='Nickname changed to <nickname>' or 'Nickname set to <nickname>'",
+          "Nickname is invalid (format): success=false, message='Invalid nickname'",
+          "Nickname already taken (registered user trying to change): success=false, message='Nickname already in use'"
+        ]
       },
       {
         "code": "0x0A",
@@ -98,7 +128,11 @@
         "direction": "client_to_server",
         "payload_type": "PostMessage",
         "description": "Post a new message",
-        "notes": "Create a new message in a channel. Set parent_id to create a threaded reply, or omit for top-level post."
+        "notes": [
+          "Create a new message in a channel.",
+          "If parent_id is set, this is a reply. Otherwise, it's a root message.",
+          "If subchannel_id is not present, post to the channel at the root level (for channels without subchannels)."
+        ]
       },
       {
         "code": "0x8A",
@@ -106,7 +140,11 @@
         "direction": "server_to_client",
         "payload_type": "MessagePosted",
         "description": "Message post confirmation",
-        "notes": "Sent in response to POST_MESSAGE. Contains the new message ID on success."
+        "notes": [
+          "Sent in response to POST_MESSAGE.",
+          "Contains the new message ID on success.",
+          "If failed, message contains error description."
+        ]
       },
       {
         "code": "0x8D",
@@ -114,7 +152,13 @@
         "direction": "server_to_client",
         "payload_type": "NewMessage",
         "description": "Real-time message notification",
-        "notes": "Broadcasted to all users subscribed to a channel when a new message is posted. Clients should update their UI immediately."
+        "notes": [
+          "Real-time notification of a new message (pushed to all users in the channel).",
+          "Uses the same format as a single message in MESSAGE_LIST.",
+          "**author_user_id** is null for anonymous users.",
+          "**thread_depth:** 0=root, 1+=nested.",
+          "**reply_count:** Total number of replies (all descendants)."
+        ]
       }
     ],
 

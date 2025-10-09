@@ -13,7 +13,7 @@ export const int8TestSuite = defineTestSuite({
   schema: {
     types: {
       "Int8Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "int8" }
         ]
       }
@@ -72,7 +72,7 @@ export const int16BigEndianTestSuite = defineTestSuite({
     },
     types: {
       "Int16Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "int16" }
         ]
       }
@@ -131,7 +131,7 @@ export const int32BigEndianTestSuite = defineTestSuite({
     },
     types: {
       "Int32Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "int32" }
         ]
       }
@@ -190,7 +190,7 @@ export const int64BigEndianTestSuite = defineTestSuite({
     },
     types: {
       "Int64Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "int64" }
         ]
       }
@@ -249,7 +249,7 @@ export const int16LittleEndianTestSuite = defineTestSuite({
     },
     types: {
       "Int16Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "int16" }
         ]
       }
@@ -313,7 +313,7 @@ export const int32LittleEndianTestSuite = defineTestSuite({
     },
     types: {
       "Int32Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "int32" }
         ]
       }
@@ -377,7 +377,7 @@ export const int64LittleEndianTestSuite = defineTestSuite({
     },
     types: {
       "Int64Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "int64" }
         ]
       }

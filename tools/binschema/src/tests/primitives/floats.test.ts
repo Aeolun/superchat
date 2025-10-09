@@ -16,7 +16,7 @@ export const float32BigEndianTestSuite = defineTestSuite({
     },
     types: {
       "Float32Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "float32" }
         ]
       }
@@ -82,7 +82,7 @@ export const float64BigEndianTestSuite = defineTestSuite({
     },
     types: {
       "Float64Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "float64" }
         ]
       }
@@ -150,7 +150,7 @@ export const float32LittleEndianTestSuite = defineTestSuite({
     },
     types: {
       "Float32Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "float32" }
         ]
       }
@@ -193,7 +193,7 @@ export const float64LittleEndianTestSuite = defineTestSuite({
     },
     types: {
       "Float64Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "float64" }
         ]
       }

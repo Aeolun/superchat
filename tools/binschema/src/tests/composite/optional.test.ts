@@ -17,13 +17,13 @@ export const optionalUint64TestSuite = defineTestSuite({
     types: {
       "Optional<T>": {
         description: "Generic optional type",
-        fields: [
+        sequence: [
           { name: "present", type: "uint8" },
           { name: "value", type: "T", conditional: "present == 1" },
         ]
       },
       "OptionalValue": {
-        fields: [
+        sequence: [
           { name: "maybe_id", type: "Optional<uint64>" },
         ]
       }
@@ -72,13 +72,13 @@ export const multipleOptionalsTestSuite = defineTestSuite({
     },
     types: {
       "Optional<T>": {
-        fields: [
+        sequence: [
           { name: "present", type: "uint8" },
           { name: "value", type: "T", conditional: "present == 1" },
         ]
       },
       "Message": {
-        fields: [
+        sequence: [
           { name: "channel_id", type: "uint64" },
           { name: "parent_id", type: "Optional<uint64>" },
           { name: "subchannel_id", type: "Optional<uint64>" },
@@ -150,13 +150,13 @@ export const optionalWithBitFlagTestSuite = defineTestSuite({
     },
     types: {
       "CompactOptional<T>": {
-        fields: [
+        sequence: [
           { name: "present", type: "bit", size: 1 },
           { name: "value", type: "T", conditional: "present == 1" },
         ]
       },
       "CompactMessage": {
-        fields: [
+        sequence: [
           { name: "has_parent", type: "CompactOptional<uint8>" },
         ]
       }
@@ -195,19 +195,19 @@ export const optionalStructTestSuite = defineTestSuite({
   schema: {
     types: {
       "Point": {
-        fields: [
+        sequence: [
           { name: "x", type: "uint16" },
           { name: "y", type: "uint16" },
         ]
       },
       "OptionalStruct<T>": {
-        fields: [
+        sequence: [
           { name: "present", type: "uint8" },
           { name: "value", type: "T", conditional: "present == 1" },
         ]
       },
       "Message": {
-        fields: [
+        sequence: [
           { name: "id", type: "uint8" },
           { name: "location", type: "OptionalStruct<Point>" },
         ]
@@ -260,18 +260,18 @@ export const optionalArrayTestSuite = defineTestSuite({
   schema: {
     types: {
       "Uint8Array": {
-        fields: [
+        sequence: [
           { name: "data", type: "array", kind: "length_prefixed", length_type: "uint8", items: { type: "uint8" } }
         ]
       },
       "OptionalArray": {
-        fields: [
+        sequence: [
           { name: "present", type: "uint8" },
           { name: "value", type: "Uint8Array", conditional: "present == 1" },
         ]
       },
       "Message": {
-        fields: [
+        sequence: [
           { name: "id", type: "uint8" },
           { name: "tags", type: "OptionalArray" },
         ]

@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat Monitoring Guide - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat Monitoring Guide</h1>
+<p>Complete guide for monitoring and observability of SuperChat servers.</p>
+<h2>Table of Contents</h2>
+<ul>
+<li><a href="#overview">Overview</a></li>
+<li><a href="#log-files">Log Files</a></li>
+<li><a href="#prometheus-metrics">Prometheus Metrics</a></li>
+<li><a href="#grafana-setup">Grafana Setup</a></li>
+<li><a href="#alert-rules">Alert Rules</a></li>
+<li><a href="#health-checks">Health Checks</a></li>
+<li><a href="#performance-profiling">Performance Profiling</a></li>
+<li><a href="#log-aggregation">Log Aggregation</a></li>
+<li><a href="#common-patterns">Common Patterns</a></li>
+</ul>
+<h2>Overview</h2>
+<p>SuperChat provides multiple monitoring mechanisms:</p>
+<ol>
+<li><strong>Log files</strong> - Server activity, errors, debug info</li>
+<li><strong>Prometheus metrics</strong> - Real-time performance metrics (port 9090)</li>
+<li><strong>Health endpoint</strong> - Simple health check HTTP endpoint</li>
+<li><strong>pprof</strong> - CPU and memory profiling (port 6060)</li>
+</ol>
+<p><strong>Critical Security Note:</strong> Ports 9090 (metrics) and 6060 (pprof) must <strong>NEVER</strong> be exposed publicly. Use firewall rules and SSH tunneling for access.</p>
+<h2>Log Files</h2>
+<p>SuperChat writes three log files:</p>
+<h3>server.log</h3>
+<p><strong>Location:</strong> <code>~/.local/share/superchat/server.log</code> or <code>$XDG_DATA_HOME/superchat/server.log</code></p>
+<p><strong>Contents:</strong> All server activity (connections, messages, errors)</p>
+<p><strong>Rotation:</strong> Truncated on each server startup</p>
+<p><strong>Format:</strong></p>
+<pre><code>2025/10/08 14:30:15.123456 [INFO] Server started on port 6465
+2025/10/08 14:30:20.234567 [INFO] Connection from 192.168.1.100:54321
+2025/10/08 14:30:21.345678 [INFO] Session 1 set nickname: alice
+2025/10/08 14:30:25.456789 [ERROR] Rate limit exceeded for session 2
+</code></pre>
+<p><strong>Monitoring:</strong></p>
+<pre><code class="language-bash"># Tail logs in real-time
+tail -f ~/.local/share/superchat/server.log
+
+# Search for errors
+grep ERROR ~/.local/share/superchat/server.log
+
+# Count connections today
+grep &quot;Connection from&quot; ~/.local/share/superchat/server.log | wc -l
+
+# Find rate limit violations
+grep &quot;rate limit exceeded&quot; ~/.local/share/superchat/server.log
+</code></pre>
+<h3>errors.log</h3>
+<p><strong>Location:</strong> <code>~/.local/share/superchat/errors.log</code></p>
+<p><strong>Contents:</strong> Error-level logs only</p>
+<p><strong>Rotation:</strong> Append mode, persists across restarts</p>
+<p><strong>Use case:</strong> Long-term error tracking, debugging intermittent issues</p>
+<p><strong>Monitoring:</strong></p>
+<pre><code class="language-bash"># Check recent errors
+tail -n 50 ~/.local/share/superchat/errors.log
+
+# Count errors today
+grep &quot;$(date +%Y/%m/%d)&quot; ~/.local/share/superchat/errors.log | wc -l
+
+# Find specific error patterns
+grep &quot;database&quot; ~/.local/share/superchat/errors.log
+</code></pre>
+<h3>debug.log</h3>
+<p><strong>Location:</strong> <code>~/.local/share/superchat/debug.log</code></p>
+<p><strong>Contents:</strong> Debug-level logs (only when <code>--debug</code> flag is used)</p>
+<p><strong>Rotation:</strong> Append mode</p>
+<p><strong>Use case:</strong> Development, troubleshooting complex issues</p>
+<p><strong>Enable debug logging:</strong></p>
+<pre><code class="language-bash">scd --debug
+</code></pre>
+<p><strong>Warning:</strong> Debug logs can grow quickly and may contain sensitive information. Only enable when needed.</p>
+<h3>systemd Journal</h3>
+<p>If using systemd, logs are also sent to the journal:</p>
+<pre><code class="language-bash"># View all SuperChat logs
+sudo journalctl -u superchat
+
+# Follow logs in real-time
+sudo journalctl -u superchat -f
+
+# Last 100 lines
+sudo journalctl -u superchat -n 100
+
+# Since specific time
+sudo journalctl -u superchat --since &quot;2025-10-08 14:00:00&quot;
+
+# Only errors
+sudo journalctl -u superchat -p err
+
+# JSON output (for parsing)
+sudo journalctl -u superchat -o json
+</code></pre>
+<h2>Prometheus Metrics</h2>
+<p>SuperChat exposes Prometheus metrics on <strong>port 9090</strong> at <code>/metrics</code>.</p>
+<p><strong>Critical:</strong> This port must be firewalled! Access via SSH tunnel only.</p>
+<h3>Accessing Metrics</h3>
+<p><strong>Local access (on server):</strong></p>
+<pre><code class="language-bash">curl http://localhost:9090/metrics
+</code></pre>
+<p><strong>Remote access (via SSH tunnel):</strong></p>
+<pre><code class="language-bash"># From your local machine
+ssh -L 9090:localhost:9090 user@server
+
+# Then access locally
+curl http://localhost:9090/metrics
+</code></pre>
+<h3>Available Metrics</h3>
+<h4>Session Metrics</h4>
+<p><strong><code>superchat_active_sessions</code></strong> (Gauge)</p>
+<ul>
+<li>Current number of active sessions</li>
+<li>Use: Monitor concurrent user count</li>
+<li>Alert: Spike may indicate DoS attack or viral growth</li>
+</ul>
+<p><strong><code>superchat_sessions_created_total</code></strong> (Counter)</p>
+<ul>
+<li>Total sessions created since server start</li>
+<li>Use: Track total connections over time</li>
+<li>Rate: <code>rate(superchat_sessions_created_total[5m])</code> = sessions/second</li>
+</ul>
+<p><strong><code>superchat_sessions_disconnected_total</code></strong> (Counter)</p>
+<ul>
+<li>Total sessions disconnected</li>
+<li>Use: Track disconnect rate</li>
+<li>Alert: High rate may indicate connectivity issues</li>
+</ul>
+<h4>Message Metrics</h4>
+<p><strong><code>superchat_messages_received_total{type=&quot;...&quot;}</code> (Counter)</strong></p>
+<ul>
+<li>Total messages received from clients by type</li>
+<li>Labels: <code>type</code> (SET_NICKNAME, POST_MESSAGE, etc.)</li>
+<li>Use: Track message volume by type</li>
+<li>Example types: <code>POST_MESSAGE</code>, <code>PING</code>, <code>LIST_MESSAGES</code></li>
+</ul>
+<p><strong><code>superchat_messages_sent_total{type=&quot;...&quot;}</code> (Counter)</strong></p>
+<ul>
+<li>Total messages sent to clients by type</li>
+<li>Labels: <code>type</code> (MESSAGE_LIST, NEW_MESSAGE, ERROR, etc.)</li>
+<li>Use: Track server responses by type</li>
+</ul>
+<p><strong><code>superchat_messages_broadcast_total</code></strong> (Counter)</p>
+<ul>
+<li>Total unique messages broadcast (not deliveries)</li>
+<li>Use: Track actual message creation rate</li>
+<li>Rate: <code>rate(superchat_messages_broadcast_total[5m])</code> = messages/second</li>
+</ul>
+<p><strong><code>superchat_messages_delivered_total{channel_id=&quot;...&quot;,thread_id=&quot;...&quot;}</code> (Counter)</strong></p>
+<ul>
+<li>Total message deliveries to clients</li>
+<li>Labels: <code>channel_id</code>, <code>thread_id</code></li>
+<li>Use: Track message delivery volume per channel/thread</li>
+<li>Note: One broadcast = N deliveries (N = subscriber count)</li>
+</ul>
+<h4>Subscription Metrics</h4>
+<p><strong><code>superchat_channel_subscribers{channel_id=&quot;...&quot;}</code> (Gauge)</strong></p>
+<ul>
+<li>Active subscribers per channel</li>
+<li>Labels: <code>channel_id</code></li>
+<li>Use: Monitor channel popularity</li>
+<li>Alert: Sudden spike in one channel = possible spam attack</li>
+</ul>
+<p><strong><code>superchat_thread_subscribers{thread_id=&quot;...&quot;}</code> (Gauge)</strong></p>
+<ul>
+<li>Active subscribers per thread</li>
+<li>Labels: <code>thread_id</code></li>
+<li>Use: Track thread engagement</li>
+</ul>
+<h4>Broadcast Metrics</h4>
+<p><strong><code>superchat_broadcast_fanout{type=&quot;...&quot;}</code> (Histogram)</strong></p>
+<ul>
+<li>Number of recipients per broadcast message</li>
+<li>Labels: <code>type</code> (channel or thread)</li>
+<li>Buckets: 1, 5, 10, 25, 50, 100, 250, 500, 1000, 2000, 5000</li>
+<li>Use: Understand broadcast reach</li>
+<li>Query: <code>histogram_quantile(0.95, superchat_broadcast_fanout_bucket)</code> = 95th percentile fanout</li>
+</ul>
+<p><strong><code>superchat_broadcast_duration_seconds{type=&quot;...&quot;}</code> (Histogram)</strong></p>
+<ul>
+<li>Time taken to broadcast a message to all subscribers</li>
+<li>Labels: <code>type</code> (channel or thread)</li>
+<li>Use: Monitor broadcast performance</li>
+<li>Alert: P95 &gt; 1s = performance issue</li>
+<li>Query: <code>histogram_quantile(0.95, rate(superchat_broadcast_duration_seconds_bucket[5m]))</code></li>
+</ul>
+<h4>Go Runtime Metrics (Built-in)</h4>
+<p><strong><code>go_goroutines</code></strong> (Gauge)</p>
+<ul>
+<li>Current number of goroutines</li>
+<li>Use: Detect goroutine leaks</li>
+<li>Alert: Continuously increasing = leak</li>
+</ul>
+<p><strong><code>go_memstats_alloc_bytes</code></strong> (Gauge)</p>
+<ul>
+<li>Bytes of allocated heap memory</li>
+<li>Use: Monitor memory usage</li>
+</ul>
+<p><strong><code>go_memstats_heap_inuse_bytes</code></strong> (Gauge)</p>
+<ul>
+<li>Bytes in in-use heap spans</li>
+<li>Use: Monitor heap size</li>
+</ul>
+<p><strong><code>process_cpu_seconds_total</code></strong> (Counter)</p>
+<ul>
+<li>Total CPU time consumed</li>
+<li>Use: Calculate CPU usage percentage</li>
+<li>Query: <code>rate(process_cpu_seconds_total[5m]) * 100</code> = CPU %</li>
+</ul>
+<p><strong><code>process_resident_memory_bytes</code></strong> (Gauge)</p>
+<ul>
+<li>Resident memory size (RSS)</li>
+<li>Use: Monitor overall memory usage</li>
+</ul>
+<h3>Example Queries</h3>
+<p><strong>Active users:</strong></p>
+<pre><code class="language-promql">superchat_active_sessions
+</code></pre>
+<p><strong>Message rate (messages per second):</strong></p>
+<pre><code class="language-promql">rate(superchat_messages_broadcast_total[5m])
+</code></pre>
+<p><strong>Connection rate (new sessions per minute):</strong></p>
+<pre><code class="language-promql">rate(superchat_sessions_created_total[1m]) * 60
+</code></pre>
+<p><strong>Average broadcast fanout:</strong></p>
+<pre><code class="language-promql">rate(superchat_messages_delivered_total[5m]) / rate(superchat_messages_broadcast_total[5m])
+</code></pre>
+<p><strong>P95 broadcast latency:</strong></p>
+<pre><code class="language-promql">histogram_quantile(0.95, rate(superchat_broadcast_duration_seconds_bucket[5m]))
+</code></pre>
+<p><strong>CPU usage:</strong></p>
+<pre><code class="language-promql">rate(process_cpu_seconds_total[5m]) * 100
+</code></pre>
+<p><strong>Memory usage (MB):</strong></p>
+<pre><code class="language-promql">process_resident_memory_bytes / 1024 / 1024
+</code></pre>
+<p><strong>Goroutine leak detection:</strong></p>
+<pre><code class="language-promql">deriv(go_goroutines[5m])  # Positive value = increasing goroutines
+</code></pre>
+<h2>Grafana Setup</h2>
+<h3>Installation</h3>
+<p><strong>Ubuntu/Debian:</strong></p>
+<pre><code class="language-bash">sudo apt-get install -y software-properties-common
+sudo add-apt-repository &quot;deb https://packages.grafana.com/oss/deb stable main&quot;
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+sudo apt-get update
+sudo apt-get install grafana
+sudo systemctl enable grafana-server
+sudo systemctl start grafana-server
+</code></pre>
+<p><strong>Docker:</strong></p>
+<pre><code class="language-bash">docker run -d \
+  --name=grafana \
+  -p 3000:3000 \
+  grafana/grafana-oss
+</code></pre>
+<p><strong>Access:</strong> <a href="http://localhost:3000">http://localhost:3000</a> (default login: admin/admin)</p>
+<h3>Prometheus Data Source</h3>
+<ol>
+<li>Navigate to <strong>Configuration → Data Sources</strong></li>
+<li>Click <strong>Add data source</strong></li>
+<li>Select <strong>Prometheus</strong></li>
+<li>Set URL: <code>http://localhost:9090</code> (or SSH tunnel)</li>
+<li>Click <strong>Save &amp; Test</strong></li>
+</ol>
+<h3>Dashboard Creation</h3>
+<p><strong>Create a new dashboard:</strong></p>
+<ol>
+<li>Click <strong>+ → Create Dashboard</strong></li>
+<li>Add panels with queries:</li>
+</ol>
+<p><strong>Panel: Active Sessions</strong></p>
+<ul>
+<li>Query: <code>superchat_active_sessions</code></li>
+<li>Visualization: Stat or Time series</li>
+<li>Unit: Short</li>
+</ul>
+<p><strong>Panel: Message Rate</strong></p>
+<ul>
+<li>Query: <code>rate(superchat_messages_broadcast_total[5m])</code></li>
+<li>Visualization: Graph</li>
+<li>Unit: Messages/sec</li>
+</ul>
+<p><strong>Panel: Broadcast Latency (P95)</strong></p>
+<ul>
+<li>Query: <code>histogram_quantile(0.95, rate(superchat_broadcast_duration_seconds_bucket[5m]))</code></li>
+<li>Visualization: Graph</li>
+<li>Unit: Seconds</li>
+<li>Threshold: Warning at 0.5s, Critical at 1s</li>
+</ul>
+<p><strong>Panel: CPU Usage</strong></p>
+<ul>
+<li>Query: <code>rate(process_cpu_seconds_total[5m]) * 100</code></li>
+<li>Visualization: Gauge</li>
+<li>Unit: Percent (0-100)</li>
+<li>Threshold: Warning at 70%, Critical at 90%</li>
+</ul>
+<p><strong>Panel: Memory Usage</strong></p>
+<ul>
+<li>Query: <code>process_resident_memory_bytes / 1024 / 1024</code></li>
+<li>Visualization: Gauge</li>
+<li>Unit: MB</li>
+</ul>
+<p><strong>Panel: Connection Rate</strong></p>
+<ul>
+<li>Query: <code>rate(superchat_sessions_created_total[5m]) * 60</code></li>
+<li>Visualization: Graph</li>
+<li>Unit: Connections/min</li>
+</ul>
+<p><strong>Panel: Top Channels by Subscribers</strong></p>
+<ul>
+<li>Query: <code>topk(10, superchat_channel_subscribers)</code></li>
+<li>Visualization: Bar chart</li>
+</ul>
+<p><strong>Panel: Goroutine Count</strong></p>
+<ul>
+<li>Query: <code>go_goroutines</code></li>
+<li>Visualization: Graph</li>
+<li>Alert: Continuously increasing</li>
+</ul>
+<h3>Sample Dashboard JSON</h3>
+<p>Save this as <code>superchat-dashboard.json</code> and import into Grafana:</p>
+<pre><code class="language-json">{
+  &quot;dashboard&quot;: {
+    &quot;title&quot;: &quot;SuperChat Server Metrics&quot;,
+    &quot;panels&quot;: [
+      {
+        &quot;title&quot;: &quot;Active Sessions&quot;,
+        &quot;targets&quot;: [{&quot;expr&quot;: &quot;superchat_active_sessions&quot;}],
+        &quot;type&quot;: &quot;stat&quot;
+      },
+      {
+        &quot;title&quot;: &quot;Message Rate&quot;,
+        &quot;targets&quot;: [{&quot;expr&quot;: &quot;rate(superchat_messages_broadcast_total[5m])&quot;}],
+        &quot;type&quot;: &quot;graph&quot;
+      },
+      {
+        &quot;title&quot;: &quot;Broadcast Latency P95&quot;,
+        &quot;targets&quot;: [{&quot;expr&quot;: &quot;histogram_quantile(0.95, rate(superchat_broadcast_duration_seconds_bucket[5m]))&quot;}],
+        &quot;type&quot;: &quot;graph&quot;
+      }
+    ]
+  }
+}
+</code></pre>
+<h2>Alert Rules</h2>
+<h3>Prometheus Alert Configuration</h3>
+<p>Create <code>prometheus/alerts.yml</code>:</p>
+<pre><code class="language-yaml">groups:
+  - name: superchat_alerts
+    interval: 30s
+    rules:
+      # Server down
+      - alert: SuperChatServerDown
+        expr: up{job=&quot;superchat&quot;} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: &quot;SuperChat server is down&quot;
+          description: &quot;No metrics received for 5 minutes&quot;
+
+      # High connection rate (possible DoS)
+      - alert: HighConnectionRate
+        expr: rate(superchat_sessions_created_total[1m]) &gt; 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;High connection rate detected&quot;
+          description: &quot;{{ $value }} connections/sec (threshold: 100)&quot;
+
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(superchat_messages_sent_total{type=&quot;ERROR&quot;}[5m])) /
+          sum(rate(superchat_messages_received_total[5m])) &gt; 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;High error rate (&gt;10%)&quot;
+          description: &quot;{{ $value | humanizePercentage }} of messages are errors&quot;
+
+      # High broadcast latency
+      - alert: HighBroadcastLatency
+        expr: histogram_quantile(0.95, rate(superchat_broadcast_duration_seconds_bucket[5m])) &gt; 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;High broadcast latency&quot;
+          description: &quot;P95 broadcast latency: {{ $value }}s (threshold: 1s)&quot;
+
+      # Database size growing rapidly
+      - alert: DatabaseGrowthRapid
+        expr: |
+          predict_linear(
+            process_resident_memory_bytes[1h], 24*3600
+          ) &gt; 16 * 1024 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;Database growing rapidly&quot;
+          description: &quot;Projected to reach 16GB in 24 hours&quot;
+
+      # Goroutine leak
+      - alert: GoroutineLeakSuspected
+        expr: deriv(go_goroutines[10m]) &gt; 0.5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;Possible goroutine leak&quot;
+          description: &quot;Goroutine count increasing: {{ $value }}/sec&quot;
+
+      # Active sessions near capacity
+      - alert: SessionsNearCapacity
+        expr: superchat_active_sessions &gt; 9000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;Active sessions near tested limit&quot;
+          description: &quot;{{ $value }} active sessions (tested max: 10k)&quot;
+
+      # CPU usage high
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) * 100 &gt; 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: &quot;High CPU usage&quot;
+          description: &quot;CPU usage: {{ $value }}% (threshold: 80%)&quot;
+</code></pre>
+<h3>Alertmanager Configuration</h3>
+<p>Create <code>alertmanager/config.yml</code>:</p>
+<pre><code class="language-yaml">global:
+  resolve_timeout: 5m
+
+route:
+  group_by: [&#39;alertname&#39;, &#39;severity&#39;]
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: &#39;default&#39;
+
+receivers:
+  - name: &#39;default&#39;
+    email_configs:
+      - to: &#39;admin@example.com&#39;
+        from: &#39;alertmanager@example.com&#39;
+        smarthost: &#39;smtp.example.com:587&#39;
+        auth_username: &#39;alertmanager@example.com&#39;
+        auth_password: &#39;password&#39;
+
+  - name: &#39;slack&#39;
+    slack_configs:
+      - api_url: &#39;https://hooks.slack.com/services/YOUR/WEBHOOK/URL&#39;
+        channel: &#39;#superchat-alerts&#39;
+        title: &#39;SuperChat Alert&#39;
+        text: &#39;{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}&#39;
+
+  - name: &#39;pagerduty&#39;
+    pagerduty_configs:
+      - service_key: &#39;YOUR_PAGERDUTY_KEY&#39;
+</code></pre>
+<h2>Health Checks</h2>
+<h3>HTTP Health Endpoint</h3>
+<p><strong>Endpoint:</strong> <code>http://localhost:9090/health</code></p>
+<p><strong>Response (healthy):</strong></p>
+<pre><code class="language-json">{
+  &quot;status&quot;: &quot;ok&quot;,
+  &quot;uptime&quot;: 12345,
+  &quot;sessions&quot;: 42,
+  &quot;database&quot;: &quot;ok&quot;,
+  &quot;directory_enabled&quot;: true
+}
+</code></pre>
+<p><strong>Use cases:</strong></p>
+<ul>
+<li>Load balancer health checks</li>
+<li>Monitoring system checks</li>
+<li>Kubernetes liveness/readiness probes</li>
+</ul>
+<h3>Health Check Script</h3>
+<p>Create <code>healthcheck.sh</code>:</p>
+<pre><code class="language-bash">#!/bin/bash
+# SuperChat health check script
+
+set -e
+
+# Check if server is listening on TCP port
+if ! nc -z localhost 6465; then
+  echo &quot;ERROR: Server not listening on port 6465&quot;
+  exit 1
+fi
+
+# Check health endpoint
+RESPONSE=$(curl -sf http://localhost:9090/health || echo &quot;&quot;)
+if [ -z &quot;$RESPONSE&quot; ]; then
+  echo &quot;ERROR: Health endpoint not responding&quot;
+  exit 1
+fi
+
+# Parse JSON response
+STATUS=$(echo &quot;$RESPONSE&quot; | jq -r &#39;.status&#39;)
+DB_STATUS=$(echo &quot;$RESPONSE&quot; | jq -r &#39;.database&#39;)
+
+if [ &quot;$STATUS&quot; != &quot;ok&quot; ]; then
+  echo &quot;ERROR: Server status: $STATUS&quot;
+  exit 1
+fi
+
+if [ &quot;$DB_STATUS&quot; != &quot;ok&quot; ]; then
+  echo &quot;ERROR: Database status: $DB_STATUS&quot;
+  exit 1
+fi
+
+echo &quot;OK: SuperChat server is healthy&quot;
+exit 0
+</code></pre>
+<p><strong>Usage:</strong></p>
+<pre><code class="language-bash">chmod +x healthcheck.sh
+./healthcheck.sh
+</code></pre>
+<h3>Kubernetes Probes</h3>
+<pre><code class="language-yaml">apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: superchat
+    image: superchat:latest
+    ports:
+    - containerPort: 6465
+    - containerPort: 9090
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 9090
+      initialDelaySeconds: 10
+      periodSeconds: 30
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 9090
+      initialDelaySeconds: 5
+      periodSeconds: 10
+</code></pre>
+<h2>Performance Profiling</h2>
+<p>SuperChat exposes pprof endpoints on <strong>port 6060</strong>.</p>
+<p><strong>Critical:</strong> This port must NEVER be exposed publicly!</p>
+<h3>Accessing pprof</h3>
+<p><strong>Via SSH tunnel:</strong></p>
+<pre><code class="language-bash"># From your local machine
+ssh -L 6060:localhost:6060 user@server
+
+# Access pprof endpoints
+open http://localhost:6060/debug/pprof/
+</code></pre>
+<h3>Available Profiles</h3>
+<p><strong>CPU Profile (30 seconds):</strong></p>
+<pre><code class="language-bash">go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+</code></pre>
+<p><strong>Heap Profile:</strong></p>
+<pre><code class="language-bash">go tool pprof http://localhost:6060/debug/pprof/heap
+</code></pre>
+<p><strong>Goroutine Profile:</strong></p>
+<pre><code class="language-bash">go tool pprof http://localhost:6060/debug/pprof/goroutine
+</code></pre>
+<p><strong>Allocs Profile (memory allocations):</strong></p>
+<pre><code class="language-bash">go tool pprof http://localhost:6060/debug/pprof/allocs
+</code></pre>
+<p><strong>Block Profile (blocking operations):</strong></p>
+<pre><code class="language-bash">go tool pprof http://localhost:6060/debug/pprof/block
+</code></pre>
+<h3>Interactive pprof</h3>
+<pre><code class="language-bash"># Capture CPU profile
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+
+# Interactive commands:
+(pprof) top10      # Show top 10 functions by CPU time
+(pprof) list main  # Show source code with line-by-line profile
+(pprof) web        # Generate call graph (requires graphviz)
+(pprof) pdf        # Save call graph as PDF
+</code></pre>
+<h3>Flame Graphs</h3>
+<pre><code class="language-bash"># Install go-torch (flame graph tool)
+go install github.com/uber/go-torch@latest
+
+# Generate flame graph
+go-torch -u http://localhost:6060 -t 30
+</code></pre>
+<h2>Log Aggregation</h2>
+<h3>syslog Integration</h3>
+<p>SuperChat logs to systemd journal, which can forward to syslog.</p>
+<p><strong>Forward to remote syslog:</strong></p>
+<pre><code class="language-bash"># /etc/rsyslog.d/superchat.conf
+:programname, isequal, &quot;scd&quot; @@remote-syslog-server:514
+</code></pre>
+<h3>logrotate Configuration</h3>
+<p>Create <code>/etc/logrotate.d/superchat</code>:</p>
+<pre><code>/var/lib/superchat/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 640 superchat superchat
+    postrotate
+        systemctl reload superchat &gt; /dev/null 2&gt;&amp;1 || true
+    endscript
+}
+</code></pre>
+<h3>ELK Stack Integration</h3>
+<p><strong>Filebeat configuration</strong> (<code>/etc/filebeat/filebeat.yml</code>):</p>
+<pre><code class="language-yaml">filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/lib/superchat/server.log
+      - /var/lib/superchat/errors.log
+    fields:
+      app: superchat
+      type: server_log
+
+output.elasticsearch:
+  hosts: [&quot;localhost:9200&quot;]
+  index: &quot;superchat-%{+yyyy.MM.dd}&quot;
+</code></pre>
+<h2>Common Patterns</h2>
+<h3>Detecting DoS Attacks</h3>
+<pre><code class="language-bash"># High connection rate from single IP
+curl -s http://localhost:9090/metrics | grep superchat_sessions_created_total | awk &#39;{print $2}&#39;
+
+# Check if rate is increasing rapidly
+# Compare values 1 minute apart
+</code></pre>
+<h3>Identifying Spam Users</h3>
+<pre><code class="language-bash"># Top message senders (requires log analysis)
+grep &quot;POST_MESSAGE&quot; ~/.local/share/superchat/server.log | \
+  awk &#39;{print $4}&#39; | sort | uniq -c | sort -rn | head -10
+</code></pre>
+<h3>Monitoring Database Growth</h3>
+<pre><code class="language-bash"># Database file size
+du -h ~/.local/share/superchat/superchat.db
+
+# Track growth over time
+watch -n 60 &#39;du -h ~/.local/share/superchat/superchat.db&#39;
+</code></pre>
+<h3>Analyzing Broadcast Performance</h3>
+<pre><code class="language-promql"># Average fanout per broadcast type
+avg by (type) (superchat_broadcast_fanout)
+
+# P99 broadcast latency
+histogram_quantile(0.99, rate(superchat_broadcast_duration_seconds_bucket[5m]))
+</code></pre>
+<h3>Finding Memory Leaks</h3>
+<pre><code class="language-bash"># Capture heap profile every 10 minutes
+while true; do
+  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+  go tool pprof -text http://localhost:6060/debug/pprof/heap &gt; heap_$TIMESTAMP.txt
+  sleep 600
+done
+
+# Compare heap profiles
+go tool pprof -base heap_20250108_140000.txt heap_20250108_150000.txt
+</code></pre>
+<h2>Next Steps</h2>
+<ul>
+<li><a href="DEPLOYMENT.md">DEPLOYMENT.md</a> - Server deployment guide</li>
+<li><a href="CONFIGURATION.md">CONFIGURATION.md</a> - Configuration reference</li>
+<li><a href="SECURITY.md">SECURITY.md</a> - Security hardening</li>
+<li><a href="BACKUP_AND_RECOVERY.md">BACKUP_AND_RECOVERY.md</a> - Backup strategies</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Migrations - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="./favicon.png">
+    <link rel="stylesheet" href="./src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="./index.html" class="logo">
+                    <img src="./mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="./index.html">Home</a>
+                    <a href="./docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="./docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="./docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="./docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="./docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="./docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="./docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="./docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="./docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="./docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="./docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="./docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="./docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="./docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="./docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>Database Migrations</h1>
+<p>SuperChat uses a simple migration system to evolve the database schema over time.</p>
+<h2>How It Works</h2>
+<ol>
+<li><strong>Automatic Execution</strong>: Migrations run automatically on server startup, before loading data into MemDB</li>
+<li><strong>Automatic Backup</strong>: Before applying any pending migrations, the database is automatically backed up</li>
+<li><strong>Version Tracking</strong>: Applied migrations are tracked in the <code>schema_migrations</code> table</li>
+<li><strong>Embedded Files</strong>: Migration SQL files are embedded in the binary using Go embed</li>
+</ol>
+<h2>Migration Files</h2>
+<p>Migrations are stored in <code>pkg/database/migrations/</code> and follow this naming convention:</p>
+<pre><code>001_initial.sql
+002_add_thread_root.sql
+003_add_user_table.sql
+</code></pre>
+<h3>Format</h3>
+<ul>
+<li><strong>Filename</strong>: <code>&lt;version&gt;_&lt;name&gt;.sql</code> where version is a sequential integer</li>
+<li><strong>Version</strong>: Must be unique and sequential (001, 002, 003, etc.)</li>
+<li><strong>Name</strong>: Descriptive name using snake_case</li>
+</ul>
+<h3>Example Migration</h3>
+<pre><code class="language-sql">-- Add column for tracking message reactions
+ALTER TABLE Message ADD COLUMN reactions TEXT;
+
+-- Index for faster reaction queries
+CREATE INDEX idx_messages_reactions ON Message(reactions) WHERE reactions IS NOT NULL;
+</code></pre>
+<h2>Creating a New Migration</h2>
+<h3>1. Determine Next Version Number</h3>
+<pre><code class="language-bash"># Check current version
+sqlite3 ~/.superchat/superchat.db &quot;SELECT MAX(version) FROM schema_migrations&quot;
+</code></pre>
+<h3>2. Create Migration File</h3>
+<p>Create a new file in <code>pkg/database/migrations/</code> with the next version number:</p>
+<pre><code class="language-bash"># Example: Creating migration 002
+touch pkg/database/migrations/002_add_reactions.sql
+</code></pre>
+<h3>3. Write Migration SQL</h3>
+<p>Write the SQL statements to modify the schema:</p>
+<pre><code class="language-sql">-- Add reactions support to messages
+ALTER TABLE Message ADD COLUMN reactions TEXT;
+CREATE INDEX IF NOT EXISTS idx_messages_reactions ON Message(reactions) WHERE reactions IS NOT NULL;
+</code></pre>
+<h3>4. Test Migration</h3>
+<pre><code class="language-bash"># Build the server
+make build
+
+# Run with a test database
+./superchat-server --db /tmp/test.db --port 9999
+</code></pre>
+<p>Check the logs for:</p>
+<pre><code>Created database backup: test.db.backup-v1-20241006-123456
+Running 1 pending migration(s) from version 1 to 2
+Applied migration 2: add_reactions
+</code></pre>
+<h3>5. Update Migration Path Tests</h3>
+<p><strong>CRITICAL</strong>: Update <code>pkg/database/migration_path_test.go</code> to validate your migration!</p>
+<pre><code class="language-go">// In TestMigrationPath, add a new test case:
+{
+    name:        &quot;v1 → v2: Add reactions&quot;,
+    fromVersion: 1,
+    toVersion:   2,
+    setupData: func(db *sql.DB) error {
+        // Create sample messages in v1 schema (without reactions)
+        _, err := db.Exec(`
+            INSERT INTO Channel (id, name, display_name, created_at, is_private)
+            VALUES (1, &#39;test&#39;, &#39;Test&#39;, ?, 0)
+        `, time.Now().UnixMilli())
+        if err != nil {
+            return err
+        }
+
+        _, err = db.Exec(`
+            INSERT INTO Message (id, channel_id, author_nickname, content, created_at)
+            VALUES (1, 1, &#39;user&#39;, &#39;Test message&#39;, ?)
+        `, time.Now().UnixMilli())
+        return err
+    },
+    validateData: func(db *sql.DB, t *testing.T) {
+        // Verify old messages still exist and reactions column is NULL
+        var content string
+        var reactions *string
+        err := db.QueryRow(`
+            SELECT content, reactions FROM Message WHERE id = 1
+        `).Scan(&amp;content, &amp;reactions)
+        if err != nil {
+            t.Fatalf(&quot;Failed to query message: %v&quot;, err)
+        }
+        if content != &quot;Test message&quot; {
+            t.Errorf(&quot;Message content changed during migration&quot;)
+        }
+        if reactions != nil {
+            t.Errorf(&quot;Expected NULL reactions, got %v&quot;, *reactions)
+        }
+    },
+    validateSchema: func(db *sql.DB, t *testing.T) {
+        // Verify reactions column exists
+        var count int
+        err := db.QueryRow(`
+            SELECT COUNT(*) FROM pragma_table_info(&#39;Message&#39;)
+            WHERE name=&#39;reactions&#39;
+        `).Scan(&amp;count)
+        if err != nil {
+            t.Fatalf(&quot;Failed to check reactions column: %v&quot;, err)
+        }
+        if count != 1 {
+            t.Errorf(&quot;reactions column not found after migration&quot;)
+        }
+    },
+},
+</code></pre>
+<p>This ensures:</p>
+<ul>
+<li>Old data survives the migration ✓</li>
+<li>New column is added correctly ✓</li>
+<li>Default values are appropriate ✓</li>
+</ul>
+<h3>6. Run Tests</h3>
+<pre><code class="language-bash">go test ./pkg/database -run TestMigrationPath -v
+go test ./pkg/database -run TestFullMigrationPath -v
+</code></pre>
+<h3>7. Commit</h3>
+<pre><code class="language-bash">git add pkg/database/migrations/002_add_reactions.sql
+git add pkg/database/migration_path_test.go
+git commit -m &quot;feat: add message reactions schema with migration tests&quot;
+</code></pre>
+<h2>Backup Files</h2>
+<p>Before applying migrations, the system automatically creates a backup:</p>
+<pre><code>superchat.db.backup-v&lt;version&gt;-&lt;timestamp&gt;
+</code></pre>
+<p>Example: <code>superchat.db.backup-v1-20241006-143022</code></p>
+<h3>Restoring from Backup</h3>
+<p>If a migration fails or causes issues:</p>
+<pre><code class="language-bash"># Stop the server
+pkill superchat-server
+
+# Restore from backup
+cp ~/.superchat/superchat.db.backup-v1-20241006-143022 ~/.superchat/superchat.db
+
+# Restart server
+./superchat-server
+</code></pre>
+<h2>Migration System Details</h2>
+<h3>Schema Migrations Table</h3>
+<pre><code class="language-sql">CREATE TABLE schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at INTEGER NOT NULL  -- Unix timestamp in milliseconds
+);
+</code></pre>
+<h3>Migration Process</h3>
+<ol>
+<li>Server starts and opens database connection</li>
+<li>System checks <code>schema_migrations</code> table for current version</li>
+<li>Loads all migration files from <code>pkg/database/migrations/</code></li>
+<li>Filters to pending migrations (version &gt; current version)</li>
+<li><strong>Creates backup</strong> if pending migrations exist</li>
+<li>Applies each migration in a transaction:<ul>
+<li>Executes SQL</li>
+<li>Records migration in <code>schema_migrations</code></li>
+<li>Commits transaction</li>
+</ul>
+</li>
+<li>Continues to load MemDB</li>
+</ol>
+<h3>Error Handling</h3>
+<ul>
+<li><strong>Migration SQL fails</strong>: Transaction rolls back, error returned, server stops</li>
+<li><strong>Backup fails</strong>: Migration aborts, error returned, server stops</li>
+<li><strong>No pending migrations</strong>: Logs &quot;Database is up to date&quot;, continues normally</li>
+</ul>
+<h2>V1 to V2 Migration Example</h2>
+<p>When adding V2 features (user registration, etc.), you would create migrations like:</p>
+<pre><code class="language-sql">-- 002_add_user_table.sql
+CREATE TABLE User (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nickname TEXT UNIQUE,
+    registered INTEGER NOT NULL DEFAULT 0,
+    password_hash TEXT,
+    created_at INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+
+-- 003_add_ssh_keys.sql
+CREATE TABLE SSHKey (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    fingerprint TEXT UNIQUE NOT NULL,
+    public_key TEXT NOT NULL,
+    key_type TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE
+);
+
+-- 004_add_subchannels.sql
+CREATE TABLE Subchannel (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (channel_id) REFERENCES Channel(id) ON DELETE CASCADE
+);
+</code></pre>
+<p>Each migration is applied in order, and the database automatically backs up before each set of changes.</p>
+<h2>Best Practices</h2>
+<ol>
+<li><strong>Test migrations</strong> on a copy of production data before deploying</li>
+<li><strong>Keep migrations small</strong> and focused on one change</li>
+<li><strong>Use transactions</strong> (automatic in our system)</li>
+<li><strong>Never modify</strong> existing migration files - create a new one to fix issues</li>
+<li><strong>Include indexes</strong> in the same migration as table changes</li>
+<li><strong>Document complex migrations</strong> with comments in the SQL</li>
+<li><strong>ALWAYS update migration path tests</strong> (<code>migration_path_test.go</code>) - this is required, not optional!</li>
+<li><strong>Use IF NOT EXISTS</strong> for backwards compatibility with existing databases</li>
+<li><strong>Test data transformation</strong> migrations with real data samples</li>
+<li><strong>Commit migration + test together</strong> so they&#39;re never out of sync</li>
+</ol>
+<h2>Troubleshooting</h2>
+<h3>Migration Not Running</h3>
+<p>Check that:</p>
+<ul>
+<li>Filename follows <code>&lt;version&gt;_&lt;name&gt;.sql</code> pattern</li>
+<li>Version number is sequential</li>
+<li>File is in <code>pkg/database/migrations/</code> directory</li>
+<li>Binary was rebuilt after adding migration</li>
+</ul>
+<h3>Multiple Servers</h3>
+<p>If running multiple server instances:</p>
+<ul>
+<li>First server to start will apply migrations</li>
+<li>Other servers will wait (SQLite busy timeout: 5 seconds)</li>
+<li>If backup takes a long time, increase busy timeout</li>
+</ul>
+<h3>Corrupted Migration State</h3>
+<p>If <code>schema_migrations</code> table is corrupted:</p>
+<pre><code class="language-bash"># Connect to database
+sqlite3 ~/.superchat/superchat.db
+
+-- Check current state
+SELECT * FROM schema_migrations;
+
+-- Manually insert missing migration (if needed)
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (1, &#39;initial&#39;, 1234567890000);
+</code></pre>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

@@ -15,7 +15,7 @@ export const nestedArrays2DTestSuite = defineTestSuite({
     },
     types: {
       "Matrix": {
-        fields: [
+        sequence: [
           {
             name: "rows",
             type: "array",

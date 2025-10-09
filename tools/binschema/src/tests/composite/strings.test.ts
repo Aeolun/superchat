@@ -17,7 +17,7 @@ export const stringTestSuite = defineTestSuite({
     types: {
       // Define "string" as a custom type (not built-in)
       "string": {
-        fields: [
+        sequence: [
           {
             name: "data",
             type: "array",
@@ -28,7 +28,7 @@ export const stringTestSuite = defineTestSuite({
         ]
       },
       "StringValue": {
-        fields: [
+        sequence: [
           { name: "text", type: "string" }
         ]
       }
@@ -85,7 +85,7 @@ export const shortStringTestSuite = defineTestSuite({
     },
     types: {
       "ShortString": {
-        fields: [
+        sequence: [
           {
             name: "data",
             type: "array",
@@ -96,7 +96,7 @@ export const shortStringTestSuite = defineTestSuite({
         ]
       },
       "ShortStringValue": {
-        fields: [
+        sequence: [
           { name: "text", type: "ShortString" }
         ]
       }
@@ -134,7 +134,7 @@ export const multipleStringsTestSuite = defineTestSuite({
     },
     types: {
       "ShortString": {
-        fields: [
+        sequence: [
           {
             name: "data",
             type: "array",
@@ -145,7 +145,7 @@ export const multipleStringsTestSuite = defineTestSuite({
         ]
       },
       "User": {
-        fields: [
+        sequence: [
           { name: "id", type: "uint32" },
           { name: "username", type: "ShortString" },
           { name: "email", type: "ShortString" },
@@ -200,7 +200,7 @@ export const cStringTestSuite = defineTestSuite({
   schema: {
     types: {
       "CString": {
-        fields: [
+        sequence: [
           {
             name: "data",
             type: "array",
@@ -210,7 +210,7 @@ export const cStringTestSuite = defineTestSuite({
         ]
       },
       "CStringValue": {
-        fields: [
+        sequence: [
           { name: "text", type: "CString" }
         ]
       }

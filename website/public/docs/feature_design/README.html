@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feature Design Documentation - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>Feature Design Documentation</h1>
+<p>This directory contains historical design documents and architectural decision records for major SuperChat features. These documents capture the &quot;why&quot; and &quot;how&quot; of implementation decisions and are preserved for historical reference.</p>
+<h2>Purpose</h2>
+<ul>
+<li><strong>Architectural Decision Records</strong>: Document why we chose specific approaches</li>
+<li><strong>Implementation Plans</strong>: Detailed plans that guided feature development</li>
+<li><strong>Debugging Sessions</strong>: Complex bugs and their root cause analysis</li>
+<li><strong>Design Rationale</strong>: Trade-offs and considerations for major features</li>
+</ul>
+<h2>Documents</h2>
+<h3>Completed Features</h3>
+<h4><code>subscription_system.md</code> ✅</h4>
+<p>Design and implementation plan for the message subscription/broadcast optimization system. This feature reduced broadcast fan-out from 2000 clients to ~40 clients per channel, improving response time from 978ms to &lt;50ms at scale.</p>
+<p><strong>Key Decisions:</strong></p>
+<ul>
+<li>Explicit subscription model (not auto-subscribe on JOIN_CHANNEL)</li>
+<li>Client provides thread_root_id to avoid database lookups</li>
+<li>Encode-once optimization (encode frame once, write N times)</li>
+<li>Idempotent subscription operations</li>
+</ul>
+<p><strong>Implementation:</strong> V1, fully complete</p>
+<hr>
+<h4><code>ssh_authentication.md</code> ✅</h4>
+<p>Complete implementation plan for SSH key authentication with auto-registration. Documents all 8 implementation phases from database schema to server discovery.</p>
+<p><strong>Key Decisions:</strong></p>
+<ul>
+<li>Fingerprint-based identity (SHA256 of public key)</li>
+<li>Auto-registration on first SSH connect</li>
+<li>SSH key management via protocol messages (not just SSH)</li>
+<li>Password change support for SSH-registered users</li>
+<li>Server discovery system for client bootstrapping</li>
+</ul>
+<p><strong>Implementation:</strong> V2, mostly complete (minor TODOs: rate limiting, encrypted key passphrases)</p>
+<hr>
+<h4><code>loadtest_race_condition_debug.md</code> ✅</h4>
+<p>Detailed debugging session documenting a critical race condition discovered during load testing at 50+ concurrent clients.</p>
+<p><strong>Problem:</strong> Corrupted protocol frames causing random disconnections
+<strong>Root Cause:</strong> Unsynchronized concurrent writes to <code>net.Conn</code> (direct responses vs broadcasts)
+<strong>Solution:</strong> Added <code>Session.writeMu</code> mutex to serialize all frame writes</p>
+<p><strong>Impact:</strong> Improved success rate from 98.9% to 100% under load</p>
+<hr>
+<h2>Usage Guidelines</h2>
+<h3>When to Add Documents Here</h3>
+<p>Add a document to this directory when:</p>
+<ol>
+<li>Implementing a major feature (&gt;3 days effort)</li>
+<li>Making significant architectural decisions</li>
+<li>Debugging complex, non-obvious bugs</li>
+<li>Exploring design alternatives and trade-offs</li>
+</ol>
+<h3>Document Structure</h3>
+<p>Each document should include:</p>
+<ul>
+<li><strong>Status header</strong>: ✅ IMPLEMENTED / ⚠️ IN PROGRESS / ❌ NOT STARTED</li>
+<li><strong>Summary</strong>: What was implemented and where to find it in the code</li>
+<li><strong>Historical marker</strong>: Indicate it&#39;s a reference document, not active TODO</li>
+<li><strong>Original content</strong>: Preserve the full design/debug process</li>
+</ul>
+<h3>Maintenance</h3>
+<ul>
+<li>Mark documents as complete when implementation finishes</li>
+<li>Add code references (file paths, line numbers) to status header</li>
+<li>Update CLAUDE.md&#39;s &quot;Key Files&quot; section with new documents</li>
+<li>Do NOT delete historical documents (they provide institutional knowledge)</li>
+</ul>
+<hr>
+<h2>Related Documentation</h2>
+<ul>
+<li><strong>Active Documentation:</strong> See <code>docs/</code> for current specs (PROTOCOL.md, V1.md, V2.md, etc.)</li>
+<li><strong>Project Guide:</strong> See <code>CLAUDE.md</code> for development guidelines</li>
+<li><strong>Implementation Status:</strong> See <code>docs/versions/V2.md</code> for current feature status</li>
+</ul>
+<hr>
+<p><strong>Note:</strong> This directory is for completed/historical documentation. For active TODO lists and current implementation status, see <code>docs/versions/V3.md</code> and <code>docs/IMPROVEMENTS_ROADMAP.md</code>.</p>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat Configuration Reference - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat Configuration Reference</h1>
+<p>Complete reference for all SuperChat server configuration options.</p>
+<h2>Table of Contents</h2>
+<ul>
+<li><a href="#configuration-file-location">Configuration File Location</a></li>
+<li><a href="#configuration-format">Configuration Format</a></li>
+<li><a href="#server-section">Server Section</a></li>
+<li><a href="#limits-section">Limits Section</a></li>
+<li><a href="#retention-section">Retention Section</a></li>
+<li><a href="#channels-section">Channels Section</a></li>
+<li><a href="#discovery-section">Discovery Section</a></li>
+<li><a href="#environment-variable-overrides">Environment Variable Overrides</a></li>
+<li><a href="#command-line-flags">Command-Line Flags</a></li>
+<li><a href="#example-configurations">Example Configurations</a></li>
+<li><a href="#performance-tuning">Performance Tuning</a></li>
+</ul>
+<h2>Configuration File Location</h2>
+<p><strong>Default path:</strong> <code>~/.superchat/config.toml</code></p>
+<p><strong>Custom path:</strong></p>
+<pre><code class="language-bash">scd --config /path/to/config.toml
+</code></pre>
+<p><strong>Config file precedence:</strong></p>
+<ol>
+<li>Command-line flags (highest priority)</li>
+<li>Environment variables</li>
+<li>Config file values</li>
+<li>Default values (lowest priority)</li>
+</ol>
+<p>If the config file doesn&#39;t exist, SuperChat creates it with default values on first startup.</p>
+<h2>Configuration Format</h2>
+<p>SuperChat uses TOML format for configuration files.</p>
+<p><strong>Full configuration example:</strong></p>
+<pre><code class="language-toml">[server]
+tcp_port = 6465
+ssh_port = 6466
+http_port = 6467
+ssh_host_key = &quot;~/.superchat/ssh_host_key&quot;
+database_path = &quot;~/.superchat/superchat.db&quot;
+
+[limits]
+max_connections_per_ip = 10
+message_rate_limit = 10
+max_message_length = 4096
+max_nickname_length = 20
+session_timeout_seconds = 120
+
+[retention]
+default_retention_hours = 168
+cleanup_interval_minutes = 60
+
+[channels]
+seed_channels = [
+  { name = &quot;general&quot;, description = &quot;General discussion&quot; },
+  { name = &quot;tech&quot;, description = &quot;Technical topics&quot; },
+  { name = &quot;random&quot;, description = &quot;Off-topic chat&quot; },
+  { name = &quot;feedback&quot;, description = &quot;Bug reports and feature requests&quot; }
+]
+
+[discovery]
+directory_enabled = true
+public_hostname = &quot;&quot;
+server_name = &quot;SuperChat Server&quot;
+server_description = &quot;A SuperChat community server&quot;
+max_users = 0
+</code></pre>
+<h2>Server Section</h2>
+<p>Controls core server behavior and network settings.</p>
+<h3><code>tcp_port</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>6465</code></li>
+<li><strong>Description:</strong> Port for binary TCP connections (main protocol)</li>
+<li><strong>Range:</strong> 1024-65535 (recommend 1024+ for non-root)</li>
+<li><strong>Example:</strong><pre><code class="language-toml">tcp_port = 6465
+</code></pre>
+</li>
+</ul>
+<h3><code>ssh_port</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>6466</code></li>
+<li><strong>Description:</strong> Port for SSH connections (V2 SSH authentication)</li>
+<li><strong>Range:</strong> 1024-65535</li>
+<li><strong>Notes:</strong> Only active if SSH is enabled; clients connect via <code>ssh://user@host:6466</code></li>
+<li><strong>Example:</strong><pre><code class="language-toml">ssh_port = 6466
+</code></pre>
+</li>
+</ul>
+<h3><code>http_port</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>6467</code></li>
+<li><strong>Description:</strong> Port for HTTP/WebSocket connections</li>
+<li><strong>Range:</strong> 1024-65535</li>
+<li><strong>Notes:</strong> Serves WebSocket endpoint at <code>/ws</code> for firewall-restricted clients</li>
+<li><strong>Example:</strong><pre><code class="language-toml">http_port = 6467
+</code></pre>
+</li>
+</ul>
+<h3><code>ssh_host_key</code></h3>
+<ul>
+<li><strong>Type:</strong> String (file path)</li>
+<li><strong>Default:</strong> <code>&quot;~/.superchat/ssh_host_key&quot;</code></li>
+<li><strong>Description:</strong> Path to SSH host private key (auto-generated if missing)</li>
+<li><strong>Notes:</strong><ul>
+<li>Supports <code>~</code> expansion</li>
+<li>Key type: Ed25519</li>
+<li>File permissions: 600 recommended</li>
+<li>Regenerating this key will cause &quot;host key changed&quot; warnings for SSH clients</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">ssh_host_key = &quot;/var/lib/superchat/ssh_host_key&quot;
+</code></pre>
+</li>
+</ul>
+<h3><code>database_path</code></h3>
+<ul>
+<li><strong>Type:</strong> String (file path)</li>
+<li><strong>Default:</strong> <code>&quot;~/.superchat/superchat.db&quot;</code></li>
+<li><strong>Description:</strong> Path to SQLite database file</li>
+<li><strong>Notes:</strong><ul>
+<li>Supports <code>~</code> expansion</li>
+<li>Parent directory must exist and be writable</li>
+<li>Database is auto-created on first startup</li>
+<li>Migrations run automatically before loading</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">database_path = &quot;/var/lib/superchat/superchat.db&quot;
+</code></pre>
+</li>
+</ul>
+<h2>Limits Section</h2>
+<p>Controls rate limiting, connection limits, and resource constraints.</p>
+<h3><code>max_connections_per_ip</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>10</code></li>
+<li><strong>Description:</strong> Maximum concurrent connections from a single IP address</li>
+<li><strong>Range:</strong> 1-255</li>
+<li><strong>Use case:</strong> Prevent single-IP abuse while allowing shared IPs (NAT, VPN)</li>
+<li><strong>Tuning:</strong><ul>
+<li>Home/small server: 10-20</li>
+<li>Public server: 50-100 (allow shared IPs)</li>
+<li>Corporate/NAT: 100+ (many users behind one IP)</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">max_connections_per_ip = 50
+</code></pre>
+</li>
+</ul>
+<h3><code>message_rate_limit</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>10</code></li>
+<li><strong>Description:</strong> Maximum messages per minute per session</li>
+<li><strong>Range:</strong> 1-65535</li>
+<li><strong>Use case:</strong> Prevent spam and flooding</li>
+<li><strong>Tuning:</strong><ul>
+<li>Strict anti-spam: 5-10 messages/min</li>
+<li>Balanced: 10-20 messages/min</li>
+<li>Permissive/chat: 30-60 messages/min</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">message_rate_limit = 20
+</code></pre>
+</li>
+</ul>
+<h3><code>max_message_length</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>4096</code></li>
+<li><strong>Description:</strong> Maximum message content length in bytes</li>
+<li><strong>Range:</strong> 1-65535 (protocol limit: 1MB frame size)</li>
+<li><strong>Use case:</strong> Balance between expressiveness and DoS protection</li>
+<li><strong>Notes:</strong><ul>
+<li>Includes message content only (not protocol overhead)</li>
+<li>UTF-8 characters may use multiple bytes</li>
+</ul>
+</li>
+<li><strong>Tuning:</strong><ul>
+<li>Chat-style: 512-1024 bytes</li>
+<li>Forum-style: 4096-8192 bytes</li>
+<li>Long-form: 16384-32768 bytes</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">max_message_length = 8192
+</code></pre>
+</li>
+</ul>
+<h3><code>max_nickname_length</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>20</code></li>
+<li><strong>Description:</strong> Maximum nickname length in characters</li>
+<li><strong>Range:</strong> 3-255</li>
+<li><strong>Protocol constraint:</strong> Minimum 3 characters (enforced in validation)</li>
+<li><strong>Example:</strong><pre><code class="language-toml">max_nickname_length = 20
+</code></pre>
+</li>
+</ul>
+<h3><code>session_timeout_seconds</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>120</code></li>
+<li><strong>Description:</strong> Seconds of inactivity before session timeout</li>
+<li><strong>Range:</strong> 60-3600</li>
+<li><strong>Notes:</strong><ul>
+<li>Client sends PING every 30 seconds to keep alive</li>
+<li>Timeout should be 2-4x the PING interval</li>
+<li>Lower values free resources faster</li>
+<li>Higher values handle network hiccups better</li>
+</ul>
+</li>
+<li><strong>Tuning:</strong><ul>
+<li>Aggressive cleanup: 60-90 seconds</li>
+<li>Balanced: 120 seconds (default)</li>
+<li>Lenient: 180-300 seconds</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">session_timeout_seconds = 180
+</code></pre>
+</li>
+</ul>
+<h2>Retention Section</h2>
+<p>Controls message retention and cleanup behavior.</p>
+<h3><code>default_retention_hours</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>168</code> (7 days)</li>
+<li><strong>Description:</strong> Default message retention period in hours</li>
+<li><strong>Range:</strong> 1-8760 (1 hour to 1 year)</li>
+<li><strong>Notes:</strong><ul>
+<li>Per-channel retention can override this</li>
+<li>Deleted messages (soft-deleted) are still cleaned up after retention expires</li>
+<li>Setting retention too low may frustrate users</li>
+<li>Setting retention too high increases database size</li>
+</ul>
+</li>
+<li><strong>Tuning:</strong><ul>
+<li>Chat channels: 24-168 hours (1-7 days)</li>
+<li>Forum channels: 720-4320 hours (30-180 days)</li>
+<li>Archive channels: 8760 hours (1 year)</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">default_retention_hours = 720  # 30 days
+</code></pre>
+</li>
+</ul>
+<h3><code>cleanup_interval_minutes</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>60</code></li>
+<li><strong>Description:</strong> How often to run the message cleanup task</li>
+<li><strong>Range:</strong> 1-1440 (1 minute to 1 day)</li>
+<li><strong>Notes:</strong><ul>
+<li>Cleanup deletes messages older than retention period</li>
+<li>Lower values keep database smaller but use more CPU</li>
+<li>Higher values use less CPU but allow temporary overgrowth</li>
+</ul>
+</li>
+<li><strong>Tuning:</strong><ul>
+<li>High-traffic: 30-60 minutes</li>
+<li>Low-traffic: 120-360 minutes</li>
+<li>Very low-traffic: 1440 minutes (daily)</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">cleanup_interval_minutes = 120
+</code></pre>
+</li>
+</ul>
+<h2>Channels Section</h2>
+<p>Controls initial channel creation (seed channels).</p>
+<h3><code>seed_channels</code></h3>
+<ul>
+<li><strong>Type:</strong> Array of {name, description} objects</li>
+<li><strong>Default:</strong> 4 channels (general, tech, random, feedback)</li>
+<li><strong>Description:</strong> Channels to create on first server startup</li>
+<li><strong>Notes:</strong><ul>
+<li>Only created if database is empty (first run)</li>
+<li>Channel names must be unique, 3-50 characters, lowercase letters/numbers/hyphens</li>
+<li>Description is optional, max 500 characters</li>
+<li>All seed channels are forum type (type 1, threaded)</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">seed_channels = [
+  { name = &quot;announcements&quot;, description = &quot;Server announcements and updates&quot; },
+  { name = &quot;general&quot;, description = &quot;General discussion&quot; },
+  { name = &quot;help&quot;, description = &quot;Get help with SuperChat&quot; },
+  { name = &quot;meta&quot;, description = &quot;Discuss the server itself&quot; }
+]
+</code></pre>
+</li>
+</ul>
+<p><strong>To disable seed channels</strong> (empty server on first start):</p>
+<pre><code class="language-toml">seed_channels = []
+</code></pre>
+<h2>Discovery Section</h2>
+<p>Controls server directory listing and discoverability.</p>
+<h3><code>directory_enabled</code></h3>
+<ul>
+<li><strong>Type:</strong> Boolean</li>
+<li><strong>Default:</strong> <code>true</code></li>
+<li><strong>Description:</strong> Enable directory mode (accept server announcements)</li>
+<li><strong>Notes:</strong><ul>
+<li>If <code>true</code>, this server acts as a directory (other servers can announce to it)</li>
+<li>If <code>false</code>, this server does not accept announcements</li>
+<li>Does not affect this server&#39;s ability to announce to other directories</li>
+</ul>
+</li>
+<li><strong>Use case:</strong><ul>
+<li>Directory servers: <code>true</code> (e.g., superchat.win)</li>
+<li>Regular servers: <code>true</code> or <code>false</code> (no effect)</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">directory_enabled = false  # Don&#39;t accept server listings
+</code></pre>
+</li>
+</ul>
+<h3><code>public_hostname</code></h3>
+<ul>
+<li><strong>Type:</strong> String</li>
+<li><strong>Default:</strong> <code>&quot;&quot;</code> (auto-detect)</li>
+<li><strong>Description:</strong> Public hostname/IP for directory listings</li>
+<li><strong>Notes:</strong><ul>
+<li>If empty, server auto-detects public IP</li>
+<li>Should be the hostname/IP clients will use to connect</li>
+<li>Include port if non-standard: <code>example.com:6465</code></li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">public_hostname = &quot;chat.example.com&quot;
+</code></pre>
+</li>
+</ul>
+<h3><code>server_name</code></h3>
+<ul>
+<li><strong>Type:</strong> String</li>
+<li><strong>Default:</strong> <code>&quot;SuperChat Server&quot;</code></li>
+<li><strong>Description:</strong> Human-readable server name for directory listings</li>
+<li><strong>Length:</strong> Max 100 characters</li>
+<li><strong>Example:</strong><pre><code class="language-toml">server_name = &quot;My Awesome Community&quot;
+</code></pre>
+</li>
+</ul>
+<h3><code>server_description</code></h3>
+<ul>
+<li><strong>Type:</strong> String</li>
+<li><strong>Default:</strong> <code>&quot;A SuperChat community server&quot;</code></li>
+<li><strong>Description:</strong> Server description for directory listings</li>
+<li><strong>Length:</strong> Max 500 characters</li>
+<li><strong>Example:</strong><pre><code class="language-toml">server_description = &quot;A friendly community for discussing technology, science, and open source software.&quot;
+</code></pre>
+</li>
+</ul>
+<h3><code>max_users</code></h3>
+<ul>
+<li><strong>Type:</strong> Integer</li>
+<li><strong>Default:</strong> <code>0</code> (unlimited)</li>
+<li><strong>Description:</strong> Maximum concurrent users (shown in directory)</li>
+<li><strong>Range:</strong> 0-4294967295 (0 = unlimited)</li>
+<li><strong>Notes:</strong><ul>
+<li>This is informational for directory listings</li>
+<li>Server does not enforce this limit (use <code>max_connections_per_ip</code> for rate limiting)</li>
+<li>Helps users choose servers with capacity</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code class="language-toml">max_users = 1000  # Show capacity of 1000 users
+</code></pre>
+</li>
+</ul>
+<h2>Environment Variable Overrides</h2>
+<p>All configuration options can be overridden with environment variables.</p>
+<p><strong>Format:</strong> <code>SUPERCHAT_SECTION_KEY=value</code></p>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Server section
+export SUPERCHAT_SERVER_TCP_PORT=7000
+export SUPERCHAT_SERVER_SSH_PORT=7001
+export SUPERCHAT_SERVER_HTTP_PORT=7002
+export SUPERCHAT_SERVER_SSH_HOST_KEY=&quot;/etc/superchat/ssh_host_key&quot;
+export SUPERCHAT_SERVER_DATABASE_PATH=&quot;/var/lib/superchat/db.sqlite&quot;
+
+# Limits section
+export SUPERCHAT_LIMITS_MAX_CONNECTIONS_PER_IP=50
+export SUPERCHAT_LIMITS_MESSAGE_RATE_LIMIT=20
+export SUPERCHAT_LIMITS_MAX_MESSAGE_LENGTH=8192
+export SUPERCHAT_LIMITS_MAX_NICKNAME_LENGTH=30
+export SUPERCHAT_LIMITS_SESSION_TIMEOUT_SECONDS=180
+
+# Retention section
+export SUPERCHAT_RETENTION_DEFAULT_RETENTION_HOURS=720
+export SUPERCHAT_RETENTION_CLEANUP_INTERVAL_MINUTES=120
+
+# Discovery section
+export SUPERCHAT_DISCOVERY_DIRECTORY_ENABLED=true
+export SUPERCHAT_DISCOVERY_PUBLIC_HOSTNAME=&quot;chat.example.com&quot;
+export SUPERCHAT_DISCOVERY_SERVER_NAME=&quot;My Server&quot;
+export SUPERCHAT_DISCOVERY_SERVER_DESCRIPTION=&quot;A friendly community&quot;
+export SUPERCHAT_DISCOVERY_MAX_USERS=1000
+
+# Start server (env vars override config file)
+scd --config /etc/superchat/config.toml
+</code></pre>
+<p><strong>Use case:</strong> Docker containers, Kubernetes, CI/CD pipelines where env vars are easier than config files.</p>
+<h2>Command-Line Flags</h2>
+<p>Override config file and environment variables with command-line flags.</p>
+<h3>Available Flags</h3>
+<pre><code class="language-bash">scd [flags]
+
+Flags:
+  --config PATH              Path to config file (default: ~/.superchat/config.toml)
+  --port PORT               TCP port (overrides config tcp_port)
+  --db PATH                 Database path (overrides config database_path)
+  --debug                   Enable debug logging
+  --version                 Show version and exit
+  --disable-directory       Disable directory mode (don&#39;t accept announcements)
+  --announce-to SERVERS     Announce to directory servers (comma-separated)
+  --server-name NAME        Server name for directory listing
+  --server-description DESC Server description for directory listing
+</code></pre>
+<h3>Examples</h3>
+<p><strong>Simple startup:</strong></p>
+<pre><code class="language-bash">scd
+</code></pre>
+<p><strong>Custom port:</strong></p>
+<pre><code class="language-bash">scd --port 7000
+</code></pre>
+<p><strong>Custom config and database:</strong></p>
+<pre><code class="language-bash">scd --config /etc/superchat/config.toml --db /var/lib/superchat/db.sqlite
+</code></pre>
+<p><strong>Debug logging:</strong></p>
+<pre><code class="language-bash">scd --debug
+</code></pre>
+<p><strong>Announce to directory server:</strong></p>
+<pre><code class="language-bash">scd --announce-to superchat.win:6465 \
+    --server-name &quot;My Community&quot; \
+    --server-description &quot;A friendly place to chat&quot;
+</code></pre>
+<p><strong>Disable directory (don&#39;t accept announcements):</strong></p>
+<pre><code class="language-bash">scd --disable-directory
+</code></pre>
+<h2>Example Configurations</h2>
+<h3>Development Environment</h3>
+<p><strong>Minimal local development:</strong></p>
+<pre><code class="language-toml">[server]
+tcp_port = 6465
+ssh_port = 6466
+http_port = 6467
+database_path = &quot;./superchat.db&quot;
+
+[limits]
+max_connections_per_ip = 100
+message_rate_limit = 100
+session_timeout_seconds = 300
+
+[retention]
+default_retention_hours = 24
+cleanup_interval_minutes = 60
+
+[channels]
+seed_channels = [
+  { name = &quot;test&quot;, description = &quot;Test channel&quot; }
+]
+
+[discovery]
+directory_enabled = false
+</code></pre>
+<h3>Small Community Server</h3>
+<p><strong>10-100 users, casual moderation:</strong></p>
+<pre><code class="language-toml">[server]
+tcp_port = 6465
+ssh_port = 6466
+http_port = 6467
+ssh_host_key = &quot;/var/lib/superchat/ssh_host_key&quot;
+database_path = &quot;/var/lib/superchat/superchat.db&quot;
+
+[limits]
+max_connections_per_ip = 20
+message_rate_limit = 15
+max_message_length = 4096
+session_timeout_seconds = 120
+
+[retention]
+default_retention_hours = 168  # 7 days
+cleanup_interval_minutes = 60
+
+[channels]
+seed_channels = [
+  { name = &quot;general&quot;, description = &quot;General discussion&quot; },
+  { name = &quot;announcements&quot;, description = &quot;Server announcements&quot; },
+  { name = &quot;feedback&quot;, description = &quot;Suggestions and bug reports&quot; }
+]
+
+[discovery]
+directory_enabled = true
+public_hostname = &quot;chat.example.com&quot;
+server_name = &quot;Example Community&quot;
+server_description = &quot;A friendly community for discussing technology and open source&quot;
+max_users = 100
+</code></pre>
+<h3>Large Public Server</h3>
+<p><strong>1000+ users, strict moderation:</strong></p>
+<pre><code class="language-toml">[server]
+tcp_port = 6465
+ssh_port = 6466
+http_port = 6467
+ssh_host_key = &quot;/var/lib/superchat/ssh_host_key&quot;
+database_path = &quot;/var/lib/superchat/superchat.db&quot;
+
+[limits]
+max_connections_per_ip = 100  # Allow shared IPs (NAT, VPN)
+message_rate_limit = 10  # Strict anti-spam
+max_message_length = 4096
+max_nickname_length = 20
+session_timeout_seconds = 120
+
+[retention]
+default_retention_hours = 720  # 30 days
+cleanup_interval_minutes = 30  # Frequent cleanup
+
+[channels]
+seed_channels = [
+  { name = &quot;welcome&quot;, description = &quot;Welcome and rules&quot; },
+  { name = &quot;general&quot;, description = &quot;General discussion&quot; },
+  { name = &quot;help&quot;, description = &quot;Get help using SuperChat&quot; }
+]
+
+[discovery]
+directory_enabled = true
+public_hostname = &quot;chat.example.com&quot;
+server_name = &quot;Large Public Community&quot;
+server_description = &quot;A welcoming community for everyone&quot;
+max_users = 10000
+</code></pre>
+<h3>Private Internal Server</h3>
+<p><strong>Corporate/internal use, no public listing:</strong></p>
+<pre><code class="language-toml">[server]
+tcp_port = 6465
+ssh_port = 6466
+http_port = 6467
+ssh_host_key = &quot;/var/lib/superchat/ssh_host_key&quot;
+database_path = &quot;/var/lib/superchat/superchat.db&quot;
+
+[limits]
+max_connections_per_ip = 200  # Many users behind corporate NAT
+message_rate_limit = 30  # Internal users are trusted
+max_message_length = 8192  # Allow longer messages
+session_timeout_seconds = 300  # Lenient timeout
+
+[retention]
+default_retention_hours = 4320  # 180 days (compliance)
+cleanup_interval_minutes = 1440  # Daily cleanup
+
+[channels]
+seed_channels = [
+  { name = &quot;announcements&quot;, description = &quot;Company announcements&quot; },
+  { name = &quot;general&quot;, description = &quot;General discussion&quot; },
+  { name = &quot;tech&quot;, description = &quot;Technical discussions&quot; },
+  { name = &quot;random&quot;, description = &quot;Off-topic&quot; }
+]
+
+[discovery]
+directory_enabled = false  # Private server, no public listing
+server_name = &quot;Internal Chat&quot;
+server_description = &quot;Internal company communication&quot;
+</code></pre>
+<h2>Performance Tuning</h2>
+<h3>By Server Scale</h3>
+<p><strong>Small (&lt; 100 users):</strong></p>
+<ul>
+<li><code>max_connections_per_ip</code>: 20-50</li>
+<li><code>message_rate_limit</code>: 10-20</li>
+<li><code>session_timeout_seconds</code>: 120-180</li>
+<li><code>cleanup_interval_minutes</code>: 60-120</li>
+</ul>
+<p><strong>Medium (100-1000 users):</strong></p>
+<ul>
+<li><code>max_connections_per_ip</code>: 50-100</li>
+<li><code>message_rate_limit</code>: 10-15</li>
+<li><code>session_timeout_seconds</code>: 120</li>
+<li><code>cleanup_interval_minutes</code>: 30-60</li>
+</ul>
+<p><strong>Large (1000-10000 users):</strong></p>
+<ul>
+<li><code>max_connections_per_ip</code>: 100-200</li>
+<li><code>message_rate_limit</code>: 5-10 (strict anti-spam)</li>
+<li><code>session_timeout_seconds</code>: 90-120</li>
+<li><code>cleanup_interval_minutes</code>: 15-30</li>
+</ul>
+<p><strong>Very Large (10000+ users):</strong></p>
+<ul>
+<li><code>max_connections_per_ip</code>: 200+</li>
+<li><code>message_rate_limit</code>: 5-10</li>
+<li><code>session_timeout_seconds</code>: 60-90</li>
+<li><code>cleanup_interval_minutes</code>: 15</li>
+<li><strong>Note:</strong> Current tested limit is ~10k concurrent connections (CPU-bound)</li>
+</ul>
+<h3>Resource Optimization</h3>
+<p><strong>CPU-bound (high user count):</strong></p>
+<ul>
+<li>Reduce <code>cleanup_interval_minutes</code> to 60-120 (less frequent cleanup)</li>
+<li>Reduce <code>session_timeout_seconds</code> to 60-90 (faster cleanup of dead sessions)</li>
+<li>Consider horizontal scaling (V4 feature, not yet implemented)</li>
+</ul>
+<p><strong>Memory-bound (limited RAM):</strong></p>
+<ul>
+<li>Reduce <code>max_connections_per_ip</code> (fewer concurrent sessions)</li>
+<li>Reduce <code>default_retention_hours</code> (smaller database)</li>
+<li>Increase <code>cleanup_interval_minutes</code> to 15-30 (more aggressive cleanup)</li>
+</ul>
+<p><strong>Disk I/O-bound:</strong></p>
+<ul>
+<li>Increase <code>cleanup_interval_minutes</code> to 120+ (less frequent writes)</li>
+<li>Use SSD for database storage</li>
+<li>Consider WAL mode (SQLite default in SuperChat)</li>
+</ul>
+<h2>Next Steps</h2>
+<ul>
+<li><a href="DEPLOYMENT.md">DEPLOYMENT.md</a> - Server deployment guide</li>
+<li><a href="SECURITY.md">SECURITY.md</a> - Security hardening</li>
+<li><a href="MONITORING.md">MONITORING.md</a> - Monitoring configuration</li>
+<li><a href="BACKUP_AND_RECOVERY.md">BACKUP_AND_RECOVERY.md</a> - Backup strategies</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

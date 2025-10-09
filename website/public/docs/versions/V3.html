@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat V3 Specification - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat V3 Specification</h1>
+<h2>Overview</h2>
+<p>V3 adds advanced channel features and privacy features. All V3 features maintain backward compatibility with V1/V2 clients.</p>
+<p><strong>V3 Status:</strong> Not Started</p>
+<hr>
+<h2>V3 Feature List</h2>
+<h3>1. Subchannels</h3>
+<p><strong>Status:</strong> Not Started
+<strong>Priority:</strong> High
+<strong>Estimated Effort:</strong> 3-5 days</p>
+<p><strong>Requirements:</strong></p>
+<ul>
+<li>Two-level channel hierarchy (Channel &gt; Subchannel)</li>
+<li>CREATE_SUBCHANNEL message (0x08)</li>
+<li>SUBCHANNEL_CREATED broadcast (0x88)</li>
+<li>GET_SUBCHANNELS request, SUBCHANNEL_LIST response</li>
+<li>Each subchannel has own type and retention settings</li>
+</ul>
+<p><strong>Key Changes Needed:</strong></p>
+<ul>
+<li>Add Subchannel table (id, channel_id FK, name, display_name, description, type, retention)</li>
+<li>Protocol messages already defined in PROTOCOL.md (just need implementation)</li>
+<li>Update Message table queries to support subchannel_id</li>
+<li>UI changes to show channel hierarchy</li>
+</ul>
+<p><strong>Protocol Impact:</strong></p>
+<ul>
+<li>Client → Server: CREATE_SUBCHANNEL (0x08), GET_SUBCHANNELS (0x15)</li>
+<li>Server → Client: SUBCHANNEL_CREATED (0x88), SUBCHANNEL_LIST (0x97)</li>
+<li>All message operations support optional subchannel_id</li>
+</ul>
+<p><strong>Database Migration:</strong></p>
+<pre><code class="language-sql">-- 006_add_subchannels.sql
+CREATE TABLE IF NOT EXISTS Subchannel (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  message_retention_hours INTEGER NOT NULL DEFAULT 168,
+  subchannel_type INTEGER NOT NULL DEFAULT 1,  -- 0=chat, 1=forum
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (channel_id) REFERENCES Channel(id) ON DELETE CASCADE,
+  UNIQUE(channel_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subchannel_channel ON Subchannel(channel_id);
+</code></pre>
+<p><strong>Files to Create/Modify:</strong></p>
+<ul>
+<li><code>pkg/database/migrations/006_add_subchannels.sql</code> - Subchannel table</li>
+<li><code>pkg/protocol/messages.go</code> - Subchannel message implementations</li>
+<li><code>pkg/server/handlers.go</code> - handleCreateSubchannel, handleGetSubchannels</li>
+<li><code>pkg/database/database.go</code> - Subchannel CRUD operations</li>
+<li><code>pkg/client/ui/</code> - Subchannel navigation in channel sidebar</li>
+</ul>
+<hr>
+<h3>2. Direct Messages (DMs)</h3>
+<p><strong>Status:</strong> Not Started
+<strong>Priority:</strong> Medium
+<strong>Estimated Effort:</strong> 5-7 days</p>
+<p><strong>Requirements:</strong></p>
+<ul>
+<li>Private channels between users (not in public channel list)</li>
+<li>Optional end-to-end encryption</li>
+<li>Support for both registered and anonymous users</li>
+<li>Flexible key setup flow</li>
+</ul>
+<p><strong>Key Features:</strong></p>
+<ul>
+<li>When starting a DM, users can choose:<ol>
+<li>Set up encryption (generate/import key)</li>
+<li>Allow unencrypted now (one-time for this DM)</li>
+<li>Allow unencrypted forever (set permanent preference)</li>
+</ol>
+</li>
+</ul>
+<p><strong>Key Management:</strong></p>
+<ul>
+<li>SSH users: SSH key automatically used for encryption</li>
+<li>Password users: Can generate/upload public key</li>
+<li>Anonymous users: Can generate session-only keypair (lost on disconnect)</li>
+<li>Multiple keys: Server re-encrypts channel keys when new key added</li>
+</ul>
+<p><strong>Encryption Details:</strong></p>
+<ul>
+<li>Each DM has unique symmetric key (AES-256)</li>
+<li>Symmetric key encrypted with each participant&#39;s public key</li>
+<li>Stored in <code>ChannelAccess</code> table (one entry per participant per channel)</li>
+<li>Messages encrypted with AES-256-GCM</li>
+<li>Anonymous users receive channel key in plaintext (no way to encrypt it persistently)</li>
+</ul>
+<p><strong>Protocol Messages:</strong></p>
+<ul>
+<li>CREATE_DM (0x17) - Client → Server</li>
+<li>DM_CREATED (0x97) - Server → Client</li>
+<li>PROVIDE_PUBLIC_KEY (0x18) - Client → Server (for encryption)</li>
+<li>PUBLIC_KEY_RECEIVED (0x98) - Server → Client</li>
+</ul>
+<p><strong>Database Changes:</strong></p>
+<ul>
+<li>Add <code>is_dm</code> flag to Channel table</li>
+<li>Add ChannelAccess table (channel_id, user_id, encrypted_channel_key)</li>
+<li>Add PublicKey table (user_id, key_type, public_key)</li>
+</ul>
+<p><strong>Files to Create/Modify:</strong></p>
+<ul>
+<li><code>pkg/database/migrations/007_add_direct_messages.sql</code></li>
+<li><code>pkg/protocol/messages.go</code> - DM protocol messages</li>
+<li><code>pkg/server/handlers.go</code> - DM creation and key management</li>
+<li><code>pkg/client/ui/</code> - DM UI, encryption setup flow</li>
+</ul>
+<hr>
+<h3>3. End-to-End Encryption</h3>
+<p><strong>Status:</strong> Not Started
+<strong>Priority:</strong> Medium
+<strong>Estimated Effort:</strong> Included in DM implementation</p>
+<p><strong>Requirements:</strong></p>
+<ul>
+<li>AES-256-GCM for message encryption</li>
+<li>RSA/Ed25519 for key exchange</li>
+<li>Per-channel symmetric keys</li>
+<li>Key rotation support</li>
+</ul>
+<p><strong>Security Considerations:</strong></p>
+<ul>
+<li>Use established libraries (Go&#39;s <code>crypto</code> package)</li>
+<li>Proper random number generation for keys/nonces</li>
+<li>Secure key exchange using public key cryptography</li>
+<li>Never log private message content</li>
+<li>Implement proper key storage (encrypted at rest)</li>
+</ul>
+<p><strong>See:</strong> Direct Messages feature (encryption is part of DM implementation)</p>
+<hr>
+<h3>4. Message Compression</h3>
+<p><strong>Status:</strong> Not Started
+<strong>Priority:</strong> Low
+<strong>Estimated Effort:</strong> 1-2 days</p>
+<p><strong>Requirements:</strong></p>
+<ul>
+<li>Compress payloads &gt; 512 bytes</li>
+<li>Use LZ4 for compression</li>
+<li>Compress before encryption (if both are used)</li>
+<li>Flags byte already supports compression bit</li>
+</ul>
+<p><strong>Protocol Impact:</strong></p>
+<ul>
+<li>No new protocol messages needed</li>
+<li>Uses existing flags byte (bit 0 = compression)</li>
+<li>Client and server must both support compression</li>
+</ul>
+<p><strong>Files to Modify:</strong></p>
+<ul>
+<li><code>pkg/protocol/frame.go</code> - Add compression/decompression</li>
+<li>Server and client handlers - Detect and handle compressed frames</li>
+</ul>
+<hr>
+<h3>5. Web Client</h3>
+<p><strong>Status:</strong> Not Started
+<strong>Priority:</strong> Medium
+<strong>Estimated Effort:</strong> 3-5 days</p>
+<p><strong>Requirements:</strong></p>
+<ul>
+<li>Browser-based client using WebSocket connection</li>
+<li>Same binary protocol over WebSocket (reuse existing <code>/ws</code> endpoint)</li>
+<li>Modern web UI (React/Vue/vanilla JS)</li>
+<li>No backend changes needed (WebSocket adapter already speaks binary protocol)</li>
+</ul>
+<p><strong>Key Features:</strong></p>
+<ul>
+<li>No installation required - access via browser</li>
+<li>Works on any device (desktop, mobile, tablet)</li>
+<li>Same protocol, same server, zero server-side changes</li>
+<li>Real-time updates via WebSocket</li>
+<li>Responsive UI with better accessibility than TUI</li>
+</ul>
+<p><strong>Technical Approach:</strong></p>
+<ul>
+<li>JavaScript WebSocket API with <code>binaryType = &#39;arraybuffer&#39;</code></li>
+<li>Implement same binary protocol in JavaScript (frame encoding/decoding)</li>
+<li>Translate protocol message definitions from Go to JS</li>
+<li>Reuse same message flow logic (PROTOCOL_VERSION → SERVER_CONFIG → etc.)</li>
+<li>HTML/CSS UI (much easier than terminal constraints)</li>
+</ul>
+<p><strong>Files to Create:</strong></p>
+<ul>
+<li><code>web/index.html</code> - Main web client page</li>
+<li><code>web/js/protocol.js</code> - Binary protocol implementation in JS</li>
+<li><code>web/js/client.js</code> - WebSocket connection and state management</li>
+<li><code>web/js/ui.js</code> - UI rendering and user interactions</li>
+<li><code>web/css/style.css</code> - Styling</li>
+</ul>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Wider accessibility (browser vs terminal requirement)</li>
+<li>Easier onboarding for non-technical users</li>
+<li>Better mobile experience</li>
+<li>Complements terminal client (different use cases)</li>
+<li>Demonstrates protocol flexibility (same backend, multiple frontends)</li>
+</ul>
+<p><strong>Deployment:</strong></p>
+<ul>
+<li>Can be served as static files from any web server</li>
+<li>Or served from SuperChat server itself (add static file handler)</li>
+<li>Works with existing WSS setup (secure by default)</li>
+</ul>
+<hr>
+<h2>Implementation Priority</h2>
+<p><strong>Recommended order:</strong></p>
+<ol>
+<li><p><strong>Subchannels</strong> (medium complexity)</p>
+<ul>
+<li>New table + migration</li>
+<li>Multiple protocol messages</li>
+<li>UI hierarchy changes</li>
+<li>Estimated: 3-5 days</li>
+</ul>
+</li>
+<li><p><strong>Web Client</strong> (medium complexity, high value)</p>
+<ul>
+<li>No server changes needed (reuses existing WebSocket)</li>
+<li>JavaScript protocol implementation</li>
+<li>Modern web UI</li>
+<li>Estimated: 3-5 days</li>
+</ul>
+</li>
+<li><p><strong>Direct Messages + Encryption</strong> (most complex)</p>
+<ul>
+<li>Multiple database changes</li>
+<li>Key management system</li>
+<li>Encryption implementation</li>
+<li>Complex UI flows</li>
+<li>Estimated: 5-7 days</li>
+</ul>
+</li>
+<li><p><strong>Message Compression</strong> (optional, low priority)</p>
+<ul>
+<li>Performance optimization</li>
+<li>Simple implementation</li>
+<li>Estimated: 1-2 days</li>
+</ul>
+</li>
+</ol>
+<p><strong>Total V3 estimated: ~12-19 days</strong></p>
+<hr>
+<h2>Database Schema Changes (V3)</h2>
+<h3>Planned Migrations</h3>
+<ul>
+<li><strong>006_add_subchannels.sql</strong> - Subchannel table</li>
+<li><strong>007_add_direct_messages.sql</strong> - ChannelAccess, PublicKey tables, Channel.is_dm flag</li>
+<li><strong>008_add_compression.sql</strong> - No schema changes (protocol-level only)</li>
+</ul>
+<hr>
+<h2>Testing Requirements</h2>
+<p>All V3 features must meet coverage requirements:</p>
+<ul>
+<li>Protocol package: 90%+ coverage (enforced)</li>
+<li>Server package: 80-90% coverage</li>
+<li>Encryption: 95%+ coverage (security-critical)</li>
+<li>Database migrations: Path tests validating data integrity</li>
+</ul>
+<p><strong>Migration tests must include:</strong></p>
+<ul>
+<li>Schema validation (tables, indexes, constraints)</li>
+<li>Data integrity validation (existing data preserved)</li>
+<li>Upgrade path testing (v2→v3)</li>
+<li>Encryption key migration if applicable</li>
+</ul>
+<hr>
+<h2>Security Considerations</h2>
+<p>V3 introduces encryption and private messaging:</p>
+<ol>
+<li><p><strong>Encryption:</strong></p>
+<ul>
+<li>Validate all string inputs for length and content</li>
+<li>Use established crypto libraries (Go&#39;s <code>crypto</code> package)</li>
+<li>Proper random number generation for keys/nonces</li>
+<li>Secure key storage (encrypted at rest)</li>
+<li>Never log encrypted message content or keys</li>
+</ul>
+</li>
+<li><p><strong>Direct Messages:</strong></p>
+<ul>
+<li>Access control (only participants can read DMs)</li>
+<li>Prevent DM spam (rate limiting on DM creation)</li>
+<li>Key verification (prevent MITM attacks)</li>
+</ul>
+</li>
+<li><p><strong>Key Management:</strong></p>
+<ul>
+<li>Support key rotation</li>
+<li>Handle compromised keys gracefully</li>
+<li>Allow users to revoke keys</li>
+<li>Multiple keys per user for device management</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2>Client UI Updates Needed (V3)</h2>
+<p><strong>Subchannels:</strong></p>
+<ul>
+<li>Channel sidebar: expand/collapse subchannel list</li>
+<li>Breadcrumb navigation: #channel &gt; /subchannel</li>
+<li>Subchannel creation UI (registered users only)</li>
+</ul>
+<p><strong>Direct Messages:</strong></p>
+<ul>
+<li>DM list view (separate from channels)</li>
+<li>DM creation: user search/selection</li>
+<li>Encryption setup flow:<ul>
+<li>Key generation/import UI</li>
+<li>Encryption preference (always/once/never)</li>
+<li>Key verification UI</li>
+</ul>
+</li>
+<li>Lock icon for encrypted DMs</li>
+</ul>
+<p><strong>Message Compression:</strong></p>
+<ul>
+<li>No UI changes needed (transparent to user)</li>
+<li>Optional: show compression indicator in debug mode</li>
+</ul>
+<hr>
+<h2>V3 → V4 Boundary</h2>
+<p><strong>V4 features</strong> (future, not planned yet):</p>
+<ul>
+<li>Multi-party DMs (3+ participants)</li>
+<li>Read receipts (opt-in)</li>
+<li>Typing indicators</li>
+<li>Message reactions</li>
+<li>Server-to-server federation</li>
+<li>Voice/video chat (out of scope - see CLAUDE.md)</li>
+</ul>
+<hr>
+<h2>References</h2>
+<ul>
+<li><strong>Protocol:</strong> See <code>docs/PROTOCOL.md</code> for complete message specifications</li>
+<li><strong>V1 Spec:</strong> See <code>docs/versions/V1.md</code> for V1 implementation</li>
+<li><strong>V2 Spec:</strong> See <code>docs/versions/V2.md</code> for V2 implementation</li>
+<li><strong>Data Model:</strong> See <code>docs/DATA_MODEL.md</code> for full database schema</li>
+<li><strong>Migrations:</strong> See <code>docs/MIGRATIONS.md</code> for migration system guide</li>
+</ul>
+<hr>
+<p><strong>Note:</strong> V3 development has not started. V2 is complete and production-ready.</p>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

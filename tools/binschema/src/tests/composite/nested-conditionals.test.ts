@@ -15,13 +15,13 @@ export const nestedFieldConditionalTestSuite = defineTestSuite({
     },
     types: {
       "Header": {
-        fields: [
+        sequence: [
           { name: "flags", type: "uint8" },
           { name: "version", type: "uint8" },
         ]
       },
       "Packet": {
-        fields: [
+        sequence: [
           { name: "header", type: "Header" },
           { name: "payload", type: "uint32", conditional: "header.flags & 0x01" },
           { name: "checksum", type: "uint16", conditional: "header.flags & 0x02" },
@@ -114,17 +114,17 @@ export const deeplyNestedConditionalTestSuite = defineTestSuite({
     },
     types: {
       "Config": {
-        fields: [
+        sequence: [
           { name: "enabled", type: "uint8" }
         ]
       },
       "Settings": {
-        fields: [
+        sequence: [
           { name: "config", type: "Config" }
         ]
       },
       "Message": {
-        fields: [
+        sequence: [
           { name: "id", type: "uint8" },
           { name: "settings", type: "Settings" },
           { name: "data", type: "uint32", conditional: "settings.config.enabled == 1" },

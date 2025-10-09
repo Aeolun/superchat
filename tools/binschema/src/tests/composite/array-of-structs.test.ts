@@ -15,13 +15,13 @@ export const fixedArrayOfStructsTestSuite = defineTestSuite({
     },
     types: {
       "Point": {
-        fields: [
+        sequence: [
           { name: "x", type: "uint16" },
           { name: "y", type: "uint16" },
         ]
       },
       "Triangle": {
-        fields: [
+        sequence: [
           {
             name: "vertices",
             type: "array",
@@ -73,14 +73,14 @@ export const lengthPrefixedArrayOfStructsTestSuite = defineTestSuite({
     },
     types: {
       "Color": {
-        fields: [
+        sequence: [
           { name: "r", type: "uint8" },
           { name: "g", type: "uint8" },
           { name: "b", type: "uint8" },
         ]
       },
       "Palette": {
-        fields: [
+        sequence: [
           {
             name: "colors",
             type: "array",
@@ -147,7 +147,7 @@ export const nestedArrayOfStructsTestSuite = defineTestSuite({
     },
     types: {
       "Polygon": {
-        fields: [
+        sequence: [
           {
             name: "vertices",
             type: "array",
@@ -158,7 +158,7 @@ export const nestedArrayOfStructsTestSuite = defineTestSuite({
         ]
       },
       "Scene": {
-        fields: [
+        sequence: [
           {
             name: "shapes",
             type: "array",
@@ -233,19 +233,19 @@ export const arrayOfStructsWithOptionalsTestSuite = defineTestSuite({
     },
     types: {
       "Optional<T>": {
-        fields: [
+        sequence: [
           { name: "present", type: "uint8" },
           { name: "value", type: "T", conditional: "present == 1" },
         ]
       },
       "Person": {
-        fields: [
+        sequence: [
           { name: "age", type: "uint8" },
           { name: "height", type: "Optional<uint16>" }, // Optional height in cm
         ]
       },
       "Group": {
-        fields: [
+        sequence: [
           {
             name: "members",
             type: "array",

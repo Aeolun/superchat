@@ -15,7 +15,7 @@ export const uint16BigEndianTestSuite = defineTestSuite({
     },
     types: {
       "Uint16Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "uint16" }
         ]
       }
@@ -72,7 +72,7 @@ export const uint16LittleEndianTestSuite = defineTestSuite({
     },
     types: {
       "Uint16Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "uint16" }
         ]
       }

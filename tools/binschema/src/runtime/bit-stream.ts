@@ -269,6 +269,10 @@ export class BitStreamDecoder {
   private byteOffset: number = 0;
   private bitOffset: number = 0; // Bits read from current byte (0-7)
   private bitOrder: BitOrder;
+  private savedPositions: number[] = []; // Stack for push/popPosition
+
+  // Position stack depth limit (prevents DoS via deeply nested pointers)
+  private static readonly MAX_POSITION_STACK_DEPTH = 128;
 
   constructor(bytes: Uint8Array | number[], bitOrder: BitOrder = "msb_first") {
     this.bytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -305,8 +309,9 @@ export class BitStreamDecoder {
 
   /**
    * Read a single bit
+   * Public for testing bit-alignment behavior
    */
-  private readBit(): number {
+  readBit(): number {
     if (this.byteOffset >= this.bytes.length) {
       throw new Error("Unexpected end of stream");
     }
@@ -465,6 +470,133 @@ export class BitStreamDecoder {
     }
 
     return view.getFloat64(0, endianness === "little_endian");
+  }
+
+  /**
+   * Get current byte offset (position in buffer)
+   * Returns byte offset regardless of bit offset (DNS pointers are byte-aligned)
+   */
+  get position(): number {
+    return this.byteOffset;
+  }
+
+  /**
+   * Seek to absolute byte offset
+   * Resets bit offset to 0 (byte-aligned)
+   */
+  seek(offset: number): void {
+    if (offset < 0 || offset > this.bytes.length) {
+      throw new Error(
+        `Seek offset ${offset} out of bounds (valid range: 0-${this.bytes.length})`
+      );
+    }
+    this.byteOffset = offset;
+    this.bitOffset = 0;
+  }
+
+  /**
+   * Save current position to stack (for pointer following)
+   */
+  pushPosition(): void {
+    if (this.savedPositions.length >= BitStreamDecoder.MAX_POSITION_STACK_DEPTH) {
+      throw new Error(
+        `Position stack overflow: maximum depth of ${BitStreamDecoder.MAX_POSITION_STACK_DEPTH} exceeded`
+      );
+    }
+    this.savedPositions.push(this.byteOffset);
+  }
+
+  /**
+   * Restore position from stack
+   * Resets bit offset to 0 (byte-aligned)
+   */
+  popPosition(): void {
+    if (this.savedPositions.length === 0) {
+      throw new Error("Position stack underflow: attempted to pop from empty stack");
+    }
+    const saved = this.savedPositions.pop()!;
+    this.byteOffset = saved;
+    this.bitOffset = 0;
+  }
+
+  /**
+   * Peek uint8 without advancing position
+   * Throws error if not byte-aligned
+   */
+  peekUint8(): number {
+    if (this.bitOffset !== 0) {
+      throw new Error(
+        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`
+      );
+    }
+
+    if (this.byteOffset >= this.bytes.length) {
+      throw new Error(
+        `Peek out of bounds: attempted to peek 1 byte at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`
+      );
+    }
+
+    return this.bytes[this.byteOffset];
+  }
+
+  /**
+   * Peek uint16 without advancing position
+   * Throws error if not byte-aligned or insufficient bytes
+   */
+  peekUint16(endianness: Endianness): number {
+    if (this.bitOffset !== 0) {
+      throw new Error(
+        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`
+      );
+    }
+
+    if (this.byteOffset + 2 > this.bytes.length) {
+      throw new Error(
+        `Peek out of bounds: attempted to peek 2 bytes at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`
+      );
+    }
+
+    if (endianness === "big_endian") {
+      return (this.bytes[this.byteOffset] << 8) | this.bytes[this.byteOffset + 1];
+    } else {
+      return this.bytes[this.byteOffset] | (this.bytes[this.byteOffset + 1] << 8);
+    }
+  }
+
+  /**
+   * Peek uint32 without advancing position
+   * Throws error if not byte-aligned or insufficient bytes
+   */
+  peekUint32(endianness: Endianness): number {
+    if (this.bitOffset !== 0) {
+      throw new Error(
+        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`
+      );
+    }
+
+    if (this.byteOffset + 4 > this.bytes.length) {
+      throw new Error(
+        `Peek out of bounds: attempted to peek 4 bytes at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`
+      );
+    }
+
+    if (endianness === "big_endian") {
+      return (
+        ((this.bytes[this.byteOffset] << 24) |
+          (this.bytes[this.byteOffset + 1] << 16) |
+          (this.bytes[this.byteOffset + 2] << 8) |
+          this.bytes[this.byteOffset + 3]) >>>
+        0
+      );
+    } else {
+      return (
+        ((this.bytes[this.byteOffset + 3] << 24) |
+          (this.bytes[this.byteOffset + 2] << 16) |
+          (this.bytes[this.byteOffset + 1] << 8) |
+          this.bytes[this.byteOffset]) >>>
+        0
+      );
+    }
   }
 
   /**

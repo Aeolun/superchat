@@ -1,0 +1,1395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat V1 Specification - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat V1 Specification</h1>
+<h2>Overview</h2>
+<p>This document defines the <strong>Minimum Viable Product (MVP)</strong> for SuperChat V1. The goal is to validate the core value proposition—threaded terminal chat with keyboard navigation—while keeping implementation complexity minimal.</p>
+<p>V1 deliberately omits features that can be added later (V2+) without breaking compatibility. All deferred features are designed to be <strong>parallel additions</strong> that don&#39;t require V1 rewrites.</p>
+<h2>V1 Scope Summary</h2>
+<p><strong>What V1 IS:</strong></p>
+<ul>
+<li>Terminal-based threaded chat application</li>
+<li>Anonymous-only users (no registration)</li>
+<li>TCP connections with binary protocol</li>
+<li>Flat channel structure (no subchannels)</li>
+<li>Forum-style threading (all messages can be threaded)</li>
+<li>Real-time message broadcasts</li>
+<li>Keyboard-driven UI</li>
+<li>Client-side state persistence</li>
+</ul>
+<p><strong>What V1 is NOT:</strong></p>
+<ul>
+<li>Not a secure messaging platform (no encryption in V1)</li>
+<li>Not multi-device synced (local state only)</li>
+<li>Not SSH-based (TCP only)</li>
+<li>Not hierarchical (no subchannels)</li>
+</ul>
+<hr>
+<h2>Core Features (V1)</h2>
+<h3>1. Connection &amp; Authentication</h3>
+<p><strong>V1 Implementation:</strong></p>
+<ul>
+<li>TCP connections only (no SSH)</li>
+<li>No user authentication (anonymous users)</li>
+<li>Server accepts connections without credentials</li>
+<li>Users set nickname on first message post (or proactively)</li>
+</ul>
+<p><strong>Connection Flow:</strong></p>
+<pre><code>1. Client connects to server TCP port (default: 6465)
+2. Server sends: SERVER_CONFIG (protocol version, limits)
+3. Client validates protocol version, stores config
+4. User is &quot;connected anonymously (read-only)&quot;
+5. User browses channels without setting nickname
+6. When user tries to post, client prompts for nickname
+7. Client sends: SET_NICKNAME
+8. Server responds: NICKNAME_RESPONSE
+9. User can now post messages
+</code></pre>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>Protocol already supports AUTH_REQUEST/REGISTER_USER messages</li>
+<li>V1 server can ignore these or return &quot;not implemented&quot; error</li>
+<li>V2 adds User table and authentication logic</li>
+<li>V2 clients can detect server capabilities (check for USER_INFO message support)</li>
+</ul>
+<hr>
+<h3>2. Nickname Handling</h3>
+<p><strong>V1 Implementation:</strong></p>
+<ul>
+<li>Nicknames are <strong>not unique</strong> (multiple anonymous users can use same name)</li>
+<li>No password protection</li>
+<li>No persistent identity across disconnects</li>
+<li>Client stores last-used nickname locally, auto-sets on reconnect</li>
+</ul>
+<p><strong>Nickname Rules (V1):</strong></p>
+<ul>
+<li>3-20 characters</li>
+<li>Alphanumeric plus <code>-</code>, <code>_</code></li>
+<li>No spaces or special characters</li>
+<li>Case-insensitive uniqueness check (but V1 doesn&#39;t enforce uniqueness)</li>
+</ul>
+<p><strong>Display Convention:</strong></p>
+<ul>
+<li>All anonymous users shown with <code>~</code> prefix: <code>~alice</code>, <code>~bob</code></li>
+<li>Clients should visually distinguish multiple users with same name (future: add session ID suffix)</li>
+</ul>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>V2 adds <code>User.registered</code> field</li>
+<li>Registered users shown without <code>~</code> prefix: <code>alice</code></li>
+<li>Message table already has <code>author_user_id</code> (null for V1 anonymous users)</li>
+<li>No V1 data migration needed—anonymous messages remain with null user_id</li>
+</ul>
+<hr>
+<h3>3. Channel Structure</h3>
+<p><strong>V1 Implementation:</strong></p>
+<ul>
+<li>Flat channel list (no subchannel hierarchy)</li>
+<li>Channels are <strong>admin-created only</strong> (users cannot create channels in V1)</li>
+<li>Ship with 4 default channels:<ul>
+<li><code>#general</code> - General discussion</li>
+<li><code>#tech</code> - Technical topics</li>
+<li><code>#random</code> - Off-topic chat</li>
+<li><code>#feedback</code> - Bug reports and feature requests</li>
+</ul>
+</li>
+</ul>
+<p><strong>Channel Properties (V1):</strong></p>
+<ul>
+<li>All channels are <strong>forum type</strong> (threaded messages)</li>
+<li>Default retention: 7 days (168 hours)</li>
+<li>All channels are public (no private channels in V1)</li>
+</ul>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>Protocol already supports CREATE_CHANNEL message</li>
+<li>Database has <code>Channel.created_by</code> field (nullable, null for admin-created)</li>
+<li>V2 enables user channel creation, adds rate limiting</li>
+<li>Subchannels: Database has <code>Subchannel</code> table, protocol has CREATE_SUBCHANNEL<ul>
+<li>V1 server ignores subchannel messages or returns &quot;not implemented&quot;</li>
+<li>V2 adds subchannel logic without schema changes</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h3>4. Message Threading</h3>
+<p><strong>V1 Implementation:</strong></p>
+<ul>
+<li>All messages can be threaded (replies to replies)</li>
+<li>No depth limit - unlimited nesting supported</li>
+<li>Thread depth calculated on INSERT (parent.depth + 1)</li>
+<li>Stored in <code>Message.thread_depth</code> (denormalized for performance)</li>
+</ul>
+<p><strong>Thread Display:</strong></p>
+<ul>
+<li>Root messages (<code>parent_id = null</code>, depth 0) shown in thread list</li>
+<li>Each root shows reply count: <code>(12 replies)</code></li>
+<li>Opening thread shows full tree (depth-first traversal)</li>
+<li>Indentation: 2 spaces per level</li>
+</ul>
+<p><strong>Threading Queries:</strong></p>
+<ul>
+<li><strong>Thread list:</strong> <code>SELECT * FROM Message WHERE channel_id = ? AND parent_id IS NULL ORDER BY created_at DESC LIMIT 50</code></li>
+<li><strong>Thread view:</strong> Recursive query or depth-first sort (see implementation notes)</li>
+</ul>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>No schema changes needed</li>
+<li>Chat channels (V2) still support threading, just UI de-emphasizes it</li>
+</ul>
+<hr>
+<h3>5. Message Operations</h3>
+<p><strong>V1 Supported Operations:</strong></p>
+<ol>
+<li><strong>Post root message</strong> (start new thread)</li>
+<li><strong>Reply to message</strong> (add to thread, up to depth 5)</li>
+<li><strong>Soft-delete own message</strong> (sets <code>deleted_at</code>, content → <code>&quot;[deleted]&quot;</code>)</li>
+<li><strong>View messages</strong> (thread list and thread view)</li>
+</ol>
+<p><strong>NOT in V1:</strong></p>
+<ul>
+<li>Edit message (deferred to V2)</li>
+<li>Hard delete (retention policy only)</li>
+<li>React to message (not planned)</li>
+<li>Pin message (deferred to V2)</li>
+</ul>
+<p><strong>Soft Delete Behavior:</strong></p>
+<ul>
+<li>User can delete their own messages only (identified by session nickname)</li>
+<li>Message record remains (preserves thread structure)</li>
+<li>Content overwritten: <code>&quot;[deleted]&quot;</code></li>
+<li>Original content saved to <code>MessageVersion</code> table (for moderation)</li>
+<li>Deleted messages shown in thread as: <code>[deleted by ~alice]</code></li>
+</ul>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>Message editing: Protocol has EDIT_MESSAGE, table has <code>edited_at</code><ul>
+<li>V1 server returns &quot;not implemented&quot; or ignores</li>
+<li>V2 adds edit logic + MessageVersion entries</li>
+</ul>
+</li>
+<li>User-owned messages: V1 uses session nickname, V2 uses <code>author_user_id</code></li>
+</ul>
+<hr>
+<h3>6. Real-Time Updates</h3>
+<p><strong>V1 Server Broadcasts:</strong></p>
+<ul>
+<li><code>NEW_MESSAGE</code>: When anyone posts in a channel<ul>
+<li>Sent to all users currently in that channel</li>
+</ul>
+</li>
+<li><code>CHANNEL_CREATED</code>: When admin creates new channel (V1: rare)<ul>
+<li>Sent to all connected users</li>
+</ul>
+</li>
+<li><code>SERVER_STATS</code>: Periodic (every 30s) online user count<ul>
+<li>Sent to all connected users</li>
+</ul>
+</li>
+<li><code>MESSAGE_DELETED</code>: When someone deletes a message<ul>
+<li>Sent to all users in that channel</li>
+</ul>
+</li>
+</ul>
+<p><strong>Client Handling:</strong></p>
+<ul>
+<li>Buffer broadcasts during message composition<ul>
+<li>Show indicator: <code>(3 new messages)</code> but don&#39;t update UI</li>
+<li>Apply updates when user sends or cancels message</li>
+</ul>
+</li>
+<li>Otherwise, apply updates immediately<ul>
+<li>Append NEW_MESSAGE to thread list or thread view</li>
+<li>Update online user count</li>
+<li>Add new channels to channel list</li>
+</ul>
+</li>
+</ul>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>V2 adds more broadcast types:<ul>
+<li><code>MESSAGE_EDITED</code>: Real-time edit notifications</li>
+<li><code>SUBCHANNEL_CREATED</code>: When subchannels added</li>
+<li><code>USER_JOINED</code>/<code>USER_LEFT</code>: Presence notifications (optional)</li>
+</ul>
+</li>
+<li>V1 clients ignore unknown message types (forward compatibility)</li>
+</ul>
+<hr>
+<h3>7. Read State Tracking</h3>
+<p><strong>V1 Implementation:</strong></p>
+<ul>
+<li><strong>Client-side only</strong> (anonymous users, no server-side state)</li>
+<li>Client stores in local SQLite: <code>~/.config/superchat-client/state.db</code></li>
+</ul>
+<p><strong>Local State Schema:</strong></p>
+<pre><code class="language-sql">CREATE TABLE ReadState (
+  channel_id INTEGER NOT NULL,
+  last_read_at INTEGER NOT NULL,  -- Unix timestamp (milliseconds)
+  last_read_message_id INTEGER,    -- Last message ID seen
+  PRIMARY KEY (channel_id)
+);
+</code></pre>
+<p><strong>Read State Updates:</strong></p>
+<ul>
+<li>When user leaves channel: Update <code>last_read_at</code> to current time</li>
+<li>When user manually marks as read: Update to current time</li>
+<li>On reconnect: Load state from local DB</li>
+</ul>
+<p><strong>Unread Counts (V1):</strong></p>
+<ul>
+<li><strong>Option A (Recommended):</strong> No unread counts in V1<ul>
+<li>Simplifies implementation</li>
+<li>User browses channels to check</li>
+</ul>
+</li>
+<li><strong>Option B:</strong> Client calculates locally<ul>
+<li>Fetch recent messages on channel list load</li>
+<li>Count messages where <code>created_at &gt; last_read_at</code></li>
+<li>Network-heavy, but acceptable for MVP</li>
+</ul>
+</li>
+</ul>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>Server-side <code>UserChannelState</code> table already defined</li>
+<li>V2 adds <code>UPDATE_READ_STATE</code> and <code>GET_UNREAD_COUNTS</code> messages</li>
+<li>Registered users get server-synced state (multi-device)</li>
+<li>Anonymous users continue using client-side (V1 behavior)</li>
+</ul>
+<hr>
+<h3>8. User Interface</h3>
+<p><strong>V1 UI Design:</strong></p>
+<p><strong>Layout:</strong></p>
+<pre><code>┌──────────────────────────────────────────────────────────────────────┐
+│ SuperChat v1.0                Connected: ~alice (anonymous)  23 users │
+├────────────────┬─────────────────────────────────────────────────────┤
+│ Channels       │ #general - General Discussion                       │
+│                ├─────────────────────────────────────────────────────┤
+│ #general       │ [Thread] How do I navigate? (4 replies)  5m ago     │
+│ #tech          │ [Thread] Server uptime impressive (12)   2h ago     │
+│ #random        │ [Thread] Can we get #programming? (0)    1d ago     │
+│ #feedback      │                                                      │
+│                │                                                      │
+│                │                                                      │
+│                │                                                      │
+├────────────────┴─────────────────────────────────────────────────────┤
+│ [↑↓] Navigate  [Enter] Open  [n] New Thread  [h] Help  [q] Quit      │
+└──────────────────────────────────────────────────────────────────────┘
+</code></pre>
+<p><strong>Thread View:</strong></p>
+<pre><code>┌──────────────────────────────────────────────────────────────────────┐
+│ #general &gt; Thread: How do I navigate?          Connected: ~alice      │
+├──────────────────────────────────────────────────────────────────────┤
+│ ~alice                                            5 minutes ago       │
+│ How do I navigate around SuperChat?                                  │
+│                                                                       │
+│   ~bob                                            4 minutes ago       │
+│   Use arrow keys to move. Press [h] for help.                       │
+│                                                                       │
+│     ~charlie                                      2 minutes ago       │
+│     Also, [n] creates new thread, [r] replies.                       │
+│                                                                       │
+│       ~alice                                      1 minute ago        │
+│       Thanks! This is super helpful.                                 │
+│                                                                       │
+│ ────────────────────────────────────────────────────────────────────  │
+│ [Compose reply] Press &#39;r&#39; to reply                                   │
+├──────────────────────────────────────────────────────────────────────┤
+│ [Esc] Back  [r] Reply  [d] Delete  [h] Help                          │
+└──────────────────────────────────────────────────────────────────────┘
+</code></pre>
+<p><strong>Key UI Principles:</strong></p>
+<ol>
+<li><strong>Always-visible footer</strong> with context-aware shortcuts</li>
+<li><strong>Clear connection status</strong> in header (nickname + user count)</li>
+<li><strong>Minimal visual clutter</strong> (borders, spacing, clear hierarchy)</li>
+<li><strong>Relative timestamps</strong> (&quot;5m ago&quot;, &quot;2h ago&quot;, &quot;1d ago&quot;)</li>
+<li><strong>Anonymous indicator</strong> (<code>~</code> prefix for all users in V1)</li>
+</ol>
+<p><strong>Keyboard Shortcuts:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Context</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>↑↓</code></td>
+<td>Any</td>
+<td>Navigate up/down</td>
+</tr>
+<tr>
+<td><code>←→</code></td>
+<td>Channel list</td>
+<td>Switch focus (channels ↔ threads)</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Channel list</td>
+<td>Join channel / Open thread</td>
+</tr>
+<tr>
+<td><code>n</code></td>
+<td>Thread list</td>
+<td>New thread (compose root message)</td>
+</tr>
+<tr>
+<td><code>r</code></td>
+<td>Thread view</td>
+<td>Reply to thread</td>
+</tr>
+<tr>
+<td><code>d</code></td>
+<td>Thread view</td>
+<td>Delete own message (if selected)</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Thread view / Modal</td>
+<td>Back / Cancel</td>
+</tr>
+<tr>
+<td><code>h</code> or <code>?</code></td>
+<td>Any</td>
+<td>Show help modal</td>
+</tr>
+<tr>
+<td><code>q</code></td>
+<td>Any</td>
+<td>Quit (with confirmation)</td>
+</tr>
+</tbody></table>
+<p><strong>First-Run Experience:</strong></p>
+<pre><code>┌──────────────────────────────────────────────────────────────┐
+│                    Welcome to SuperChat v1.0                  │
+│                                                              │
+│  A terminal-based threaded chat application                  │
+│                                                              │
+│  Getting Started:                                            │
+│  • Use arrow keys (↑↓←→) to navigate                        │
+│  • Press [Enter] to select channels and threads              │
+│  • Press [h] anytime for help                                │
+│  • Press [n] to start a new thread                           │
+│                                                              │
+│  You&#39;re connected anonymously (read-only until you set       │
+│  a nickname). You&#39;ll be prompted when you post.              │
+│                                                              │
+│                 [Press any key to continue]                  │
+└──────────────────────────────────────────────────────────────┘
+</code></pre>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>UI adds registration prompt in footer: <code>[Ctrl+R] Register</code></li>
+<li>Header shows registered users without <code>~</code>: <code>Connected: alice</code></li>
+<li>Add visual indicators for encrypted DMs (lock icon or <code>[E]</code> prefix)</li>
+</ul>
+<hr>
+<h3>9. Protocol &amp; Data Model</h3>
+<p><strong>V1 Protocol Messages (Subset):</strong></p>
+<p><strong>Client → Server:</strong></p>
+<ul>
+<li><code>SET_NICKNAME</code> (required before posting)</li>
+<li><code>LIST_CHANNELS</code> (get public channel list)</li>
+<li><code>JOIN_CHANNEL</code> (join to receive broadcasts)</li>
+<li><code>LEAVE_CHANNEL</code> (stop receiving broadcasts)</li>
+<li><code>LIST_MESSAGES</code> (fetch thread list or thread view)</li>
+<li><code>POST_MESSAGE</code> (create root or reply)</li>
+<li><code>DELETE_MESSAGE</code> (soft-delete own message)</li>
+<li><code>PING</code> (keepalive, every 30s if idle)</li>
+</ul>
+<p><strong>Server → Client:</strong></p>
+<ul>
+<li><code>SERVER_CONFIG</code> (sent on connect, protocol version + limits)</li>
+<li><code>NICKNAME_RESPONSE</code> (success or error)</li>
+<li><code>CHANNEL_LIST</code> (list of public channels)</li>
+<li><code>JOIN_RESPONSE</code> (success or error)</li>
+<li><code>MESSAGE_LIST</code> (thread list or thread replies)</li>
+<li><code>MESSAGE_POSTED</code> (confirmation + message ID)</li>
+<li><code>NEW_MESSAGE</code> (real-time broadcast)</li>
+<li><code>MESSAGE_DELETED</code> (confirmation + broadcast)</li>
+<li><code>PONG</code> (ping response)</li>
+<li><code>ERROR</code> (generic error with code + message)</li>
+</ul>
+<p><strong>V1 NOT Implemented (Return ERROR):</strong></p>
+<ul>
+<li><code>AUTH_REQUEST</code> → Error 1001 &quot;Authentication not supported in V1&quot;</li>
+<li><code>REGISTER_USER</code> → Error 1001 &quot;Registration not supported in V1&quot;</li>
+<li><code>CREATE_CHANNEL</code> → Error 3000 &quot;Permission denied (admin-only)&quot;</li>
+<li><code>CREATE_SUBCHANNEL</code> → Error 1001 &quot;Subchannels not supported in V1&quot;</li>
+<li><code>EDIT_MESSAGE</code> → Error 1001 &quot;Editing not supported in V1&quot;</li>
+<li><code>START_DM</code> → Error 1001 &quot;DMs not supported in V1&quot;</li>
+<li>All DM-related messages → Error 1001</li>
+</ul>
+<p><strong>V1 Database Schema (Minimal):</strong></p>
+<pre><code class="language-sql">-- No User table in V1 (anonymous only)
+
+CREATE TABLE Channel (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  channel_type INTEGER NOT NULL DEFAULT 1,  -- 0=chat, 1=forum (V1: always 1)
+  message_retention_hours INTEGER NOT NULL DEFAULT 168,  -- 7 days
+  created_by INTEGER,  -- NULL for admin-created (V1: always NULL)
+  created_at INTEGER NOT NULL,  -- Unix timestamp (ms)
+  is_private INTEGER NOT NULL DEFAULT 0  -- V1: always 0 (public only)
+);
+
+CREATE TABLE Session (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,  -- V1: always NULL (anonymous)
+  nickname TEXT NOT NULL,
+  connection_type TEXT NOT NULL,  -- &#39;tcp&#39; only in V1
+  connected_at INTEGER NOT NULL,  -- Unix timestamp (ms)
+  last_activity INTEGER NOT NULL  -- Unix timestamp (ms)
+);
+
+CREATE TABLE Message (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id INTEGER NOT NULL,
+  subchannel_id INTEGER,  -- V1: always NULL (no subchannels)
+  parent_id INTEGER,  -- NULL = root message
+  author_user_id INTEGER,  -- V1: always NULL (anonymous)
+  author_nickname TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at INTEGER NOT NULL,  -- Unix timestamp (ms)
+  edited_at INTEGER,  -- V1: always NULL (no editing)
+  deleted_at INTEGER,  -- Soft delete timestamp
+  thread_depth INTEGER NOT NULL,  -- 0-5
+  FOREIGN KEY (channel_id) REFERENCES Channel(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_id) REFERENCES Message(id) ON DELETE CASCADE
+);
+
+CREATE TABLE MessageVersion (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  author_nickname TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  version_type TEXT NOT NULL,  -- &#39;created&#39;, &#39;edited&#39;, &#39;deleted&#39;
+  FOREIGN KEY (message_id) REFERENCES Message(id) ON DELETE CASCADE
+);
+
+-- Indexes
+CREATE INDEX idx_messages_channel ON Message(channel_id, created_at DESC);
+CREATE INDEX idx_messages_parent ON Message(parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX idx_messages_retention ON Message(created_at, parent_id);
+CREATE INDEX idx_sessions_activity ON Session(last_activity);
+</code></pre>
+<p><strong>V2 Migration Script:</strong></p>
+<pre><code class="language-sql">-- Add User table (V2)
+CREATE TABLE User (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nickname TEXT UNIQUE,
+  registered INTEGER NOT NULL DEFAULT 0,
+  password_hash TEXT,
+  allow_unencrypted_dms INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL
+);
+
+-- Add SSHKey table (V2)
+CREATE TABLE SSHKey (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  fingerprint TEXT UNIQUE NOT NULL,
+  public_key TEXT NOT NULL,
+  key_type TEXT NOT NULL,
+  can_encrypt INTEGER NOT NULL DEFAULT 0,
+  encryption_public_key TEXT,
+  added_at INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE
+);
+
+-- Add Subchannel table (V2)
+CREATE TABLE Subchannel (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  message_retention_hours INTEGER NOT NULL DEFAULT 168,
+  subchannel_type INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (channel_id) REFERENCES Channel(id) ON DELETE CASCADE
+);
+
+-- Add ChannelAccess table (V2 - for private channels/DMs)
+CREATE TABLE ChannelAccess (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  encryption_key TEXT,
+  added_at INTEGER NOT NULL,
+  FOREIGN KEY (channel_id) REFERENCES Channel(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE
+);
+
+-- Add UserChannelState table (V2 - server-side read state)
+CREATE TABLE UserChannelState (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  channel_id INTEGER NOT NULL,
+  subchannel_id INTEGER,
+  last_read_at INTEGER NOT NULL,
+  last_read_message_id INTEGER,
+  FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE,
+  FOREIGN KEY (channel_id) REFERENCES Channel(id) ON DELETE CASCADE,
+  FOREIGN KEY (subchannel_id) REFERENCES Subchannel(id) ON DELETE CASCADE
+);
+
+-- V1 data remains intact (Message.author_user_id stays NULL for anonymous messages)
+-- No data migration needed
+</code></pre>
+<hr>
+<h3>10. Server Implementation</h3>
+<p><strong>V1 Server Responsibilities:</strong></p>
+<ul>
+<li>Accept TCP connections on port 6465 (configurable)</li>
+<li>Parse binary protocol frames</li>
+<li>Validate protocol version (reject mismatches)</li>
+<li>Manage sessions (track connected clients)</li>
+<li>Store messages in SQLite database</li>
+<li>Broadcast real-time updates to relevant clients</li>
+<li>Enforce rate limits (10 messages/minute per session)</li>
+<li>Run retention cleanup job (hourly: delete old messages)</li>
+<li>Disconnect idle sessions (60s timeout)</li>
+</ul>
+<p><strong>Server Configuration (V1):</strong></p>
+<pre><code class="language-toml"># ~/.config/superchat/config.toml
+[server]
+tcp_port = 6465
+database_path = &quot;~/.config/superchat/superchat.db&quot;
+
+[limits]
+max_connections_per_ip = 10
+message_rate_limit = 10  # messages per minute
+max_message_length = 4096  # bytes
+max_nickname_length = 20
+session_timeout_seconds = 60
+
+[retention]
+default_retention_hours = 168  # 7 days
+cleanup_interval_minutes = 60
+
+[channels]
+# V1: Admin-created only (seed channels on first run)
+seed_channels = [
+  { name = &quot;general&quot;, description = &quot;General discussion&quot; },
+  { name = &quot;tech&quot;, description = &quot;Technical topics&quot; },
+  { name = &quot;random&quot;, description = &quot;Off-topic chat&quot; },
+  { name = &quot;feedback&quot;, description = &quot;Bug reports and feature requests&quot; }
+]
+</code></pre>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>Add <code>[auth]</code> section for password hashing (bcrypt rounds)</li>
+<li>Add <code>[ssh]</code> section for SSH server config (port, host keys)</li>
+<li>Add <code>[dm]</code> section for encryption settings</li>
+<li>V1 config file is forward-compatible (V2 ignores unknown sections)</li>
+</ul>
+<hr>
+<h3>11. Client Implementation</h3>
+<p><strong>V1 Client Responsibilities:</strong></p>
+<ul>
+<li>Connect to server via TCP</li>
+<li>Parse binary protocol frames</li>
+<li>Render TUI (bubbletea + lipgloss)</li>
+<li>Handle keyboard input and navigation</li>
+<li>Store local state (nickname, read positions)</li>
+<li>Auto-reconnect on disconnect (exponential backoff)</li>
+<li>Buffer outgoing messages during disconnection</li>
+</ul>
+<p><strong>Client Configuration (V1):</strong></p>
+<pre><code class="language-toml"># ~/.config/superchat-client/config.toml
+[connection]
+default_server = &quot;chat.example.com&quot;
+default_port = 6465
+auto_reconnect = true
+reconnect_max_delay_seconds = 30
+
+[local]
+state_db = &quot;~/.config/superchat-client/state.db&quot;
+last_nickname = &quot;&quot;  # Auto-filled on first run
+auto_set_nickname = true  # Use last_nickname on connect
+
+[ui]
+show_timestamps = true
+timestamp_format = &quot;relative&quot;  # &#39;relative&#39; or &#39;absolute&#39;
+theme = &quot;default&quot;  # For future themes
+</code></pre>
+<p><strong>Client State Database:</strong></p>
+<pre><code class="language-sql">-- ~/.config/superchat-client/state.db
+CREATE TABLE Config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE ReadState (
+  channel_id INTEGER PRIMARY KEY,
+  last_read_at INTEGER NOT NULL,
+  last_read_message_id INTEGER
+);
+
+INSERT INTO Config (key, value) VALUES (&#39;last_nickname&#39;, &#39;&#39;);
+</code></pre>
+<p><strong>V2 Migration Path:</strong></p>
+<ul>
+<li>Client detects server capabilities (check SERVER_CONFIG or probe with AUTH_REQUEST)</li>
+<li>If server supports registration: Show <code>[Ctrl+R] Register</code> in footer</li>
+<li>If server supports SSH: Add SSH connection option in connect modal</li>
+<li>Client state remains local for anonymous mode, syncs to server for registered users</li>
+</ul>
+<hr>
+<h2>V2 Feature Roadmap</h2>
+<p><strong>V2 Additions (No V1 Breaking Changes):</strong></p>
+<ol>
+<li><p><strong>User Registration &amp; Authentication</strong></p>
+<ul>
+<li>Add User table, password hashing</li>
+<li>AUTH_REQUEST/REGISTER_USER messages enabled</li>
+<li>Server-side read state sync (UserChannelState)</li>
+<li>Registered users shown without <code>~</code> prefix</li>
+</ul>
+</li>
+<li><p><strong>SSH Connections</strong></p>
+<ul>
+<li>Add SSH server (port 2222)</li>
+<li>SSHKey table for key authentication</li>
+<li>Auto-registration on first SSH connect</li>
+<li>Seamless authentication for registered users</li>
+</ul>
+</li>
+<li><p><strong>Subchannels</strong></p>
+<ul>
+<li>Add Subchannel table</li>
+<li>CREATE_SUBCHANNEL message enabled</li>
+<li>Two-level hierarchy UI (channels with subchannels)</li>
+<li>Channel-level vs subchannel-level posting</li>
+</ul>
+</li>
+<li><p><strong>Message Editing</strong></p>
+<ul>
+<li>EDIT_MESSAGE message enabled</li>
+<li>MessageVersion tracks edits</li>
+<li>Show <code>(edited)</code> indicator in UI</li>
+<li>Edit history available to moderators</li>
+</ul>
+</li>
+<li><p><strong>User-Created Channels</strong></p>
+<ul>
+<li>CREATE_CHANNEL message enabled (authenticated users only)</li>
+<li>Rate limiting (5 channels/hour)</li>
+<li>Channel operators (created_by field)</li>
+</ul>
+</li>
+</ol>
+<p><strong>V3 Additions (Future):</strong></p>
+<ol>
+<li><p><strong>Direct Messages</strong></p>
+<ul>
+<li>Private channels (is_private = true)</li>
+<li>ChannelAccess table for participants</li>
+<li>START_DM flow (complex, deferred)</li>
+</ul>
+</li>
+<li><p><strong>Encryption (with DMs)</strong></p>
+<ul>
+<li>Hybrid encryption (RSA + AES-256-GCM)</li>
+<li>Key management (PROVIDE_PUBLIC_KEY)</li>
+<li>Encrypted payload flag support</li>
+</ul>
+</li>
+<li><p><strong>Chat Channel Type</strong></p>
+<ul>
+<li>channel_type = 0 (chat) enabled</li>
+<li>UI emphasizes chronological flow</li>
+<li>Shorter default retention (1 hour)</li>
+</ul>
+</li>
+<li><p><strong>Compression</strong></p>
+<ul>
+<li>LZ4 compression for large payloads</li>
+<li>Flags byte bit 0 support</li>
+<li>Automatic compression for &gt;512 byte payloads</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2>Architecture Principles (V1 → V2 Compatibility)</h2>
+<p><strong>Design Decisions That Enable Parallel V2 Development:</strong></p>
+<ol>
+<li><p><strong>Protocol Extensibility</strong></p>
+<ul>
+<li>Message types 0x01-0x14 defined but not all implemented in V1</li>
+<li>V1 server returns ERROR 1001 &quot;Not implemented&quot; for V2 messages</li>
+<li>V1 clients ignore unknown server message types (forward compatibility)</li>
+<li>Flags byte has reserved bits for future features</li>
+</ul>
+</li>
+<li><p><strong>Database Forward Compatibility</strong></p>
+<ul>
+<li>Tables have nullable FK fields for V2 features (e.g., <code>author_user_id</code>, <code>subchannel_id</code>)</li>
+<li>V1 leaves these NULL, V2 populates them</li>
+<li>No schema migration needed for V1 → V2 upgrade</li>
+<li>V2 tables (User, SSHKey, etc.) are additive (no changes to V1 tables)</li>
+</ul>
+</li>
+<li><p><strong>Client Capability Detection</strong></p>
+<ul>
+<li>Clients probe server for feature support (send request, check for ERROR 1001)</li>
+<li>Server sends SERVER_CONFIG with capabilities (could extend in V2)</li>
+<li>Clients adapt UI based on server version (hide unavailable features)</li>
+</ul>
+</li>
+<li><p><strong>State Separation</strong></p>
+<ul>
+<li>V1 state is client-side (no server-side state beyond sessions)</li>
+<li>V2 adds server-side state (UserChannelState) for registered users</li>
+<li>Anonymous users continue using client-side state (V1 behavior)</li>
+<li>No conflict or migration needed</li>
+</ul>
+</li>
+<li><p><strong>Identity Model</strong></p>
+<ul>
+<li>V1 messages have <code>author_user_id = NULL</code> (anonymous)</li>
+<li>V2 adds <code>author_user_id != NULL</code> for registered users</li>
+<li>Both coexist in same Message table</li>
+<li>UI distinguishes: <code>~alice</code> (anonymous) vs <code>alice</code> (registered)</li>
+</ul>
+</li>
+</ol>
+<p><strong>Critical: What NOT to Do in V1</strong></p>
+<ul>
+<li>❌ Don&#39;t hardcode protocol version checks (allow version negotiation)</li>
+<li>❌ Don&#39;t use fixed-size message structures (use length-prefixed fields)</li>
+<li>❌ Don&#39;t tie UI to anonymous-only (design for both anonymous and registered)</li>
+<li>❌ Don&#39;t store session-specific data in database (use in-memory for V1)</li>
+<li>❌ Don&#39;t couple channel display to flat structure (prepare for hierarchy)</li>
+</ul>
+<hr>
+<h2>Success Criteria (V1)</h2>
+<p><strong>V1 is successful if:</strong></p>
+<ol>
+<li>✅ First-time user can post within 2 minutes (no confusion)</li>
+<li>✅ Threading works intuitively (users engage with nested replies)</li>
+<li>✅ Keyboard navigation is smooth (no &quot;how do I...?&quot; questions)</li>
+<li>✅ Real-time updates work (users see messages without refreshing)</li>
+<li>✅ Client auto-reconnects reliably (handles network drops)</li>
+<li>✅ Users return (client remembers nickname, state persists)</li>
+<li>✅ Feedback requests V2 features (registration, SSH, DMs)</li>
+<li>✅ No critical UX bugs (errors are clear, recovery is obvious)</li>
+</ol>
+<p><strong>Metrics to Track:</strong></p>
+<ul>
+<li>Time to first post (target: &lt;2 minutes)</li>
+<li>Thread depth distribution (are users replying deeply?)</li>
+<li>Session duration (do users stick around?)</li>
+<li>Reconnection success rate (&gt;95%)</li>
+<li>Error rate (nickname conflicts, rate limits, etc.)</li>
+<li>Feature requests (prioritize V2 roadmap)</li>
+</ul>
+<hr>
+<h2>Testing Strategy (V1)</h2>
+<h3>Testing Stack</h3>
+<p><strong>Dependencies:</strong></p>
+<pre><code class="language-go">require (
+    // Production dependencies...
+
+    // Testing (test-only)
+    github.com/stretchr/testify v1.8.4       // Assertions and test utilities
+    pgregory.net/rapid v1.1.0                // Property-based testing
+    github.com/jandelgado/gcov2lcov latest   // Coverage format conversion
+)
+</code></pre>
+<p><strong>Built-in Go Tools:</strong></p>
+<ul>
+<li>Standard <code>testing</code> package</li>
+<li>Go 1.18+ fuzzing (<code>-fuzz</code> flag)</li>
+<li>Race detector (<code>-race</code> flag)</li>
+<li>Coverage analysis (<code>-coverprofile</code>)</li>
+</ul>
+<h3>Coverage Requirements</h3>
+<p><strong>Protocol Package (<code>pkg/protocol/*</code>):</strong></p>
+<ul>
+<li><strong>Target: 100% coverage</strong> (enforced in CI)</li>
+<li>Every line, branch, and edge case tested</li>
+<li>Build fails if protocol coverage &lt; 100%</li>
+</ul>
+<p><strong>Other Packages:</strong></p>
+<ul>
+<li>Server (<code>pkg/server/*</code>): 80-90% coverage</li>
+<li>Client (<code>pkg/client/*</code>): 70-80% coverage</li>
+<li>Integration tests: Key user flows covered</li>
+</ul>
+<p><strong>Coverage Output Format:</strong></p>
+<ul>
+<li>Generate 3 separate lcov files for coverage service:<ul>
+<li><code>protocol.lcov</code> - Protocol package (100% required)</li>
+<li><code>server.lcov</code> - Server package (80-90% target)</li>
+<li><code>client.lcov</code> - Client package (70-80% target)</li>
+</ul>
+</li>
+</ul>
+<h3>Test Types</h3>
+<p><strong>Unit Tests (Table-Driven):</strong></p>
+<ul>
+<li>Protocol frame encoding/decoding (all message types)</li>
+<li>Message threading depth calculation</li>
+<li>Read state updates (client-side)</li>
+<li>Retention policy logic</li>
+<li>Database operations (in-memory SQLite)</li>
+<li>Handler functions (mock sessions)</li>
+</ul>
+<p><strong>Property-Based Tests (Rapid):</strong></p>
+<ul>
+<li>Frame round-trip serialization (any valid frame)</li>
+<li>String encoding/decoding (any valid UTF-8)</li>
+<li>Timestamp handling (any valid time)</li>
+<li>Optional field handling (present/nil values)</li>
+</ul>
+<p><strong>Fuzzing Tests:</strong></p>
+<ul>
+<li>Frame decoder (malformed binary input)</li>
+<li>Message decoders (invalid payloads)</li>
+<li>String decoder (length attacks, invalid UTF-8)</li>
+<li>Ensures robustness against malicious input</li>
+</ul>
+<p><strong>Integration Tests:</strong></p>
+<ul>
+<li>TCP connection handling</li>
+<li>Real-time message broadcasts (multi-client)</li>
+<li>Rate limiting enforcement</li>
+<li>Session timeout cleanup</li>
+<li>Auto-reconnect logic</li>
+</ul>
+<p><strong>Manual Tests:</strong></p>
+<ul>
+<li>First-run user experience (start to post)</li>
+<li>Keyboard navigation (all shortcuts)</li>
+<li>Thread display (nested replies, indentation)</li>
+<li>Connection drop and reconnect</li>
+<li>Terminal resize handling</li>
+</ul>
+<p><strong>Load Tests (Optional for V1):</strong></p>
+<ul>
+<li>100 concurrent users</li>
+<li>1000 messages/minute broadcast</li>
+<li>Memory usage over 24 hours</li>
+</ul>
+<h3>Makefile</h3>
+<p>Create <code>Makefile</code> in project root:</p>
+<pre><code class="language-makefile">.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean
+
+# Run all tests
+test:
+	go test ./... -race
+
+# Generate coverage for all packages (combined)
+coverage:
+	go test ./... -coverprofile=coverage.out -covermode=atomic
+	go tool cover -func=coverage.out
+
+# Generate HTML coverage report (combined)
+coverage-html:
+	go test ./... -coverprofile=coverage.out -covermode=atomic
+	go tool cover -html=coverage.out -o coverage.html
+	@echo &quot;Coverage report generated: coverage.html&quot;
+
+# Generate separate lcov files per package
+coverage-lcov:
+	@echo &quot;Generating coverage for protocol package...&quot;
+	go test ./pkg/protocol/... -coverprofile=protocol.out -covermode=atomic
+	gcov2lcov -infile=protocol.out -outfile=protocol.lcov
+
+	@echo &quot;Generating coverage for server package...&quot;
+	go test ./pkg/server/... -coverprofile=server.out -covermode=atomic
+	gcov2lcov -infile=server.out -outfile=server.lcov
+
+	@echo &quot;Generating coverage for client package...&quot;
+	go test ./pkg/client/... -coverprofile=client.out -covermode=atomic
+	gcov2lcov -infile=client.out -outfile=client.lcov
+
+	@echo &quot;&quot;
+	@echo &quot;LCOV coverage reports generated:&quot;
+	@echo &quot;  - protocol.lcov (pkg/protocol)&quot;
+	@echo &quot;  - server.lcov   (pkg/server)&quot;
+	@echo &quot;  - client.lcov   (pkg/client)&quot;
+
+# Check protocol coverage (must be 100%)
+coverage-protocol:
+	go test ./pkg/protocol/... -coverprofile=protocol.out -covermode=atomic
+	@COVERAGE=$$(go tool cover -func=protocol.out | grep total | awk &#39;{print $$3}&#39; | sed &#39;s/%//&#39;); \
+	echo &quot;Protocol coverage: $$COVERAGE%&quot;; \
+	if [ $$(echo &quot;$$COVERAGE &lt; 100&quot; | bc -l) -eq 1 ]; then \
+		echo &quot;ERROR: Protocol coverage must be 100%&quot;; \
+		exit 1; \
+	fi
+
+# Show coverage summary for each package
+coverage-summary:
+	@echo &quot;=== Protocol Coverage ===&quot;
+	@go tool cover -func=protocol.out | grep total || echo &quot;Run &#39;make coverage-lcov&#39; first&quot;
+	@echo &quot;&quot;
+	@echo &quot;=== Server Coverage ===&quot;
+	@go tool cover -func=server.out | grep total || echo &quot;Run &#39;make coverage-lcov&#39; first&quot;
+	@echo &quot;&quot;
+	@echo &quot;=== Client Coverage ===&quot;
+	@go tool cover -func=client.out | grep total || echo &quot;Run &#39;make coverage-lcov&#39; first&quot;
+
+# Run fuzzing
+fuzz:
+	go test ./pkg/protocol -fuzz=FuzzDecodeFrame -fuzztime=5m
+
+# Clean coverage files
+clean:
+	rm -f coverage.out coverage.html
+	rm -f protocol.out protocol.lcov
+	rm -f server.out server.lcov
+	rm -f client.out client.lcov
+</code></pre>
+<p><strong>Usage:</strong></p>
+<pre><code class="language-bash"># Generate all 3 lcov files for coverage service
+make coverage-lcov
+
+# Check protocol has 100% coverage (fails if not)
+make coverage-protocol
+
+# View summary of all packages
+make coverage-summary
+
+# Run fuzzing tests
+make fuzz
+
+# View HTML coverage locally
+make coverage-html
+open coverage.html
+</code></pre>
+<h3>CI Configuration</h3>
+<p>Create <code>.github/workflows/ci.yml</code>:</p>
+<pre><code class="language-yaml">name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: [&#39;1.21&#39;, &#39;1.22&#39;]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Install gcov2lcov
+        run: go install github.com/jandelgado/gcov2lcov@latest
+
+      - name: Run all tests
+        run: go test ./... -race
+
+      - name: Generate protocol coverage
+        run: |
+          go test ./pkg/protocol/... -coverprofile=protocol.out -covermode=atomic
+          gcov2lcov -infile=protocol.out -outfile=protocol.lcov
+
+      - name: Generate server coverage
+        run: |
+          go test ./pkg/server/... -coverprofile=server.out -covermode=atomic
+          gcov2lcov -infile=server.out -outfile=server.lcov
+
+      - name: Generate client coverage
+        run: |
+          go test ./pkg/client/... -coverprofile=client.out -covermode=atomic
+          gcov2lcov -infile=client.out -outfile=client.lcov
+
+      - name: Check protocol coverage (100% required)
+        run: |
+          COVERAGE=$(go tool cover -func=protocol.out | grep total | awk &#39;{print $3}&#39; | sed &#39;s/%//&#39;)
+          echo &quot;Protocol coverage: $COVERAGE%&quot;
+          if (( $(echo &quot;$COVERAGE &lt; 100&quot; | bc -l) )); then
+            echo &quot;ERROR: Protocol coverage is $COVERAGE%, must be 100%&quot;
+            exit 1
+          fi
+
+      - name: Display coverage summary
+        run: |
+          echo &quot;=== Protocol Coverage ===&quot;
+          go tool cover -func=protocol.out | grep total
+          echo &quot;&quot;
+          echo &quot;=== Server Coverage ===&quot;
+          go tool cover -func=server.out | grep total
+          echo &quot;&quot;
+          echo &quot;=== Client Coverage ===&quot;
+          go tool cover -func=client.out | grep total
+
+      - name: Run fuzzing (short)
+        run: go test ./pkg/protocol -fuzz=FuzzDecodeFrame -fuzztime=30s
+
+      - name: Upload coverage files
+        run: |
+          # Upload to your coverage service here
+          # Example:
+          # curl -X POST -F &quot;protocol=@protocol.lcov&quot; https://coverage-service.com/upload
+          # curl -X POST -F &quot;server=@server.lcov&quot; https://coverage-service.com/upload
+          # curl -X POST -F &quot;client=@client.lcov&quot; https://coverage-service.com/upload
+          echo &quot;Upload protocol.lcov, server.lcov, client.lcov to coverage service&quot;
+
+      - name: Archive coverage artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-${{ matrix.os }}-go${{ matrix.go }}
+          path: |
+            protocol.out
+            protocol.lcov
+            server.out
+            server.lcov
+            client.out
+            client.lcov
+</code></pre>
+<h3>.gitignore Additions</h3>
+<p>Add to <code>.gitignore</code>:</p>
+<pre><code class="language-gitignore"># Coverage files
+coverage.out
+coverage.html
+protocol.out
+protocol.lcov
+server.out
+server.lcov
+client.out
+client.lcov
+*.coverprofile
+
+# Build artifacts
+superchat-server
+superchat
+superchat-client
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+---
+
+## Deployment (V1)
+
+**Server Deployment:**
+```bash
+# Build server
+go build -o superchat-server cmd/server/main.go
+
+# Run server (creates default config if missing)
+./superchat-server
+
+# Or with custom config
+./superchat-server --config /path/to/config.toml
+
+# Systemd service (optional)
+sudo systemctl enable superchat-server
+sudo systemctl start superchat-server
+</code></pre>
+<p><strong>Client Installation:</strong></p>
+<pre><code class="language-bash"># Build client
+go build -o superchat cmd/client/main.go
+
+# Run client
+./superchat connect chat.example.com:6465
+
+# Or with default server from config
+./superchat connect
+</code></pre>
+<p><strong>Firewall Rules:</strong></p>
+<ul>
+<li>Open TCP port 6465 (configurable)</li>
+<li>No TLS in V1 (plaintext TCP, add TLS in V2 or use SSH tunnel)</li>
+</ul>
+<hr>
+<h2>Open Questions (V1)</h2>
+<p><strong>Resolved:</strong></p>
+<ul>
+<li>✅ Nickname uniqueness? No (anonymous users can duplicate)</li>
+<li>✅ Thread depth limit? No limit (unlimited nesting supported)</li>
+<li>✅ Unread counts? No (defer to V2 for simplicity)</li>
+<li>✅ User-created channels? No (admin-only in V1)</li>
+<li>✅ Message editing? No (defer to V2)</li>
+</ul>
+<p><strong>Still Open:</strong></p>
+<ol>
+<li>Should V1 show timestamps on every message, or just relative time on hover?<ul>
+<li><strong>Recommendation:</strong> Show relative timestamps always (&quot;5m ago&quot;)</li>
+</ul>
+</li>
+<li>Should client support multiple server connections (switch between servers)?<ul>
+<li><strong>Recommendation:</strong> No, single server in V1. V2 can add server switcher.</li>
+</ul>
+</li>
+<li>Should V1 have a splash screen on every launch or just first run?<ul>
+<li><strong>Recommendation:</strong> Splash on first run only, skip on subsequent launches.</li>
+</ul>
+</li>
+<li>Should client buffer outgoing messages during disconnect, or discard?<ul>
+<li><strong>Recommendation:</strong> Buffer in memory (up to 100 messages), send on reconnect.</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2>Implementation Phases (V1)</h2>
+<p><strong>Phase 1: Core Protocol &amp; Database</strong> (Week 1-2)</p>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Binary protocol frame parser (encode/decode) with EncodeTo(io.Writer) architecture</li>
+<li><input checked="" disabled="" type="checkbox"> <strong>Protocol tests (83.6% coverage achieved, 100% on critical paths)</strong><ul>
+<li><input checked="" disabled="" type="checkbox"> Unit tests for all 13 message types (table-driven)</li>
+<li><input checked="" disabled="" type="checkbox"> Encode/Decode round-trip tests</li>
+<li><input checked="" disabled="" type="checkbox"> Error path tests with failing writers</li>
+<li><input checked="" disabled="" type="checkbox"> Edge cases (max sizes, empty values, null optionals, validation errors)</li>
+<li><input disabled="" type="checkbox"> Property-based tests (rapid) - deferred to Phase 4</li>
+<li><input disabled="" type="checkbox"> Fuzzing tests - deferred to Phase 4</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> SQLite schema setup (Channel, Session, Message tables)</li>
+<li><input disabled="" type="checkbox"> TCP server (accept connections, parse frames)</li>
+<li><input disabled="" type="checkbox"> Basic message handlers (SET_NICKNAME, LIST_CHANNELS, LIST_MESSAGES)</li>
+<li><input disabled="" type="checkbox"> Handler unit tests (mock sessions)</li>
+</ul>
+<p><strong>Phase 2: Message Operations</strong> (Week 2-3)</p>
+<ul>
+<li><input disabled="" type="checkbox"> POST_MESSAGE handler (create root and replies)</li>
+<li><input disabled="" type="checkbox"> Threading logic (depth calculation, parent validation)</li>
+<li><input disabled="" type="checkbox"> DELETE_MESSAGE handler (soft-delete)</li>
+<li><input disabled="" type="checkbox"> Real-time broadcast (NEW_MESSAGE to all sessions in channel)</li>
+<li><input disabled="" type="checkbox"> Database operation tests (in-memory SQLite)</li>
+<li><input disabled="" type="checkbox"> Integration tests (multi-client broadcasts)</li>
+</ul>
+<p><strong>Phase 3: Client TUI</strong> (Week 3-4)</p>
+<ul>
+<li><input disabled="" type="checkbox"> Bubbletea app structure (models, update, view)</li>
+<li><input disabled="" type="checkbox"> Channel list view (sidebar + main pane)</li>
+<li><input disabled="" type="checkbox"> Thread list view (root messages with reply counts)</li>
+<li><input disabled="" type="checkbox"> Thread view (nested replies with indentation)</li>
+<li><input disabled="" type="checkbox"> Keyboard navigation (arrow keys, Enter, Esc)</li>
+<li><input disabled="" type="checkbox"> Client state tests (local read state)</li>
+<li><input disabled="" type="checkbox"> UI state transition tests</li>
+</ul>
+<p><strong>Phase 4: Polish &amp; Testing Infrastructure</strong> (Week 4-5)</p>
+<ul>
+<li><input disabled="" type="checkbox"> Message composition modal (new thread, reply)</li>
+<li><input disabled="" type="checkbox"> Nickname prompt (inline, before first post)</li>
+<li><input disabled="" type="checkbox"> Help modal (keyboard shortcuts)</li>
+<li><input disabled="" type="checkbox"> Auto-reconnect logic (exponential backoff)</li>
+<li><input disabled="" type="checkbox"> Local state persistence (nickname, read positions)</li>
+<li><input disabled="" type="checkbox"> First-run splash screen</li>
+<li><input disabled="" type="checkbox"> Error handling (toasts, clear messages)</li>
+<li><input checked="" disabled="" type="checkbox"> <strong>Testing infrastructure (completed early)</strong><ul>
+<li><input checked="" disabled="" type="checkbox"> Makefile with coverage targets (test, coverage, coverage-lcov)</li>
+<li><input checked="" disabled="" type="checkbox"> .gitignore for coverage files (.out, .lcov, .coverprofile)</li>
+<li><input checked="" disabled="" type="checkbox"> Generate 3 lcov files (protocol, server, client)</li>
+<li><input disabled="" type="checkbox"> CI configuration (.github/workflows/ci.yml)</li>
+<li><input disabled="" type="checkbox"> Property-based tests (rapid) from Phase 1</li>
+<li><input disabled="" type="checkbox"> Fuzzing tests from Phase 1</li>
+</ul>
+</li>
+</ul>
+<p><strong>Phase 5: Deployment &amp; Documentation</strong> (Week 5-6)</p>
+<ul>
+<li><input disabled="" type="checkbox"> Server config file (TOML parsing)</li>
+<li><input disabled="" type="checkbox"> Client config file (TOML parsing)</li>
+<li><input disabled="" type="checkbox"> Retention cleanup job (cron-like background task)</li>
+<li><input disabled="" type="checkbox"> Session timeout cleanup</li>
+<li><input disabled="" type="checkbox"> <strong>Database migration framework</strong> (CRITICAL for V1→V2 upgrade)<ul>
+<li><input disabled="" type="checkbox"> Schema versioning (store schema_version in database)</li>
+<li><input disabled="" type="checkbox"> Migration runner (apply SQL migrations in order)</li>
+<li><input disabled="" type="checkbox"> Migration files (numbered: 001_initial.sql, 002_add_thread_root.sql, etc.)</li>
+<li><input disabled="" type="checkbox"> Automatic migration on server startup (check version, apply pending)</li>
+<li><input disabled="" type="checkbox"> Rollback support (down migrations for each up migration)</li>
+<li><input disabled="" type="checkbox"> Migration testing (verify V1→V2 upgrade path works)</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Build scripts (cross-compile for Linux/macOS/Windows)</li>
+<li><input disabled="" type="checkbox"> README with setup instructions</li>
+<li><input disabled="" type="checkbox"> User documentation (keyboard shortcuts, FAQ)</li>
+<li><input disabled="" type="checkbox"> <strong>Final testing pass</strong><ul>
+<li><input disabled="" type="checkbox"> Manual testing (all user flows)</li>
+<li><input disabled="" type="checkbox"> Load testing (optional, 100 concurrent users)</li>
+<li><input disabled="" type="checkbox"> Coverage summary verification</li>
+<li><input disabled="" type="checkbox"> Migration testing (V1 DB → apply all migrations → verify schema)</li>
+</ul>
+</li>
+</ul>
+<p><strong>Total: ~6 weeks for V1 MVP</strong></p>
+<hr>
+<h2>Files Structure</h2>
+<pre><code>superchat/
+├── cmd/
+│   ├── server/
+│   │   └── main.go               # Server entry point
+│   └── client/
+│       └── main.go               # Client entry point
+├── pkg/
+│   ├── protocol/
+│   │   ├── frame.go              # Frame encoding/decoding
+│   │   ├── frame_test.go         # Frame tests (100% coverage)
+│   │   ├── messages.go           # Message type definitions
+│   │   ├── messages_test.go      # Message tests (100% coverage)
+│   │   ├── types.go              # Primitive type serialization
+│   │   ├── types_test.go         # Type tests (100% coverage)
+│   │   ├── rapid_test.go         # Property-based tests
+│   │   └── fuzz_test.go          # Fuzzing tests
+│   ├── server/
+│   │   ├── server.go             # TCP server
+│   │   ├── server_test.go        # Server tests
+│   │   ├── session.go            # Session management
+│   │   ├── handlers.go           # Message handlers
+│   │   ├── handlers_test.go      # Handler tests
+│   │   ├── broadcast.go          # Real-time broadcasts
+│   │   ├── broadcast_test.go     # Broadcast tests
+│   │   ├── db.go                 # Database operations
+│   │   ├── db_test.go            # Database tests
+│   │   └── integration_test.go   # Multi-client integration tests
+│   ├── client/
+│   │   ├── client.go             # TCP client
+│   │   ├── client_test.go        # Client tests
+│   │   ├── state.go              # Local state management
+│   │   ├── state_test.go         # State tests
+│   │   └── ui/
+│   │       ├── app.go            # Bubbletea app
+│   │       ├── app_test.go       # App state tests
+│   │       ├── channels.go       # Channel list view
+│   │       ├── threads.go        # Thread list view
+│   │       ├── messages.go       # Thread view
+│   │       └── compose.go        # Composition modal
+│   └── config/
+│       ├── server.go             # Server config parsing
+│       ├── server_test.go        # Config tests
+│       ├── client.go             # Client config parsing
+│       └── client_test.go        # Config tests
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # CI configuration
+├── docs/
+│   ├── PROTOCOL.md               # Full protocol spec
+│   ├── IMPLEMENTATION_PLAN.md    # Overall implementation plan
+│   ├── DATA_MODEL.md             # Database schema and data model
+│   └── V1.md                     # This document (V1 spec)
+├── Makefile                       # Build and test commands
+├── .gitignore                     # Git ignore (includes coverage files)
+├── go.mod                         # Go module definition
+├── go.sum                         # Go dependency checksums
+└── README.md                      # Project overview and setup
+</code></pre>
+<hr>
+<h2>Summary</h2>
+<p>V1 is a <strong>minimal, functional, threaded chat application</strong> that validates the core UX (threading + keyboard navigation) while keeping complexity low. All V2 features (registration, SSH, subchannels, DMs, encryption) are designed as <strong>parallel additions</strong> that don&#39;t require V1 rewrites.</p>
+<p><strong>Key V1 Constraints:</strong></p>
+<ul>
+<li>Anonymous users only</li>
+<li>TCP connections only</li>
+<li>Flat channels (no subchannels)</li>
+<li>Forum threading (no chat type)</li>
+<li>Client-side state (no server sync)</li>
+<li>Admin-created channels (no user creation)</li>
+</ul>
+<p><strong>Key V2 Enablers:</strong></p>
+<ul>
+<li>Protocol messages defined but not implemented (return &quot;not implemented&quot;)</li>
+<li>Database fields nullable for V2 features (e.g., <code>author_user_id</code>)</li>
+<li>Client capability detection (probe server, adapt UI)</li>
+<li>Additive schema (V2 tables don&#39;t change V1 tables)</li>
+</ul>
+<p><strong>Success = Users love threading and want more features (registration, DMs, etc.)</strong></p>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

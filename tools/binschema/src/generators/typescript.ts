@@ -64,6 +64,26 @@ export function generateTypeScript(schema: BinarySchema): string {
 }
 
 /**
+ * Check if a type is a composite (has sequence/fields) or a type alias
+ */
+function isTypeAlias(typeDef: TypeDef): boolean {
+  return !('sequence' in typeDef || 'fields' in typeDef);
+}
+
+/**
+ * Get fields from a type definition (handles both 'sequence' and 'fields')
+ */
+function getTypeFields(typeDef: TypeDef): Field[] {
+  if ('sequence' in typeDef && (typeDef as any).sequence) {
+    return (typeDef as any).sequence;
+  }
+  if ('fields' in typeDef && (typeDef as any).fields) {
+    return (typeDef as any).fields;
+  }
+  return [];
+}
+
+/**
  * Generate code for a single type
  */
 function generateTypeCode(
@@ -73,25 +93,170 @@ function generateTypeCode(
   globalEndianness: Endianness,
   globalBitOrder: string
 ): string {
-  // Generate TypeScript interface for the value
+  // Check if this is a type alias or composite type
+  if (isTypeAlias(typeDef)) {
+    // Type alias - generate type alias, encoder, and decoder
+    return generateTypeAliasCode(typeName, typeDef, schema, globalEndianness, globalBitOrder);
+  }
+
+  // Composite type - generate interface, encoder, and decoder
   const interfaceCode = generateInterface(typeName, typeDef, schema);
-
-  // Generate encoder class
   const encoderCode = generateEncoder(typeName, typeDef, schema, globalEndianness, globalBitOrder);
-
-  // Generate decoder class
   const decoderCode = generateDecoder(typeName, typeDef, schema, globalEndianness, globalBitOrder);
 
   return `${interfaceCode}\n\n${encoderCode}\n\n${decoderCode}`;
 }
 
 /**
- * Generate TypeScript interface for a type
+ * Generate code for a type alias (non-composite type)
+ */
+function generateTypeAliasCode(
+  typeName: string,
+  typeDef: TypeDef,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  globalBitOrder: string
+): string {
+  // Type alias is stored as an element type (no 'name' field)
+  const aliasedType = typeDef as any; // Cast to any since it's an element type
+  const tsType = getElementTypeScriptType(aliasedType, schema);
+
+  // Generate type alias
+  const typeAliasCode = `export type ${typeName} = ${tsType};`;
+
+  // Generate encoder
+  const encoderCode = generateTypeAliasEncoder(typeName, aliasedType, schema, globalEndianness, globalBitOrder);
+
+  // Generate decoder
+  const decoderCode = generateTypeAliasDecoder(typeName, aliasedType, schema, globalEndianness, globalBitOrder);
+
+  return `${typeAliasCode}\n\n${encoderCode}\n\n${decoderCode}`;
+}
+
+/**
+ * Get TypeScript type for an element (like getFieldTypeScriptType but without 'name')
+ */
+function getElementTypeScriptType(element: any, schema: BinarySchema): string {
+  if (!element || typeof element !== 'object') {
+    return "any";
+  }
+
+  if ('type' in element) {
+    switch (element.type) {
+      case "bit":
+      case "uint8":
+      case "uint16":
+      case "uint32":
+      case "int8":
+      case "int16":
+      case "int32":
+      case "float32":
+      case "float64":
+        return "number";
+      case "uint64":
+      case "int64":
+        return "bigint";
+      case "array":
+        const itemType = getElementTypeScriptType(element.items, schema);
+        return `${itemType}[]`;
+      case "string":
+        return "string";
+      default:
+        // Type reference
+        return resolveTypeReference(element.type, schema);
+    }
+  }
+  return "any";
+}
+
+/**
+ * Generate encoder for a type alias
+ */
+function generateTypeAliasEncoder(
+  typeName: string,
+  aliasedType: any,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  globalBitOrder: string
+): string {
+  let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
+  code += `  constructor() {\n`;
+  code += `    super("${globalBitOrder}");\n`;
+  code += `  }\n\n`;
+  code += `  encode(value: ${typeName}): Uint8Array {\n`;
+
+  // Generate encoding logic for the aliased type
+  // Create a pseudo-field with no name to use existing encoding logic
+  const pseudoField = { ...aliasedType, name: 'value' };
+  code += generateEncodeFieldCoreImpl(pseudoField, schema, globalEndianness, 'value', '    ');
+
+  code += `    return this.finish();\n`;
+  code += `  }\n`;
+  code += `}`;
+
+  return code;
+}
+
+/**
+ * Generate decoder for a type alias
+ */
+function generateTypeAliasDecoder(
+  typeName: string,
+  aliasedType: any,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  globalBitOrder: string
+): string {
+  let code = `export class ${typeName}Decoder extends BitStreamDecoder {\n`;
+  code += `  constructor(bytes: Uint8Array | number[]) {\n`;
+  code += `    super(bytes, "${globalBitOrder}");\n`;
+  code += `  }\n\n`;
+  code += `  decode(): ${typeName} {\n`;
+
+  // For simple types, decode directly and return
+  // For complex types (arrays, etc), use existing decoding logic
+  if ('type' in aliasedType) {
+    switch (aliasedType.type) {
+      case "array":
+        // Use existing array decoding logic
+        code += `    let value: any;\n`;
+        code += generateDecodeFieldCoreImpl(
+          { ...aliasedType, name: 'result' },
+          schema,
+          globalEndianness,
+          'result',
+          '    '
+        );
+        code += `    return value.result;\n`;
+        break;
+      default:
+        // For primitives and type references, decode and return directly
+        code += `    let value: any;\n`;
+        code += generateDecodeFieldCoreImpl(
+          { ...aliasedType, name: 'result' },
+          schema,
+          globalEndianness,
+          'result',
+          '    '
+        );
+        code += `    return value.result;\n`;
+    }
+  }
+
+  code += `  }\n`;
+  code += `}`;
+
+  return code;
+}
+
+/**
+ * Generate TypeScript interface for a composite type
  */
 function generateInterface(typeName: string, typeDef: TypeDef, schema: BinarySchema): string {
+  const fields = getTypeFields(typeDef);
   let code = `export interface ${typeName} {\n`;
 
-  for (const field of typeDef.fields) {
+  for (const field of fields) {
     const fieldType = getFieldTypeScriptType(field, schema);
     const optional = isFieldConditional(field) ? "?" : "";
     code += `  ${field.name}${optional}: ${fieldType};\n`;
@@ -128,6 +293,8 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
       case "array":
         const itemType = getFieldTypeScriptType(field.items as Field, schema);
         return `${itemType}[]`;
+      case "string":
+        return "string";
       case "bitfield":
         // Bitfield is an object with named fields
         return `{ ${field.fields!.map((f: any) => `${f.name}: number`).join(", ")} }`;
@@ -150,9 +317,10 @@ function resolveTypeReference(typeRef: string, schema: BinarySchema): string {
     const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
 
     if (templateDef) {
+      const templateFields = getTypeFields(templateDef);
       // Generate inline interface structure
       const fields: string[] = [];
-      for (const field of templateDef.fields) {
+      for (const field of templateFields) {
         // Get the TypeScript type for the field, replacing T with typeArg
         let fieldType: string;
         if ('type' in field && field.type === 'T') {
@@ -214,6 +382,7 @@ function generateEncoder(
   globalEndianness: Endianness,
   globalBitOrder: string
 ): string {
+  const fields = getTypeFields(typeDef);
   let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
   code += `  constructor() {\n`;
   code += `    super("${globalBitOrder}");\n`;
@@ -222,7 +391,7 @@ function generateEncoder(
   // Generate encode method
   code += `  encode(value: ${typeName}): Uint8Array {\n`;
 
-  for (const field of typeDef.fields) {
+  for (const field of fields) {
     code += generateEncodeField(field, schema, globalEndianness, "    ");
   }
 
@@ -333,6 +502,9 @@ function generateEncodeFieldCoreImpl(
     case "array":
       return generateEncodeArray(field, schema, globalEndianness, valuePath, indent);
 
+    case "string":
+      return generateEncodeString(field, globalEndianness, valuePath, indent);
+
     case "bitfield":
       return generateEncodeBitfield(field, valuePath, indent);
 
@@ -400,6 +572,68 @@ function generateEncodeArray(
 }
 
 /**
+ * Generate encoding for string field
+ */
+function generateEncodeString(
+  field: any,
+  globalEndianness: Endianness,
+  valuePath: string,
+  indent: string
+): string {
+  const encoding = field.encoding || "utf8";
+  const kind = field.kind;
+  let code = "";
+
+  // Sanitize variable name (replace dots with underscores)
+  const bytesVarName = valuePath.replace(/\./g, "_") + "_bytes";
+
+  // Convert string to bytes
+  if (encoding === "utf8") {
+    code += `${indent}const ${bytesVarName} = new TextEncoder().encode(${valuePath});\n`;
+  } else if (encoding === "ascii") {
+    code += `${indent}const ${bytesVarName} = Array.from(${valuePath}, c => c.charCodeAt(0));\n`;
+  }
+
+  if (kind === "length_prefixed") {
+    const lengthType = field.length_type || "uint8";
+    // Write length prefix
+    switch (lengthType) {
+      case "uint8":
+        code += `${indent}this.writeUint8(${bytesVarName}.length);\n`;
+        break;
+      case "uint16":
+        code += `${indent}this.writeUint16(${bytesVarName}.length, "${globalEndianness}");\n`;
+        break;
+      case "uint32":
+        code += `${indent}this.writeUint32(${bytesVarName}.length, "${globalEndianness}");\n`;
+        break;
+      case "uint64":
+        code += `${indent}this.writeUint64(BigInt(${bytesVarName}.length), "${globalEndianness}");\n`;
+        break;
+    }
+    // Write bytes
+    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
+    code += `${indent}  this.writeUint8(byte);\n`;
+    code += `${indent}}\n`;
+  } else if (kind === "null_terminated") {
+    // Write bytes
+    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
+    code += `${indent}  this.writeUint8(byte);\n`;
+    code += `${indent}}\n`;
+    // Write null terminator
+    code += `${indent}this.writeUint8(0);\n`;
+  } else if (kind === "fixed") {
+    const fixedLength = field.length || 0;
+    // Write bytes (padded or truncated to fixed length)
+    code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
+    code += `${indent}  this.writeUint8(i < ${bytesVarName}.length ? ${bytesVarName}[i] : 0);\n`;
+    code += `${indent}}\n`;
+  }
+
+  return code;
+}
+
+/**
  * Generate encoding for bitfield
  */
 function generateEncodeBitfield(field: any, valuePath: string, indent: string): string {
@@ -428,9 +662,10 @@ function generateEncodeTypeReference(
     const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
 
     if (templateDef) {
+      const templateFields = getTypeFields(templateDef);
       // Inline expand the generic by replacing T with the type argument
       let code = "";
-      for (const field of templateDef.fields) {
+      for (const field of templateFields) {
         // Replace T with the actual type
         const expandedField = JSON.parse(
           JSON.stringify(field).replace(/"T"/g, `"${typeArg}"`)
@@ -448,8 +683,18 @@ function generateEncodeTypeReference(
     return `${indent}// TODO: Unknown type ${typeRef}\n`;
   }
 
+  // Check if this is a type alias
+  if (isTypeAlias(typeDef)) {
+    // Type alias - encode directly using the aliased type
+    const aliasedType = typeDef as any;
+    const pseudoField = { ...aliasedType, name: valuePath.split('.').pop() };
+    return generateEncodeFieldCoreImpl(pseudoField, schema, "big_endian", valuePath, indent);
+  }
+
+  // Composite type - encode all fields
+  const fields = getTypeFields(typeDef);
   let code = "";
-  for (const field of typeDef.fields) {
+  for (const field of fields) {
     const newValuePath = `${valuePath}.${field.name}`;
     code += generateEncodeFieldCore(field, schema, "big_endian", newValuePath, indent);
   }
@@ -467,6 +712,7 @@ function generateDecoder(
   globalEndianness: Endianness,
   globalBitOrder: string
 ): string {
+  const fields = getTypeFields(typeDef);
   let code = `export class ${typeName}Decoder extends BitStreamDecoder {\n`;
   code += `  constructor(bytes: Uint8Array | number[]) {\n`;
   code += `    super(bytes, "${globalBitOrder}");\n`;
@@ -474,7 +720,7 @@ function generateDecoder(
   code += `  decode(): ${typeName} {\n`;
   code += `    const value: any = {};\n\n`;
 
-  for (const field of typeDef.fields) {
+  for (const field of fields) {
     code += generateDecodeField(field, schema, globalEndianness, "    ");
   }
 
@@ -593,6 +839,9 @@ function generateDecodeFieldCoreImpl(
     case "array":
       return generateDecodeArray(field, schema, globalEndianness, fieldName, indent);
 
+    case "string":
+      return generateDecodeString(field, globalEndianness, fieldName, indent);
+
     case "bitfield":
       return generateDecodeBitfield(field, fieldName, indent);
 
@@ -688,6 +937,96 @@ function getTargetPath(fieldName: string): string {
 }
 
 /**
+ * Generate decoding for string field
+ */
+function generateDecodeString(
+  field: any,
+  globalEndianness: Endianness,
+  fieldName: string,
+  indent: string
+): string {
+  const encoding = field.encoding || "utf8";
+  const kind = field.kind;
+  const target = getTargetPath(fieldName);
+  let code = "";
+
+  if (kind === "length_prefixed") {
+    const lengthType = field.length_type || "uint8";
+    let lengthRead = "";
+    switch (lengthType) {
+      case "uint8":
+        lengthRead = "this.readUint8()";
+        break;
+      case "uint16":
+        lengthRead = `this.readUint16("${globalEndianness}")`;
+        break;
+      case "uint32":
+        lengthRead = `this.readUint32("${globalEndianness}")`;
+        break;
+      case "uint64":
+        lengthRead = `Number(this.readUint64("${globalEndianness}"))`;
+        break;
+    }
+
+    // Read length
+    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
+    code += `${indent}const ${lengthVarName} = ${lengthRead};\n`;
+
+    // Read bytes
+    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
+    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
+    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
+    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
+    code += `${indent}}\n`;
+
+    // Convert bytes to string
+    if (encoding === "utf8") {
+      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
+    } else if (encoding === "ascii") {
+      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
+    }
+  } else if (kind === "null_terminated") {
+    // Read bytes until null terminator
+    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
+    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
+    code += `${indent}while (true) {\n`;
+    code += `${indent}  const byte = this.readUint8();\n`;
+    code += `${indent}  if (byte === 0) break;\n`;
+    code += `${indent}  ${bytesVarName}.push(byte);\n`;
+    code += `${indent}}\n`;
+
+    // Convert bytes to string
+    if (encoding === "utf8") {
+      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
+    } else if (encoding === "ascii") {
+      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
+    }
+  } else if (kind === "fixed") {
+    const fixedLength = field.length || 0;
+
+    // Read fixed number of bytes
+    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
+    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
+    code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
+    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
+    code += `${indent}}\n`;
+
+    // Find actual string length (before first null byte)
+    code += `${indent}let actualLength = ${bytesVarName}.indexOf(0);\n`;
+    code += `${indent}if (actualLength === -1) actualLength = ${bytesVarName}.length;\n`;
+
+    // Convert bytes to string (only up to first null)
+    if (encoding === "utf8") {
+      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}.slice(0, actualLength)));\n`;
+    } else if (encoding === "ascii") {
+      code += `${indent}${target} = String.fromCharCode(...${bytesVarName}.slice(0, actualLength));\n`;
+    }
+  }
+
+  return code;
+}
+
+/**
  * Generate decoding for bitfield
  */
 function generateDecodeBitfield(field: any, fieldName: string, indent: string): string {
@@ -724,9 +1063,10 @@ function generateDecodeTypeReference(
     const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
 
     if (templateDef) {
+      const templateFields = getTypeFields(templateDef);
       // Inline expand the generic by replacing T with the type argument
       let code = `${indent}${target} = {};\n`;
-      for (const field of templateDef.fields) {
+      for (const field of templateFields) {
         // Replace T with the actual type
         const expandedField = JSON.parse(
           JSON.stringify(field).replace(/"T"/g, `"${typeArg}"`)
@@ -750,8 +1090,18 @@ function generateDecodeTypeReference(
     return `${indent}// TODO: Unknown type ${typeRef}\n`;
   }
 
+  // Check if this is a type alias
+  if (isTypeAlias(typeDef)) {
+    // Type alias - decode directly using the aliased type
+    const aliasedType = typeDef as any;
+    const pseudoField = { ...aliasedType, name: fieldName.split('.').pop() };
+    return generateDecodeFieldCoreImpl(pseudoField, schema, "big_endian", fieldName, indent);
+  }
+
+  // Composite type - decode all fields
+  const fields = getTypeFields(typeDef);
   let code = `${indent}${target} = {};\n`;
-  for (const field of typeDef.fields) {
+  for (const field of fields) {
     const subFieldCode = generateDecodeFieldCore(
       field,
       schema,

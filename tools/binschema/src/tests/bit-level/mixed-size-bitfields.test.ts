@@ -15,7 +15,7 @@ export const mixedSizeBitfieldsTestSuite = defineTestSuite({
     },
     types: {
       "MixedBits": {
-        fields: [
+        sequence: [
           { name: "flag", type: "bit", size: 1 },
           { name: "medium", type: "bit", size: 15 },
           { name: "large", type: "bit", size: 48 }
@@ -106,7 +106,7 @@ export const variableSizeBitfieldsTestSuite = defineTestSuite({
     },
     types: {
       "VariableBits": {
-        fields: [
+        sequence: [
           { name: "small", type: "bit", size: 3 },
           { name: "tiny", type: "bit", size: 5 },
           { name: "medium", type: "bit", size: 24 },

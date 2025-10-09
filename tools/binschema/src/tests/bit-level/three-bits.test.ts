@@ -16,7 +16,7 @@ export const threeBitsTestSuite = defineTestSuite({
     },
     types: {
       "ThreeBitValue": {
-        fields: [
+        sequence: [
           { name: "value", type: "bit", size: 3 }
         ]
       }

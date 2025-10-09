@@ -1,0 +1,2456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat Binary Protocol Specification - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="./favicon.png">
+    <link rel="stylesheet" href="./src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="./index.html" class="logo">
+                    <img src="./mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="./index.html">Home</a>
+                    <a href="./docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="./docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="./docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="./docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="./docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="./docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="./docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="./docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="./docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="./docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="./docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="./docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="./docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="./docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="./docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat Binary Protocol Specification</h1>
+<h2>Overview</h2>
+<p>This document defines the binary protocol used for communication between SuperChat clients and servers. The protocol is designed to be lightweight, efficient, and easy to implement.</p>
+<h2>Connection Types</h2>
+<p>SuperChat supports two connection methods:</p>
+<ol>
+<li><strong>SSH Connection</strong>: Automatic authentication via SSH key</li>
+<li><strong>TCP Connection</strong>: Direct TCP socket with manual authentication</li>
+</ol>
+<p>Both use the same binary protocol after connection is established.</p>
+<h2>Frame Format</h2>
+<p>All messages use a simple frame-based format:</p>
+<pre><code>+-------------------+-------------------+------------------+------------------+------------------------+
+| Length (4 bytes)  | Version (1 byte)  | Type (1 byte)    | Flags (1 byte)   | Payload (N bytes)      |
++-------------------+-------------------+------------------+------------------+------------------------+
+| uint32 big-endian | uint8             | uint8            | uint8            | variable length        |
++-------------------+-------------------+------------------+------------------+------------------------+
+</code></pre>
+<ul>
+<li><strong>Length</strong>: Total size of Version + Type + Flags + Payload (excludes the length field itself)</li>
+<li><strong>Version</strong>: Protocol version (current version: 1)</li>
+<li><strong>Type</strong>: Message type identifier (see Message Types below)</li>
+<li><strong>Flags</strong>: Bit flags for compression, encryption, and future extensions</li>
+<li><strong>Payload</strong>: Message-specific data</li>
+</ul>
+<p><strong>Protocol Version:</strong></p>
+<ul>
+<li>Current protocol version is <strong>1</strong></li>
+<li>Server sends its protocol version in SERVER_CONFIG (first field)</li>
+<li>Both client and server must validate version on every message</li>
+</ul>
+<p><strong>Versioning Philosophy:</strong></p>
+<ul>
+<li>Protocol versions aim to be <strong>backwards compatible via extension</strong>, not modification</li>
+<li>New versions add new message types and fields, but don&#39;t change existing ones</li>
+<li><strong>Forward compatibility:</strong> Newer clients should work with older servers<ul>
+<li>Client can detect server version from SERVER_CONFIG</li>
+<li>Client gracefully degrades features not supported by older server</li>
+<li>Client doesn&#39;t send message types the server doesn&#39;t understand</li>
+</ul>
+</li>
+<li><strong>Backward compatibility:</strong> Older clients may work with newer servers<ul>
+<li>Server can detect client version from frame headers</li>
+<li>Unknown message types should be ignored or return ERROR 1001 (unsupported version)</li>
+</ul>
+</li>
+<li>If a breaking change is absolutely necessary, increment major version and treat as new protocol</li>
+<li>Goal: Avoid forcing synchronized upgrades of all clients and servers</li>
+</ul>
+<p><strong>Flags Byte (bits):</strong></p>
+<ul>
+<li>Bit 0 (rightmost): Compression (0 = uncompressed, 1 = LZ4 compressed)</li>
+<li>Bit 1: Encryption (0 = plaintext, 1 = encrypted payload)</li>
+<li>Bits 2-7: Reserved for future use (must be 0)</li>
+</ul>
+<p><strong>Examples:</strong></p>
+<ul>
+<li><code>0x00</code> = No compression, no encryption</li>
+<li><code>0x01</code> = Compressed, not encrypted</li>
+<li><code>0x02</code> = Not compressed, encrypted</li>
+<li><code>0x03</code> = Compressed and encrypted</li>
+</ul>
+<p><strong>Max Frame Size</strong>: 1 MB (1,048,576 bytes) to prevent DoS attacks</p>
+<p><strong>Compression:</strong></p>
+<ul>
+<li>Applied to the entire payload after the Flags byte</li>
+<li>Uses <strong>LZ4 block format</strong> (much faster than gzip for real-time messaging)</li>
+<li>Structure: <code>[Uncompressed Size (u32)][LZ4 Compressed Data]</code></li>
+<li>Recommended for payloads larger than 512 bytes</li>
+<li>Decompress before parsing payload structure</li>
+<li>LZ4 chosen for low latency and minimal CPU overhead</li>
+</ul>
+<p><strong>Encryption:</strong></p>
+<ul>
+<li>Applied to the entire payload after optional compression</li>
+<li>Used for private/DM channels with end-to-end encryption</li>
+<li>Encryption details covered in DM section below</li>
+</ul>
+<h2>Data Types</h2>
+<h3>Primitive Types</h3>
+<ul>
+<li><code>uint8</code>: 1-byte unsigned integer</li>
+<li><code>uint16</code>: 2-byte unsigned integer (big-endian)</li>
+<li><code>uint32</code>: 4-byte unsigned integer (big-endian)</li>
+<li><code>uint64</code>: 8-byte unsigned integer (big-endian)</li>
+<li><code>int64</code>: 8-byte signed integer (big-endian)</li>
+<li><code>bool</code>: 1-byte (0x00 = false, 0x01 = true)</li>
+</ul>
+<h3>Composite Types</h3>
+<p><strong>String</strong> (length-prefixed UTF-8):</p>
+<pre><code>+-------------------+------------------------+
+| Length (uint16)   | Data (N bytes UTF-8)   |
++-------------------+------------------------+
+</code></pre>
+<p><strong>Timestamp</strong> (Unix epoch in milliseconds):</p>
+<pre><code>+-------------------+
+| int64             |
++-------------------+
+</code></pre>
+<ul>
+<li>Always represents <strong>server time</strong> (not client time)</li>
+<li>Server sets all timestamps (<code>created_at</code>, <code>edited_at</code>, <code>deleted_at</code>, etc.)</li>
+<li>Clients should never send timestamps (except PING for RTT calculation)</li>
+<li>This eliminates clock skew issues between clients and ensures consistent message ordering</li>
+</ul>
+<p><strong>Optional Field</strong> (nullable):</p>
+<pre><code>+-------------------+------------------------+
+| Present (bool)    | Value (if present)     |
++-------------------+------------------------+
+</code></pre>
+<ul>
+<li>Uses full byte (bool) for presence flag instead of bit-packing</li>
+<li><strong>Tradeoff</strong>: Wastes 7 bits per optional field, but much simpler to encode/decode</li>
+<li>Byte-aligned fields are faster to parse and easier to implement correctly</li>
+<li>For a chat protocol, the bandwidth savings from bit-packing are negligible</li>
+<li>Simplicity and implementation speed prioritized over micro-optimization</li>
+</ul>
+<p><strong>Compressed Payload</strong> (when Flags bit 0 is set):</p>
+<pre><code>+---------------------------+---------------------------+
+| Uncompressed Size (u32)   | LZ4 Compressed Data       |
++---------------------------+---------------------------+
+</code></pre>
+<ul>
+<li><code>Uncompressed Size</code>: Size of data after decompression (for buffer allocation)</li>
+<li><code>LZ4 Compressed Data</code>: Payload compressed using LZ4 block format</li>
+<li>After decompression, parse as normal payload structure based on message type</li>
+</ul>
+<h2>Message Types</h2>
+<h3>Client → Server Messages</h3>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>0x01</td>
+<td>AUTH_REQUEST</td>
+<td>Authenticate with password</td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>SET_NICKNAME</td>
+<td>Set/change nickname</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>REGISTER_USER</td>
+<td>Register current nickname</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>LIST_CHANNELS</td>
+<td>Request channel list</td>
+</tr>
+<tr>
+<td>0x05</td>
+<td>JOIN_CHANNEL</td>
+<td>Join a channel/subchannel</td>
+</tr>
+<tr>
+<td>0x06</td>
+<td>LEAVE_CHANNEL</td>
+<td>Leave a channel/subchannel</td>
+</tr>
+<tr>
+<td>0x07</td>
+<td>CREATE_CHANNEL</td>
+<td>Create new channel</td>
+</tr>
+<tr>
+<td>0x08</td>
+<td>CREATE_SUBCHANNEL</td>
+<td>Create new subchannel</td>
+</tr>
+<tr>
+<td>0x09</td>
+<td>LIST_MESSAGES</td>
+<td>Request messages (with filters)</td>
+</tr>
+<tr>
+<td>0x0A</td>
+<td>POST_MESSAGE</td>
+<td>Post a new message</td>
+</tr>
+<tr>
+<td>0x0B</td>
+<td>EDIT_MESSAGE</td>
+<td>Edit an existing message</td>
+</tr>
+<tr>
+<td>0x0C</td>
+<td>DELETE_MESSAGE</td>
+<td>Delete a message (soft-delete)</td>
+</tr>
+<tr>
+<td>0x0D</td>
+<td>ADD_SSH_KEY</td>
+<td>Add SSH public key to account</td>
+</tr>
+<tr>
+<td>0x0E</td>
+<td>CHANGE_PASSWORD</td>
+<td>Change user password</td>
+</tr>
+<tr>
+<td>0x0F</td>
+<td>GET_USER_INFO</td>
+<td>Get info about a user</td>
+</tr>
+<tr>
+<td>0x10</td>
+<td>PING</td>
+<td>Keepalive ping</td>
+</tr>
+<tr>
+<td>0x11</td>
+<td>DISCONNECT</td>
+<td>Graceful disconnect notification</td>
+</tr>
+<tr>
+<td>0x12</td>
+<td>UPDATE_SSH_KEY_LABEL</td>
+<td>Update SSH key label</td>
+</tr>
+<tr>
+<td>0x13</td>
+<td>DELETE_SSH_KEY</td>
+<td>Delete SSH key from account</td>
+</tr>
+<tr>
+<td>0x14</td>
+<td>LIST_SSH_KEYS</td>
+<td>Request list of user&#39;s SSH keys</td>
+</tr>
+<tr>
+<td>0x15</td>
+<td>GET_SUBCHANNELS</td>
+<td>Request subchannels for a channel</td>
+</tr>
+<tr>
+<td>0x16</td>
+<td>LIST_USERS</td>
+<td>Request list of online users</td>
+</tr>
+<tr>
+<td>0x17</td>
+<td>UPDATE_READ_STATE</td>
+<td>Update last read position</td>
+</tr>
+<tr>
+<td>0x18</td>
+<td>GET_UNREAD_COUNTS</td>
+<td>Request unread counts for specific channels</td>
+</tr>
+<tr>
+<td>0x19</td>
+<td>START_DM</td>
+<td>Initiate a direct message conversation</td>
+</tr>
+<tr>
+<td>0x1A</td>
+<td>PROVIDE_PUBLIC_KEY</td>
+<td>Upload public key for encryption</td>
+</tr>
+<tr>
+<td>0x1B</td>
+<td>ALLOW_UNENCRYPTED</td>
+<td>Explicitly allow unencrypted DMs</td>
+</tr>
+<tr>
+<td>0x1C</td>
+<td>LOGOUT</td>
+<td>Clear authentication, become anonymous</td>
+</tr>
+<tr>
+<td>0x51</td>
+<td>SUBSCRIBE_THREAD</td>
+<td>Subscribe to thread updates</td>
+</tr>
+<tr>
+<td>0x52</td>
+<td>UNSUBSCRIBE_THREAD</td>
+<td>Unsubscribe from thread updates</td>
+</tr>
+<tr>
+<td>0x53</td>
+<td>SUBSCRIBE_CHANNEL</td>
+<td>Subscribe to new threads in channel</td>
+</tr>
+<tr>
+<td>0x54</td>
+<td>UNSUBSCRIBE_CHANNEL</td>
+<td>Unsubscribe from channel updates</td>
+</tr>
+<tr>
+<td>0x55</td>
+<td>LIST_SERVERS</td>
+<td>Request server list from directory</td>
+</tr>
+<tr>
+<td>0x56</td>
+<td>REGISTER_SERVER</td>
+<td>Register server with directory</td>
+</tr>
+<tr>
+<td>0x57</td>
+<td>HEARTBEAT</td>
+<td>Directory heartbeat (keep-alive)</td>
+</tr>
+<tr>
+<td>0x58</td>
+<td>VERIFY_RESPONSE</td>
+<td>Response to verification challenge</td>
+</tr>
+</tbody></table>
+<h3>Server → Client Messages</h3>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>0x81</td>
+<td>AUTH_RESPONSE</td>
+<td>Authentication result</td>
+</tr>
+<tr>
+<td>0x82</td>
+<td>NICKNAME_RESPONSE</td>
+<td>Nickname change result</td>
+</tr>
+<tr>
+<td>0x83</td>
+<td>REGISTER_RESPONSE</td>
+<td>Registration result</td>
+</tr>
+<tr>
+<td>0x84</td>
+<td>CHANNEL_LIST</td>
+<td>List of channels</td>
+</tr>
+<tr>
+<td>0x85</td>
+<td>JOIN_RESPONSE</td>
+<td>Join result with channel data</td>
+</tr>
+<tr>
+<td>0x86</td>
+<td>LEAVE_RESPONSE</td>
+<td>Leave confirmation</td>
+</tr>
+<tr>
+<td>0x87</td>
+<td>CHANNEL_CREATED</td>
+<td>Channel creation result</td>
+</tr>
+<tr>
+<td>0x88</td>
+<td>SUBCHANNEL_CREATED</td>
+<td>Subchannel creation result</td>
+</tr>
+<tr>
+<td>0x89</td>
+<td>MESSAGE_LIST</td>
+<td>List of messages</td>
+</tr>
+<tr>
+<td>0x8A</td>
+<td>MESSAGE_POSTED</td>
+<td>Message post confirmation</td>
+</tr>
+<tr>
+<td>0x8B</td>
+<td>MESSAGE_EDITED</td>
+<td>Edit confirmation</td>
+</tr>
+<tr>
+<td>0x8C</td>
+<td>MESSAGE_DELETED</td>
+<td>Delete confirmation</td>
+</tr>
+<tr>
+<td>0x8D</td>
+<td>NEW_MESSAGE</td>
+<td>Real-time message notification</td>
+</tr>
+<tr>
+<td>0x8E</td>
+<td>PASSWORD_CHANGED</td>
+<td>Password change result</td>
+</tr>
+<tr>
+<td>0x8F</td>
+<td>USER_INFO</td>
+<td>User information response</td>
+</tr>
+<tr>
+<td>0x90</td>
+<td>PONG</td>
+<td>Ping response</td>
+</tr>
+<tr>
+<td>0x91</td>
+<td>ERROR</td>
+<td>Error response</td>
+</tr>
+<tr>
+<td>0x92</td>
+<td>SSH_KEY_LABEL_UPDATED</td>
+<td>SSH key label update result</td>
+</tr>
+<tr>
+<td>0x93</td>
+<td>SSH_KEY_DELETED</td>
+<td>SSH key deletion result</td>
+</tr>
+<tr>
+<td>0x94</td>
+<td>SSH_KEY_LIST</td>
+<td>List of user&#39;s SSH keys</td>
+</tr>
+<tr>
+<td>0x95</td>
+<td>SSH_KEY_ADDED</td>
+<td>SSH key addition result</td>
+</tr>
+<tr>
+<td>0x96</td>
+<td>SUBCHANNEL_LIST</td>
+<td>List of subchannels for a channel</td>
+</tr>
+<tr>
+<td>0x97</td>
+<td>UNREAD_COUNTS</td>
+<td>Unread message counts response</td>
+</tr>
+<tr>
+<td>0x98</td>
+<td>SERVER_CONFIG</td>
+<td>Server configuration and limits (sent on connect)</td>
+</tr>
+<tr>
+<td>0x99</td>
+<td>SUBSCRIBE_OK</td>
+<td>Subscription confirmation</td>
+</tr>
+<tr>
+<td>0x9A</td>
+<td>USER_LIST</td>
+<td>List of online users</td>
+</tr>
+<tr>
+<td>0x9B</td>
+<td>SERVER_LIST</td>
+<td>List of discoverable servers</td>
+</tr>
+<tr>
+<td>0x9C</td>
+<td>REGISTER_ACK</td>
+<td>Server registration acknowledgment</td>
+</tr>
+<tr>
+<td>0x9D</td>
+<td>HEARTBEAT_ACK</td>
+<td>Heartbeat acknowledgment</td>
+</tr>
+<tr>
+<td>0x9E</td>
+<td>VERIFY_REGISTRATION</td>
+<td>Verification challenge for new servers</td>
+</tr>
+<tr>
+<td>0xA0</td>
+<td>SERVER_STATS</td>
+<td>Server statistics (user counts, etc.)</td>
+</tr>
+<tr>
+<td>0xA1</td>
+<td>KEY_REQUIRED</td>
+<td>Server needs encryption key before proceeding</td>
+</tr>
+<tr>
+<td>0xA2</td>
+<td>DM_READY</td>
+<td>DM channel is ready to use</td>
+</tr>
+<tr>
+<td>0xA3</td>
+<td>DM_PENDING</td>
+<td>Waiting for other party to complete key setup</td>
+</tr>
+<tr>
+<td>0xA4</td>
+<td>DM_REQUEST</td>
+<td>Incoming DM request from another user</td>
+</tr>
+</tbody></table>
+<h2>Message Payloads</h2>
+<h3>0x01 - AUTH_REQUEST (Client → Server)</h3>
+<p>Used when connecting to use a registered nickname.</p>
+<pre><code>+-------------------+-------------------+
+| nickname (String) | password (String) |
++-------------------+-------------------+
+</code></pre>
+<h3>0x81 - AUTH_RESPONSE (Server → Client)</h3>
+<pre><code>+-------------------+-------------------+----------------------+----------------------+
+| success (bool)    | user_id (uint64)  | nickname (String)    | message (String)     |
+|                   | (only if success) | (only if success)    | (error if failed)    |
++-------------------+-------------------+----------------------+----------------------+
+</code></pre>
+<p>If success:</p>
+<ul>
+<li><code>user_id</code>: The registered user&#39;s ID</li>
+<li><code>nickname</code>: The authenticated user&#39;s registered nickname</li>
+<li><code>message</code>: Welcome message or empty</li>
+</ul>
+<p>If failed:</p>
+<ul>
+<li><code>user_id</code>: Omitted</li>
+<li><code>nickname</code>: Omitted</li>
+<li><code>message</code>: Error description</li>
+</ul>
+<p><strong>Note:</strong> The <code>nickname</code> field was added in V2 to support SSH authentication, where the client needs to know their authenticated nickname without sending SET_NICKNAME.</p>
+<h3>0x02 - SET_NICKNAME (Client → Server)</h3>
+<p>Used to set or change nickname.</p>
+<pre><code>+--------------------+
+| nickname (String)  |
++--------------------+
+</code></pre>
+<p><strong>Behavior:</strong></p>
+<p><strong>Anonymous users:</strong></p>
+<ul>
+<li>Can change nickname freely to any available nickname</li>
+<li>Nickname change only affects current session</li>
+<li>Previous messages keep old nickname</li>
+</ul>
+<p><strong>Registered users:</strong></p>
+<ul>
+<li>Can change nickname to any available (unregistered) nickname</li>
+<li>Nickname change updates all existing messages to show new nickname automatically</li>
+<li>Database UPDATE on User.nickname only (messages link via author_user_id FK)</li>
+<li>Message.author_nickname is only used for anonymous users (where author_user_id is NULL)</li>
+<li>Cannot change to a nickname already registered by another user</li>
+</ul>
+<h3>0x82 - NICKNAME_RESPONSE (Server → Client)</h3>
+<pre><code>+-------------------+-------------------+
+| success (bool)    | message (String)  |
++-------------------+-------------------+
+</code></pre>
+<p><strong>Response cases:</strong></p>
+<ul>
+<li>Nickname is registered and client is not authenticated: <code>success = false</code>, <code>message = &quot;Nickname registered, password required&quot;</code></li>
+<li>Nickname is available: <code>success = true</code>, <code>message = &quot;Nickname changed to &lt;nickname&gt;&quot;</code> (or &quot;Nickname set to <nickname>&quot;)</li>
+<li>Nickname is invalid (format): <code>success = false</code>, <code>message = &quot;Invalid nickname&quot;</code></li>
+<li>Nickname already taken (registered user trying to change): <code>success = false</code>, <code>message = &quot;Nickname already in use&quot;</code></li>
+</ul>
+<h3>0x03 - REGISTER_USER (Client → Server)</h3>
+<p>Register current nickname with a password.</p>
+<pre><code>+-------------------+
+| password (String) |
++-------------------+
+</code></pre>
+<h3>0x83 - REGISTER_RESPONSE (Server → Client)</h3>
+<pre><code>+-------------------+-------------------+
+| success (bool)    | user_id (uint64)  |
+|                   | (only if success) |
++-------------------+-------------------+
+</code></pre>
+<h3>0x04 - LIST_CHANNELS (Client → Server)</h3>
+<p>Request list of channels (without subchannels).</p>
+<pre><code>+------------------------+-------------------+
+| from_channel_id (u64)  | limit (u16)       |
++------------------------+-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>from_channel_id</code>: Start listing from this channel ID (exclusive). Use 0 to start from beginning.</li>
+<li><code>limit</code>: Maximum number of channels to return (default/max: 1000)</li>
+<li>Channels returned in ascending ID order</li>
+<li>Client can stop reading response early if it has enough channels</li>
+<li>For servers with many channels, client can request in batches</li>
+</ul>
+<h3>0x84 - CHANNEL_LIST (Server → Client)</h3>
+<pre><code>+----------------------+----------------+
+| channel_count (u16)  | channels []    |
++----------------------+----------------+
+
+Each channel:
++-------------------+----------------------+------------------------+------------------------+
+| channel_id (u64)  | name (String)        | description (String)   | user_count (u32)       |
++-------------------+----------------------+------------------------+------------------------+
+| is_operator (bool)| type (u8)            | retention_hours(u32)   | has_subchannels (bool) |
++-------------------+----------------------+------------------------+------------------------+
+| subchannel_count(u16) |
++----------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Returns public channels (private channels excluded)</li>
+<li>Channels returned in ascending ID order</li>
+<li><code>has_subchannels</code>: true if channel has subchannels defined</li>
+<li><code>subchannel_count</code>: number of subchannels (0 if none)</li>
+<li>To get subchannels, use GET_SUBCHANNELS request</li>
+<li>If <code>channel_count &lt; limit</code>, there are no more channels to fetch</li>
+</ul>
+<h3>0x15 - GET_SUBCHANNELS (Client → Server)</h3>
+<p>Request subchannels for a specific channel.</p>
+<pre><code>+-------------------+
+| channel_id (u64)  |
++-------------------+
+</code></pre>
+<h3>0x97 - SUBCHANNEL_LIST (Server → Client)</h3>
+<pre><code>+-------------------+----------------------+----------------+
+| channel_id (u64)  | subchannel_count(u16)| subchannels [] |
++-------------------+----------------------+----------------+
+
+Each subchannel:
++----------------------+-------------------+------------------------+------------------------+
+| subchannel_id (u64)  | name (String)     | description (String)   | type (u8)              |
++----------------------+-------------------+------------------------+------------------------+
+| retention_hours(u32) |
++----------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Response includes <code>channel_id</code> so client knows which channel these subchannels belong to</li>
+<li>Allows concurrent requests for multiple channels&#39; subchannels</li>
+</ul>
+<p><strong>Type (both channel and subchannel):</strong></p>
+<ul>
+<li>0x00 = chat</li>
+<li>0x01 = forum</li>
+</ul>
+<p><strong>Type Semantics:</strong></p>
+<ul>
+<li><code>type</code> is a UI hint for how clients should present the channel</li>
+<li><strong>Chat (0x00)</strong>: Intended for real-time conversation<ul>
+<li>Client UI may emphasize chronological message flow</li>
+<li>Threading is still supported by protocol, but may be de-emphasized in UI</li>
+<li>Typically paired with short retention (but not required)</li>
+</ul>
+</li>
+<li><strong>Forum (0x01)</strong>: Intended for threaded discussions<ul>
+<li>Client UI should emphasize thread structure and navigation</li>
+<li>Threading is expected and encouraged</li>
+<li>Typically paired with longer retention (but not required)</li>
+</ul>
+</li>
+</ul>
+<p><strong>Important:</strong> All clients MUST support displaying threaded messages regardless of channel type, since the protocol allows threading in both. The type only suggests the primary UI presentation style.</p>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>type</code> and <code>retention_hours</code> on channel apply when channel has no subchannels</li>
+<li>If channel has subchannels, each subchannel has its own <code>type</code> and <code>retention_hours</code></li>
+<li><code>type</code> and <code>retention_hours</code> are independent - any combination is valid</li>
+<li>Unread counts are NOT included in channel list (use GET_UNREAD_COUNTS instead)</li>
+</ul>
+<h3>0x05 - JOIN_CHANNEL (Client → Server)</h3>
+<pre><code>+-------------------+-----------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)|
++-------------------+-----------------------------+
+</code></pre>
+<p>If <code>subchannel_id</code> is not present, join the channel at the root level (for channels without subchannels).</p>
+<h3>0x85 - JOIN_RESPONSE (Server → Client)</h3>
+<pre><code>+-------------------+-------------------+----------------------+
+| success (bool)    | channel_id (u64)  | subchannel_id        |
+|                   |                   | (Optional u64)       |
++-------------------+-------------------+----------------------+
+| message (String)  |
++-------------------+
+</code></pre>
+<p>If failed, <code>message</code> contains error description.</p>
+<h3>0x09 - LIST_MESSAGES (Client → Server)</h3>
+<p>Request messages from a channel/subchannel.</p>
+<pre><code>+-------------------+-----------------------------+------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| limit (u16)            |
++-------------------+-----------------------------+------------------------+
+| before_id (Optional u64)  | parent_id (Optional u64) |
++-------------------------------+-------------------------+
+| after_id (Optional u64)   |
++---------------------------+
+</code></pre>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>limit</code>: Max messages to return (default: 50, max: 200)</li>
+<li><code>before_id</code>: Return messages older than this message ID (for backward pagination)</li>
+<li><code>parent_id</code>: If set, only return replies to this message (thread view)</li>
+<li><code>after_id</code>: Return messages newer than this message ID (for forward pagination / catching up)</li>
+</ul>
+<p><strong>Behavior:</strong></p>
+<ul>
+<li><p><strong>Without <code>parent_id</code></strong>: Returns root messages only (thread starters, where <code>parent_id = null</code>)</p>
+<ul>
+<li>Sorted by <code>created_at</code> descending (newest first) when using <code>before_id</code> or neither</li>
+<li>Sorted by <code>created_at</code> ascending (oldest first) when using <code>after_id</code></li>
+<li>Each message includes <code>reply_count</code> to show thread size</li>
+<li>Use for displaying thread list in channel/subchannel</li>
+</ul>
+</li>
+<li><p><strong>With <code>parent_id</code></strong>: Returns all replies under that parent message</p>
+<ul>
+<li>Does NOT include the parent message itself (client already has it)</li>
+<li>Returns the full thread tree (all descendants)</li>
+<li>Sorted by thread position (depth-first traversal for proper nesting)</li>
+<li>Use for displaying a single thread&#39;s conversation</li>
+</ul>
+</li>
+</ul>
+<p><strong>Pagination:</strong></p>
+<ul>
+<li><strong>Without <code>before_id</code> or <code>after_id</code></strong>: Returns most recent messages (sorted newest-first)</li>
+<li><strong>With <code>before_id</code></strong>: Returns messages with <code>id &lt; before_id</code> (older messages, sorted newest-first)</li>
+<li><strong>With <code>after_id</code></strong>: Returns messages with <code>id &gt; after_id</code> (newer messages, sorted oldest-first)</li>
+<li><strong>Both set</strong>: <code>before_id</code> takes precedence, <code>after_id</code> is ignored</li>
+<li>Allows scrolling backwards through history (<code>before_id</code>) or catching up with new messages (<code>after_id</code>)</li>
+</ul>
+<p><strong>Use Case - Bandwidth Optimization:</strong>
+When reopening a thread, the client can request only messages posted since last view:</p>
+<ol>
+<li>Client caches thread replies locally with the highest message ID seen</li>
+<li>When reopening thread, send <code>after_id</code> = highest cached message ID</li>
+<li>Server returns only new messages (id &gt; after_id)</li>
+<li>Client merges new messages with cache and re-sorts the tree</li>
+<li>This avoids re-fetching all 50+ messages every time, fetching only the few new ones</li>
+</ol>
+<h3>0x89 - MESSAGE_LIST (Server → Client)</h3>
+<pre><code>+----------------------+-----------------------------+-------------------+
+| channel_id (u64)     | subchannel_id (Optional u64)| parent_id         |
+|                      |                             | (Optional u64)    |
++----------------------+-----------------------------+-------------------+
+| message_count (u16)  | messages []                 |
++----------------------+-----------------------------+
+
+Each message:
++-------------------+-----------------------------+-------------------+
+| message_id (u64)  | channel_id (u64)            | subchannel_id     |
+|                   |                             | (Optional u64)    |
++-------------------+-----------------------------+-------------------+
+| parent_id (Optional u64) | author_user_id (Optional u64) |
++------------------------------+--------------------------------+
+| author_nickname (String)     | content (String)               |
++------------------------------+--------------------------------+
+| created_at (Timestamp) | edited_at (Optional Timestamp) |
++------------------------+--------------------------------+
+| thread_depth (u8)      | reply_count (u32)              |
++------------------------+--------------------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Response includes the request context (<code>channel_id</code>, <code>subchannel_id</code>, <code>parent_id</code>) so clients can match responses to requests</li>
+<li><code>author_user_id</code> is null for anonymous users</li>
+<li><code>thread_depth</code>: 0 = root, 1+ = nested</li>
+<li><code>reply_count</code>: Total number of replies (all descendants)</li>
+</ul>
+<h3>0x0A - POST_MESSAGE (Client → Server)</h3>
+<pre><code>+-------------------+-----------------------------+-------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| parent_id         |
+|                   |                             | (Optional u64)    |
++-------------------+-----------------------------+-------------------+
+| content (String)  |
++-------------------+
+</code></pre>
+<p>If <code>parent_id</code> is set, this is a reply. Otherwise, it&#39;s a root message.</p>
+<h3>0x8A - MESSAGE_POSTED (Server → Client)</h3>
+<p>Confirmation that message was posted.</p>
+<pre><code>+-------------------+-------------------+
+| success (bool)    | message_id (u64)  |
+|                   | (only if success) |
++-------------------+-------------------+
+| message (String)  |
++-------------------+
+</code></pre>
+<p>If failed, <code>message</code> contains error description.</p>
+<h3>0x8D - NEW_MESSAGE (Server → Client)</h3>
+<p>Real-time notification of a new message (pushed to all users in the channel).</p>
+<p>Uses the same format as a single message in MESSAGE_LIST:</p>
+<pre><code>+-------------------+-----------------------------+-------------------+
+| message_id (u64)  | channel_id (u64)            | subchannel_id     |
+|                   |                             | (Optional u64)    |
++-------------------+-----------------------------+-------------------+
+| parent_id (Optional u64) | author_user_id (Optional u64) |
++------------------------------+--------------------------------+
+| author_nickname (String)     | content (String)               |
++------------------------------+--------------------------------+
+| created_at (Timestamp) | edited_at (Optional Timestamp) |
++------------------------+--------------------------------+
+| thread_depth (u8)      | reply_count (u32)              |
++------------------------+--------------------------------+
+</code></pre>
+<h3>0x0B - EDIT_MESSAGE (Client → Server)</h3>
+<pre><code>+-------------------+-------------------+
+| message_id (u64)  | content (String)  |
++-------------------+-------------------+
+</code></pre>
+<p>Only the original author can edit a message.</p>
+<h3>0x8B - MESSAGE_EDITED (Server → Client)</h3>
+<p>Confirmation of edit + real-time notification to all users.</p>
+<pre><code>+-------------------+-------------------+------------------------+
+| success (bool)    | message_id (u64)  | edited_at (Timestamp)  |
+|                   |                   | (only if success)      |
++-------------------+-------------------+------------------------+
+| new_content (String) | message (String)                        |
+| (only if success)    | (error if failed)                       |
++----------------------+------------------------------------------+
+</code></pre>
+<h3>0x0C - DELETE_MESSAGE (Client → Server)</h3>
+<pre><code>+-------------------+
+| message_id (u64)  |
++-------------------+
+</code></pre>
+<p>Only the original author can delete a message. This performs a soft-delete (sets <code>deleted_at</code>),
+preserving thread structure. Original content is saved in MessageVersion for moderation.</p>
+<h3>0x8C - MESSAGE_DELETED (Server → Client)</h3>
+<p>Confirmation of deletion + real-time notification to all users.</p>
+<pre><code>+-------------------+-------------------+------------------------+
+| success (bool)    | message_id (u64)  | deleted_at (Timestamp) |
+|                   |                   | (only if success)      |
++-------------------+-------------------+------------------------+
+| message (String) (error if failed)                            |
++---------------------------------------------------------------+
+</code></pre>
+<h3>0x0D - ADD_SSH_KEY (Client → Server)</h3>
+<p>Add an SSH public key to the authenticated user&#39;s account.</p>
+<pre><code>+----------------------+-------------------+
+| public_key (String)  | label (String)    |
++----------------------+-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>User must be authenticated</li>
+<li><code>public_key</code>: Full SSH public key (e.g., &quot;ssh-rsa AAAA... user@host&quot;)</li>
+<li><code>label</code>: Optional user-friendly name (e.g., &quot;Work Laptop&quot;) - can be empty string</li>
+<li>Server parses key, computes SHA256 fingerprint, stores in SSHKey table</li>
+<li>Duplicate keys (same fingerprint) return error</li>
+</ul>
+<h3>0x95 - SSH_KEY_ADDED (Server → Client)</h3>
+<pre><code>+-------------------+-------------------+------------------------+------------------------+
+| success (bool)    | key_id (i64)      | fingerprint (String)   | error_message (String) |
+|                   | (if success)      | (if success)           | (if !success)          |
++-------------------+-------------------+------------------------+------------------------+
+</code></pre>
+<h3>0x17 - UPDATE_READ_STATE (Client → Server)</h3>
+<p>Update last read position (registered users only).</p>
+<pre><code>+-------------------+-----------------------------+-------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| message_id (u64)  |
++-------------------+-----------------------------+-------------------+
+| timestamp (Timestamp)                                              |
++--------------------------------------------------------------------+
+</code></pre>
+<p><strong>Recommended client behavior:</strong></p>
+<ul>
+<li><p><strong>On channel/subchannel leave</strong>: Update to the newest message that was displayed</p>
+<ul>
+<li>Typically only if <code>message_id &gt; current last_read_message_id</code> (don&#39;t move backwards)</li>
+<li>Skip if user has already manually marked ahead</li>
+</ul>
+</li>
+<li><p><strong>On manual &quot;mark as read&quot; action</strong>: User presses shortcut to mark up to current position</p>
+<ul>
+<li>Allows clearing unreads without reading everything</li>
+<li>Or marking older position as read for custom workflows</li>
+</ul>
+</li>
+</ul>
+<p><strong>Server behavior:</strong></p>
+<ul>
+<li>Stores in <code>UserChannelState</code> table</li>
+<li>Accepts any <code>message_id</code> value (allows moving backwards for custom client logic)</li>
+<li>Simply updates the stored position</li>
+</ul>
+<p><strong>Anonymous users:</strong></p>
+<ul>
+<li>Handle this locally in client-side database</li>
+<li>Same flexibility applies</li>
+</ul>
+<h3>0x0E - CHANGE_PASSWORD (Client → Server)</h3>
+<p>Change the authenticated user&#39;s password.</p>
+<pre><code>+------------------------+------------------------+
+| old_password (String)  | new_password (String)  |
++------------------------+------------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>User must be authenticated</li>
+<li><code>old_password</code>: Current password (empty string for SSH-registered users changing password for first time)</li>
+<li><code>new_password</code>: New password (minimum 8 characters)</li>
+<li>Server validates old password with bcrypt, hashes new password</li>
+</ul>
+<h3>0x8E - PASSWORD_CHANGED (Server → Client)</h3>
+<pre><code>+-------------------+------------------------+
+| success (bool)    | error_message (String) |
+|                   | (empty if success)     |
++-------------------+------------------------+
+</code></pre>
+<h3>0x12 - UPDATE_SSH_KEY_LABEL (Client → Server)</h3>
+<p>Update the label for an SSH key.</p>
+<pre><code>+-------------------+----------------------+
+| key_id (i64)      | new_label (String)   |
++-------------------+----------------------+
+</code></pre>
+<h3>0x92 - SSH_KEY_LABEL_UPDATED (Server → Client)</h3>
+<pre><code>+-------------------+------------------------+
+| success (bool)    | error_message (String) |
+|                   | (empty if success)     |
++-------------------+------------------------+
+</code></pre>
+<h3>0x13 - DELETE_SSH_KEY (Client → Server)</h3>
+<p>Delete an SSH key from the user&#39;s account.</p>
+<pre><code>+-------------------+
+| key_id (i64)      |
++-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>User must be authenticated</li>
+<li>Cannot delete last SSH key if user has no password set</li>
+<li>Deletion cascades in database (ON DELETE CASCADE)</li>
+</ul>
+<h3>0x93 - SSH_KEY_DELETED (Server → Client)</h3>
+<pre><code>+-------------------+------------------------+
+| success (bool)    | error_message (String) |
+|                   | (empty if success)     |
++-------------------+------------------------+
+</code></pre>
+<h3>0x14 - LIST_SSH_KEYS (Client → Server)</h3>
+<p>Request list of all SSH keys for the authenticated user.</p>
+<pre><code>(No payload - user identified from session)
+</code></pre>
+<h3>0x94 - SSH_KEY_LIST (Server → Client)</h3>
+<pre><code>+-------------------+----------------+
+| key_count (u32)   | keys []        |
++-------------------+----------------+
+
+Each key:
++-------------------+------------------------+----------------------+-------------------+
+| key_id (i64)      | fingerprint (String)   | key_type (String)    | label (String)    |
++-------------------+------------------------+----------------------+-------------------+
+| added_at (Timestamp) | last_used_at (Timestamp)                                      |
++----------------------+-------------------------------------------------------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>key_type</code>: e.g., &quot;ssh-rsa&quot;, &quot;ssh-ed25519&quot;</li>
+<li><code>label</code>: May be empty string</li>
+<li><code>last_used_at</code>: 0 if never used</li>
+<li><code>fingerprint</code>: SHA256 format (e.g., &quot;SHA256:abc123...&quot;)</li>
+</ul>
+<h3>0x18 - GET_UNREAD_COUNTS (Client → Server)</h3>
+<p>Request unread counts for specific channels/subchannels (registered users only).</p>
+<pre><code>+----------------------+----------------+
+| target_count (u16)   | targets []     |
++----------------------+----------------+
+
+Each target:
++-------------------+-----------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)|
++-------------------+-----------------------------+
+</code></pre>
+<p>Client specifies which channels/subchannels they want unread counts for. Server responds with UNREAD_COUNTS.</p>
+<p><strong>Performance Note:</strong></p>
+<ul>
+<li>Clients should request counts for one channel at a time (or small batches)</li>
+<li>Server query: <code>SELECT COUNT(*) FROM Message WHERE channel_id = ? AND subchannel_id = ? AND created_at &gt; last_read_at</code></li>
+<li>Uses indexed lookup on <code>(channel_id, subchannel_id, created_at)</code> - very fast</li>
+<li>Avoids expensive full-table scans</li>
+</ul>
+<h3>0x97 - UNREAD_COUNTS (Server → Client)</h3>
+<p>Response with unread message counts (registered users only).</p>
+<pre><code>+----------------------+----------------+
+| count_count (u16)    | counts []      |
++----------------------+----------------+
+
+Each count entry:
++-------------------+-----------------------------+----------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| unread_count (u32)   |
++-------------------+-----------------------------+----------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Only sent to registered users (anonymous users track locally)</li>
+<li><code>unread_count</code> is calculated from <code>UserChannelState.last_read_at</code></li>
+<li>If user has never read a channel, count is total messages in that channel</li>
+</ul>
+<h3>0x0F - GET_USER_INFO (Client → Server)</h3>
+<p>Request information about a user by nickname.</p>
+<pre><code>+-------------------+
+| nickname (String) |
++-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Can be used to check if a nickname is registered before attempting authentication</li>
+<li>Useful for client UI to show &quot;Sign In&quot; vs &quot;Register&quot; options dynamically</li>
+<li>Returns basic public information about the user</li>
+</ul>
+<h3>0x8F - USER_INFO (Server → Client)</h3>
+<p>Response with user information.</p>
+<pre><code>+-------------------+---------------------+-------------------+
+| nickname (String) | is_registered(bool) | user_id           |
+|                   |                     | (Optional u64)    |
++-------------------+---------------------+-------------------+
+| online (bool)     |
++-------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>nickname</code>: Echo back the nickname that was queried</li>
+<li><code>is_registered</code>: True if this nickname belongs to a registered user (has password)</li>
+<li><code>user_id</code>: Only present if <code>is_registered = true</code>, the user&#39;s ID</li>
+<li><code>online</code>: True if the user is currently connected (any session with this nickname)</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>For anonymous users with this nickname, <code>is_registered = false</code> and <code>user_id</code> is absent</li>
+<li>If no user exists with this nickname (neither registered nor currently online), <code>online = false</code> and <code>is_registered = false</code></li>
+<li>Client can use <code>is_registered</code> to determine whether to show sign-in or registration UI</li>
+</ul>
+<h3>0x16 - LIST_USERS (Client → Server)</h3>
+<p>Request list of currently online users.</p>
+<pre><code>+-------------------+
+| limit (u16)       |
++-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>limit</code>: Maximum number of users to return (default: 100, max: 500)</li>
+<li>Returns only currently connected users (active sessions)</li>
+<li>Includes both registered and anonymous users</li>
+<li>Results sorted by connection time (most recent first)</li>
+</ul>
+<h3>0x9A - USER_LIST (Server → Client)</h3>
+<p>Response with list of online users.</p>
+<pre><code>+-------------------+----------------+
+| user_count (u16)  | users []       |
++-------------------+----------------+
+
+Each user:
++-------------------+---------------------+-------------------+
+| nickname (String) | is_registered(bool) | user_id           |
+|                   |                     | (Optional u64)    |
++-------------------+---------------------+-------------------+
+</code></pre>
+<p><strong>Fields (per user):</strong></p>
+<ul>
+<li><code>nickname</code>: The user&#39;s current nickname (includes ~ prefix for anonymous users in display)</li>
+<li><code>is_registered</code>: True if registered user, false if anonymous</li>
+<li><code>user_id</code>: Only present if <code>is_registered = true</code></li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Shows all currently connected users (sessions with active connections)</li>
+<li>Anonymous users appear with their session nickname</li>
+<li>Same user_id may appear multiple times if user has multiple sessions</li>
+<li>Useful for seeing who&#39;s currently online</li>
+</ul>
+<h3>0x1C - LOGOUT (Client → Server)</h3>
+<p>Clear the current session&#39;s authentication and become anonymous.</p>
+<pre><code>(empty message - no payload)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Clears <code>session.UserID</code> on the server, making the session anonymous</li>
+<li>Preserves the current nickname, but user can no longer perform authenticated actions</li>
+<li>User can still post messages as an anonymous user with their current nickname</li>
+<li>To fully switch identity, send LOGOUT followed by SET_NICKNAME with a new name</li>
+<li>No response message - operation always succeeds</li>
+<li>Useful for &quot;Go Anonymous&quot; feature or switching between registered accounts</li>
+</ul>
+<p><strong>Behavior:</strong></p>
+<ul>
+<li>After logout, session becomes anonymous (user_id = NULL)</li>
+<li>Current nickname is preserved unless explicitly changed</li>
+<li>If nickname is registered, subsequent SET_NICKNAME with same name will require authentication</li>
+<li>User loses access to authenticated-only features (creating channels, SSH keys, etc.)</li>
+</ul>
+<h3>0x07 - CREATE_CHANNEL (Client → Server)</h3>
+<pre><code>+-------------------+------------------------+------------+------------------------+
+| name (String)     | description (String)   | type (u8)  | retention_hours (u32)  |
++-------------------+------------------------+------------+------------------------+
+</code></pre>
+<p><strong>Type:</strong></p>
+<ul>
+<li>0x00 = chat</li>
+<li>0x01 = forum</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>type</code> and <code>retention_hours</code> are used when channel has no subchannels</li>
+<li>If subchannels are added later, their individual type and retention_hours take precedence</li>
+</ul>
+<h3>0x87 - CHANNEL_CREATED (Server → Client)</h3>
+<p>Response to CREATE_CHANNEL request + broadcast to all connected clients.</p>
+<pre><code>+-------------------+-------------------+------------------------+
+| success (bool)    | channel_id (u64)  | name (String)          |
+|                   | (only if success) | (only if success)      |
++-------------------+-------------------+------------------------+
+| description (String) | type (u8)      | retention_hours (u32)  |
+| (only if success)    | (success only) | (only if success)      |
++-------------------------+----------------+------------------------+
+| message (String)  |
++-------------------+
+</code></pre>
+<p><strong>Broadcast behavior:</strong></p>
+<ul>
+<li>Sent to the creating client as confirmation</li>
+<li>Also broadcast to ALL other connected clients as a real-time notification</li>
+<li>Clients should add the new channel to their channel list</li>
+<li>If <code>success = false</code>, only sent to requesting client (not broadcast)</li>
+</ul>
+<h3>0x08 - CREATE_SUBCHANNEL (Client → Server)</h3>
+<pre><code>+-------------------+-------------------+------------------------+
+| channel_id (u64)  | name (String)     | description (String)   |
++-------------------+-------------------+------------------------+
+| type (u8)         | retention_hours (u32)                      |
++-------------------+------------------------------------------------+
+</code></pre>
+<p><strong>Type:</strong></p>
+<ul>
+<li>0x00 = chat</li>
+<li>0x01 = forum</li>
+</ul>
+<h3>0x88 - SUBCHANNEL_CREATED (Server → Client)</h3>
+<p>Response to CREATE_SUBCHANNEL request + broadcast to all connected clients.</p>
+<pre><code>+-------------------+----------------------+-------------------+
+| success (bool)    | channel_id (u64)     | subchannel_id(u64)|
+|                   | (only if success)    | (only if success) |
++-------------------+----------------------+-------------------+
+| name (String)     | description (String) | type (u8)         |
+| (only if success) | (only if success)    | (success only)    |
++-------------------+----------------------+-------------------+
+| retention_hours (u32) | message (String)                   |
+| (only if success)     |                                    |
++-----------------------+------------------------------------+
+</code></pre>
+<p><strong>Broadcast behavior:</strong></p>
+<ul>
+<li>Sent to the creating client as confirmation</li>
+<li>Also broadcast to ALL other connected clients as a real-time notification</li>
+<li>Clients should add the new subchannel to the appropriate channel in their list</li>
+<li><code>channel_id</code> indicates which channel this subchannel belongs to</li>
+<li>If <code>success = false</code>, only sent to requesting client (not broadcast)</li>
+</ul>
+<h3>0x11 - GET_SERVER_STATS (Client → Server)</h3>
+<p>Request current server statistics.</p>
+<p>No payload (empty).</p>
+<h3>0x12 - START_DM (Client → Server)</h3>
+<p>Initiate a direct message conversation with another user.</p>
+<pre><code>+-------------------+---------------------------+-------------------------+
+| target_type (u8)  | target_id (varies)        | allow_unencrypted(bool) |
++-------------------+---------------------------+-------------------------+
+</code></pre>
+<p><strong>Target Types:</strong></p>
+<ul>
+<li>0x00 = by user_id (target_id is u64 user_id, registered users only)</li>
+<li>0x01 = by nickname (target_id is String, could be registered or anonymous)</li>
+<li>0x02 = by session_id (target_id is u64 session_id, for anonymous users)</li>
+</ul>
+<p><strong>allow_unencrypted:</strong></p>
+<ul>
+<li>If true, initiator is willing to accept unencrypted DMs</li>
+<li>If false, DM must be encrypted or will fail</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>If targeting by nickname and multiple users/sessions have that nickname, server picks first match (prefer registered users)</li>
+<li>For anonymous users, targeting by session_id is more reliable</li>
+</ul>
+<h3>0x13 - PROVIDE_PUBLIC_KEY (Client → Server)</h3>
+<p>Upload an RSA public key for DM encryption.</p>
+<pre><code>+-------------------+------------------------+-------------------------+
+| key_type (u8)     | public_key (String)    | label (String)          |
++-------------------+------------------------+-------------------------+
+</code></pre>
+<p><strong>Key Types:</strong></p>
+<ul>
+<li>0x00 = Companion RSA key (for ed25519/ECDSA SSH users)</li>
+<li>0x01 = Generated RSA key (for password-only users)</li>
+<li>0x02 = Ephemeral RSA key (for anonymous users, session-only)</li>
+</ul>
+<p><strong>public_key:</strong></p>
+<ul>
+<li>RSA public key in PEM format (2048-bit or 4096-bit)</li>
+<li>Used for encrypting DM channel keys via RSA-OAEP</li>
+</ul>
+<p><strong>label:</strong></p>
+<ul>
+<li>Optional human-readable label (e.g., &quot;laptop&quot;, &quot;phone&quot;, &quot;work&quot;)</li>
+<li>Helps users manage multiple keys</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Key is stored in <code>SSHKey.encryption_public_key</code> field</li>
+<li>For ed25519/ECDSA users: stored alongside SSH key as companion</li>
+<li>For password-only users: stored as primary encryption key</li>
+<li>For anonymous users: stored temporarily (deleted on disconnect)</li>
+<li>Server never receives or stores private keys</li>
+<li>Client stores private key in <code>~/.superchat/keys/</code></li>
+</ul>
+<h3>0x14 - ALLOW_UNENCRYPTED (Client → Server)</h3>
+<p>Explicitly allow unencrypted DMs for the current user.</p>
+<pre><code>+------------------------+-------------------+
+| dm_channel_id (u64)    | permanent (bool)  |
++------------------------+-------------------+
+</code></pre>
+<p><strong>dm_channel_id:</strong></p>
+<ul>
+<li>The ID of the DM channel this response applies to</li>
+<li>Provided in the DM_REQUEST or KEY_REQUIRED message</li>
+<li>Ensures response is matched to the correct DM request</li>
+</ul>
+<p><strong>permanent:</strong></p>
+<ul>
+<li>If true, allow all future DMs to be unencrypted (sets <code>User.allow_unencrypted_dms = true</code>)</li>
+<li>If false, only allow for current pending DM request (one-time exception)</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Used when user doesn&#39;t want to set up encryption keys</li>
+<li>If <code>permanent = true</code>, server stores preference in <code>User.allow_unencrypted_dms</code></li>
+<li>Permanent preference can be changed later through user settings</li>
+<li>Anonymous users can only use <code>permanent = false</code> (no persistent preference)</li>
+</ul>
+<h3>0x93 - KEY_REQUIRED (Server → Client)</h3>
+<p>Server needs an encryption key before proceeding with DM.</p>
+<pre><code>+-------------------+---------------------------+
+| reason (String)   | dm_channel_id (Optional u64)|
++-------------------+---------------------------+
+</code></pre>
+<p><strong>reason:</strong></p>
+<ul>
+<li>Human-readable explanation (e.g., &quot;DM encryption requires a key&quot;)</li>
+</ul>
+<p><strong>dm_channel_id:</strong></p>
+<ul>
+<li>If present, this is for a specific DM channel</li>
+<li>If absent, user needs a key for general DM functionality</li>
+</ul>
+<p><strong>Client should:</strong></p>
+<ol>
+<li>Display reason to user</li>
+<li>Prompt user to choose:<ul>
+<li>Generate local keypair (ephemeral, device-specific)</li>
+<li>Add existing SSH key (paste/select from ~/.ssh/)</li>
+<li>Generate new SSH key (save to ~/.ssh/)</li>
+<li>Allow unencrypted (if permitted by other party)</li>
+</ul>
+</li>
+<li>Send PROVIDE_PUBLIC_KEY or ALLOW_UNENCRYPTED</li>
+</ol>
+<h3>0x94 - DM_READY (Server → Client)</h3>
+<p>DM channel is ready to use.</p>
+<pre><code>+-------------------+-------------------+------------------------+
+| channel_id (u64)  | other_user_id     | other_nickname(String) |
+|                   | (Optional u64)    |                        |
++-------------------+-------------------+------------------------+
+| is_encrypted(bool)| channel_key (Optional String)             |
+|                   | (only if encrypted and user has no pubkey)|
++-------------------+-------------------------------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>other_user_id</code> is null if other party is anonymous</li>
+<li><code>is_encrypted</code> indicates whether this DM uses encryption</li>
+<li><code>channel_key</code> is the symmetric key for this channel (encrypted with user&#39;s public key)<ul>
+<li>Only sent if user has a public key on file</li>
+<li>If anonymous user with no key, sent in plaintext (session-only)</li>
+</ul>
+</li>
+<li>Client can now use standard JOIN_CHANNEL, POST_MESSAGE, etc. on this channel</li>
+</ul>
+<h3>0x95 - DM_PENDING (Server → Client)</h3>
+<p>Waiting for other party to complete key setup.</p>
+<pre><code>+-------------------+---------------------------+------------------------+
+| dm_channel_id(u64)| waiting_for_user_id       | waiting_for_nickname   |
+|                   | (Optional u64)            | (String)               |
++-------------------+---------------------------+------------------------+
+| reason (String)   |
++-------------------+
+</code></pre>
+<p><strong>reason:</strong></p>
+<ul>
+<li>&quot;Waiting for <nickname> to set up encryption&quot;</li>
+<li>&quot;Waiting for <nickname> to accept DM request&quot;</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Sent to initiator while waiting for recipient to respond</li>
+<li>Client should display waiting indicator</li>
+<li>Will be followed by DM_READY or ERROR</li>
+</ul>
+<h3>0x96 - DM_REQUEST (Server → Client)</h3>
+<p>Incoming DM request from another user.</p>
+<pre><code>+-------------------+-------------------------+------------------------+
+| dm_channel_id(u64)| from_user_id            | from_nickname (String) |
+|                   | (Optional u64)          |                        |
++-------------------+-------------------------+------------------------+
+| requires_key(bool)| initiator_allows_unencrypted (bool)            |
++-------------------+----------------------------------------------------+
+</code></pre>
+<p><strong>requires_key:</strong></p>
+<ul>
+<li>True if recipient needs to set up a key before DM can proceed</li>
+<li>False if recipient already has a key or initiator allows unencrypted</li>
+</ul>
+<p><strong>initiator_allows_unencrypted:</strong></p>
+<ul>
+<li>True if initiator is willing to accept unencrypted DMs</li>
+<li>False if initiator requires encryption</li>
+</ul>
+<p><strong>Client should:</strong></p>
+<ul>
+<li>Notify user of incoming DM request</li>
+<li>If <code>requires_key = true</code>, prompt for key setup or allow unencrypted</li>
+<li>If <code>requires_key = false</code>, can accept immediately</li>
+</ul>
+<h3>0x10 - PING (Client → Server)</h3>
+<p>Keepalive heartbeat to maintain session when idle.</p>
+<pre><code>+-------------------+
+| timestamp (int64) |
++-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Client&#39;s local timestamp for RTT calculation</li>
+<li><strong>Session timeout:</strong> Server disconnects if no PING received for 60 seconds</li>
+<li><strong>CRITICAL: Clients MUST send PING to keep session alive</strong><ul>
+<li>Server ONLY updates <code>Session.last_activity</code> on PING messages</li>
+<li>Other messages (POST_MESSAGE, LIST_MESSAGES, etc.) do NOT reset the idle timer</li>
+<li><strong>Send PING every 30 seconds to maintain session</strong> (regardless of other activity)</li>
+<li>Failure to send PING will result in disconnection after 60 seconds</li>
+</ul>
+</li>
+<li>Connection also closed if socket dies</li>
+</ul>
+<p><strong>Rationale:</strong></p>
+<ul>
+<li>Updating session activity on every message creates excessive DB writes (55% overhead)</li>
+<li>PING provides explicit keepalive signal that is cheap to process</li>
+<li>Active clients posting messages every 100ms still need PING for session tracking</li>
+</ul>
+<h3>0x90 - PONG (Server → Client)</h3>
+<pre><code>+---------------------------+
+| client_timestamp (int64)  |
++---------------------------+
+</code></pre>
+<p>Echoes back the client&#39;s timestamp.</p>
+<h3>0x92 - SERVER_STATS (Server → Client)</h3>
+<p>Response to GET_SERVER_STATS request or sent periodically as a broadcast.</p>
+<pre><code>+---------------------------+---------------------------+
+| total_users_online (u32)  | total_channels (u32)      |
++---------------------------+---------------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>total_users_online</code>: Current number of connected users</li>
+<li><code>total_channels</code>: Total number of public channels</li>
+</ul>
+<p><strong>Delivery:</strong></p>
+<ul>
+<li>Sent as response to GET_SERVER_STATS request</li>
+<li>Optionally broadcast periodically to all connected clients (e.g., every 30 seconds)</li>
+<li>Periodic broadcast allows clients to show live user counts without polling</li>
+</ul>
+<h3>0x98 - SERVER_CONFIG (Server → Client)</h3>
+<p>Server configuration and limits. Sent automatically after successful connection (after AUTH_RESPONSE or when anonymous user connects).</p>
+<pre><code>+---------------------------+---------------------------+
+| protocol_version (u8)     | max_message_rate (u16)    |
++---------------------------+---------------------------+
+| max_channel_creates (u16) | inactive_cleanup_days(u16)|
+| (per hour)                |                           |
++---------------------------+---------------------------+
+| max_connections_per_ip(u8)| max_message_length (u32)  |
++---------------------------+---------------------------+
+| max_thread_subs (u16)     | max_channel_subs (u16)    |
++---------------------------+---------------------------+
+| directory_enabled (bool)  |                           |
++---------------------------+---------------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>protocol_version</code>: Protocol version server speaks (must match client, currently 1)</li>
+<li><code>max_message_rate</code>: Maximum messages per minute per user (rate limit)</li>
+<li><code>max_channel_creates</code>: Maximum channel creations per user per hour</li>
+<li><code>inactive_cleanup_days</code>: Days of inactivity before user state is purged (for registered users)</li>
+<li><code>max_connections_per_ip</code>: Maximum simultaneous connections allowed per IP address</li>
+<li><code>max_message_length</code>: Maximum length of message content in bytes</li>
+<li><code>max_thread_subs</code>: Maximum thread subscriptions per session (default: 50)</li>
+<li><code>max_channel_subs</code>: Maximum channel subscriptions per session (default: 10)</li>
+<li><code>directory_enabled</code>: Whether this server can provide a list of discoverable servers via LIST_SERVERS request (false = regular server, true = directory server)</li>
+</ul>
+<p><strong>Delivery:</strong></p>
+<ul>
+<li>Sent once automatically after connection is established</li>
+<li>For anonymous users: sent immediately after socket connection</li>
+<li>For authenticated users: sent after successful AUTH_RESPONSE</li>
+<li>For SSH users: sent after SSH authentication completes</li>
+</ul>
+<p><strong>Client Usage:</strong></p>
+<ul>
+<li><strong>MUST check protocol_version first</strong> - disconnect if mismatch</li>
+<li>Use rate limit values to implement client-side rate limiting (prevent hitting server limits)</li>
+<li>Display cleanup policy to users so they know their data retention</li>
+<li>Show connection limits in error messages when appropriate</li>
+<li>Validate message length before sending to avoid errors</li>
+</ul>
+<h3>0x51 - SUBSCRIBE_THREAD (Client → Server)</h3>
+<p>Subscribe to real-time updates for a specific thread. When subscribed, the client will receive NEW_MESSAGE notifications for all new messages posted to this thread (including replies at any depth).</p>
+<pre><code>+-------------------+
+| thread_id (u64)   |
++-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>thread_id</code>: The root message ID of the thread to subscribe to</li>
+<li>Server validates that the thread exists (ERROR 4003 if not found)</li>
+<li>Server checks subscription limit per session (ERROR 5004 if exceeded)</li>
+<li>Client will receive NEW_MESSAGE for any message posted under this thread root</li>
+<li>On success, server responds with SUBSCRIBE_OK</li>
+</ul>
+<p><strong>Recommended client behavior:</strong></p>
+<ul>
+<li>Subscribe when entering a thread view</li>
+<li>Unsubscribe when leaving the thread view</li>
+<li>Track subscriptions locally to avoid duplicate subscriptions</li>
+</ul>
+<h3>0x52 - UNSUBSCRIBE_THREAD (Client → Server)</h3>
+<p>Unsubscribe from a previously subscribed thread.</p>
+<pre><code>+-------------------+
+| thread_id (u64)   |
++-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>thread_id</code>: The root message ID to unsubscribe from</li>
+<li>No error if already unsubscribed (idempotent)</li>
+<li>No response sent (fire-and-forget)</li>
+</ul>
+<h3>0x53 - SUBSCRIBE_CHANNEL (Client → Server)</h3>
+<p>Subscribe to new threads in a channel or subchannel. When subscribed, the client will receive NEW_MESSAGE notifications for new root messages (thread starters) posted to this channel.</p>
+<pre><code>+-------------------+-----------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)|
++-------------------+-----------------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Subscribe to root-level messages only (not replies)</li>
+<li>Server validates channel exists (ERROR 4001 if not found)</li>
+<li>Server validates subchannel exists if provided (ERROR 4004 if not found)</li>
+<li>Server checks subscription limit per session (ERROR 5005 if exceeded)</li>
+<li>On success, server responds with SUBSCRIBE_OK</li>
+</ul>
+<p><strong>Recommended client behavior:</strong></p>
+<ul>
+<li>Subscribe when viewing a channel&#39;s thread list</li>
+<li>Unsubscribe when leaving the channel</li>
+<li>Typically combined with thread subscriptions for full coverage</li>
+</ul>
+<h3>0x54 - UNSUBSCRIBE_CHANNEL (Client → Server)</h3>
+<p>Unsubscribe from a previously subscribed channel.</p>
+<pre><code>+-------------------+-----------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)|
++-------------------+-----------------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>No error if already unsubscribed (idempotent)</li>
+<li>No response sent (fire-and-forget)</li>
+</ul>
+<h3>0x99 - SUBSCRIBE_OK (Server → Client)</h3>
+<p>Confirmation that a subscription was successful.</p>
+<pre><code>+-------------------+-------------------+-----------------------------+
+| type (u8)         | id (u64)          | subchannel_id (Optional u64)|
++-------------------+-------------------+-----------------------------+
+</code></pre>
+<p><strong>Type values:</strong></p>
+<ul>
+<li>0x51 = Thread subscription confirmed</li>
+<li>0x53 = Channel subscription confirmed</li>
+</ul>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>type</code>: Indicates which type of subscription was confirmed (matches request type)</li>
+<li><code>id</code>: The ID that was subscribed to (thread_id or channel_id depending on type)</li>
+<li><code>subchannel_id</code>: Only present for channel subscriptions, null for thread subscriptions</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Sent in response to SUBSCRIBE_THREAD or SUBSCRIBE_CHANNEL</li>
+<li>Client can use this to confirm the subscription was registered</li>
+<li>Not sent for unsubscribe operations</li>
+</ul>
+<h3>0x91 - ERROR (Server → Client)</h3>
+<p>Generic error response.</p>
+<pre><code>+-------------------+-------------------+
+| error_code (u16)  | message (String)  |
++-------------------+-------------------+
+</code></pre>
+<p><strong>Error Code Categories (1000-9999):</strong></p>
+<p><strong>1xxx - Protocol Errors:</strong></p>
+<ul>
+<li>1000: Invalid message format</li>
+<li>1001: Unsupported protocol version</li>
+<li>1002: Invalid frame (malformed, oversized, etc.)</li>
+<li>1003: Compression error</li>
+<li>1004: Encryption error</li>
+</ul>
+<p><strong>2xxx - Authentication Errors:</strong></p>
+<ul>
+<li>2000: Authentication required</li>
+<li>2001: Invalid credentials</li>
+<li>2002: User already exists (registration)</li>
+<li>2003: SSH key already registered</li>
+<li>2004: Session expired</li>
+</ul>
+<p><strong>3xxx - Authorization Errors:</strong></p>
+<ul>
+<li>3000: Permission denied</li>
+<li>3001: Not channel operator</li>
+<li>3002: Not message author</li>
+<li>3003: Channel is private</li>
+</ul>
+<p><strong>4xxx - Resource Errors:</strong></p>
+<ul>
+<li>4000: Resource not found</li>
+<li>4001: Channel not found</li>
+<li>4002: Message not found</li>
+<li>4003: Thread not found</li>
+<li>4004: Subchannel not found</li>
+</ul>
+<p><strong>5xxx - Rate Limit Errors:</strong></p>
+<ul>
+<li>5000: Rate limit exceeded (general)</li>
+<li>5001: Message rate limit exceeded</li>
+<li>5002: Channel creation rate limit exceeded</li>
+<li>5003: Too many connections from IP</li>
+<li>5004: Thread subscription limit exceeded (max 50 per session)</li>
+<li>5005: Channel subscription limit exceeded (max 10 per session)</li>
+</ul>
+<p><strong>6xxx - Validation Errors:</strong></p>
+<ul>
+<li>6000: Invalid input</li>
+<li>6001: Message too long</li>
+<li>6002: Invalid channel name</li>
+<li>6003: Invalid nickname</li>
+<li>6004: Nickname already taken</li>
+</ul>
+<p><strong>9xxx - Server Errors:</strong></p>
+<ul>
+<li>9000: Internal server error</li>
+<li>9001: Database error</li>
+<li>9002: Service unavailable</li>
+</ul>
+<h2>Server Discovery Protocol</h2>
+<p>SuperChat supports server discovery through directory services. Any SuperChat server can optionally act as a directory by enabling discovery mode. Servers can announce themselves to directories, and clients can browse available servers. This enables a federated-style discovery model similar to Mastodon&#39;s instance list, while keeping servers completely independent.</p>
+<p><strong>Key Concepts:</strong></p>
+<ul>
+<li><strong>Directory</strong>: Any SuperChat server running in directory mode (accepts REGISTER_SERVER requests and maintains a list of known servers)</li>
+<li><strong>Discoverable Server</strong>: Any SuperChat server that announces itself to one or more directories</li>
+<li><strong>Client Discovery</strong>: Clients connect to a directory to browse available servers, then disconnect and connect to chosen server</li>
+</ul>
+<p><strong>Important:</strong> A directory is just a regular SuperChat server with directory mode enabled. The same server binary provides both chat functionality and optional directory services. For example, <code>superchat.win:6465</code> serves as both a chat server AND a directory.</p>
+<p><strong>Directory Configuration:</strong></p>
+<ul>
+<li>Clients maintain a list of directories (default: <code>superchat.win:6465</code>)</li>
+<li>Any server can enable directory mode (via <code>--enable-directory</code> flag)</li>
+<li>Servers can announce to multiple directories (via <code>--announce-to</code> flag)</li>
+</ul>
+<p><strong>Directory Gossip Protocol:</strong></p>
+<ul>
+<li>Directories periodically query registered servers with LIST_SERVERS</li>
+<li>If a registered server is also a directory, it returns its known servers</li>
+<li>The querying directory discovers new servers and can register to them</li>
+<li>This creates a self-sustaining mesh network of directories</li>
+<li>If the primary directory (e.g., superchat.win) goes down, other directories continue operating</li>
+<li>Gossip interval: every 1-6 hours (configurable, randomized to avoid thundering herd)</li>
+</ul>
+<p><strong>Anti-Spam Measures:</strong></p>
+<ul>
+<li><strong>Verification Challenge</strong>: Directories connect back to verify servers are real and reachable</li>
+<li><strong>Rate Limiting</strong>: 30 requests/hour per IP (enough for heartbeats + retries)</li>
+<li><strong>Adaptive Heartbeat</strong>: Directories adjust heartbeat interval based on load</li>
+<li><strong>Deduplication</strong>: Only one entry per hostname:port (re-registration updates existing)</li>
+</ul>
+<p><strong>Trust Model:</strong></p>
+<ul>
+<li>Verification ensures servers are reachable, but doesn&#39;t prevent all abuse</li>
+<li>A malicious actor could still spin up many real servers to flood directories</li>
+<li>We rely on economic disincentives: running real servers is expensive and tedious</li>
+<li>The barrier to entry (actual server infrastructure) deters casual spam</li>
+<li>Directories operated by trusted community members are preferred</li>
+</ul>
+<h3>0x55 - LIST_SERVERS (Client/Directory → Server)</h3>
+<p>Request list of discoverable servers from a directory.</p>
+<pre><code>+-------------------+
+| limit (u16)       |
++-------------------+
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>limit</code>: Maximum number of servers to return (default: 100, max: 500)</li>
+<li>Returns servers sorted by last heartbeat (most recently active first)</li>
+<li>Only returns servers that have sent heartbeat within their interval window</li>
+<li>Can be sent by clients (browsing servers) or by directories (gossip protocol)</li>
+<li>Regular chat servers (not in directory mode) respond with empty SERVER_LIST (count: 0)</li>
+</ul>
+<h3>0x9B - SERVER_LIST (Server → Client/Directory)</h3>
+<p>Response with list of discoverable servers.</p>
+<pre><code>+-------------------+----------------+
+| server_count(u16) | servers []     |
++-------------------+----------------+
+
+Each server:
++-------------------+-------------------+-------------------+
+| hostname (String) | port (u16)        | name (String)     |
++-------------------+-------------------+-------------------+
+| description (String)                | user_count (u32)  |
++-------------------------------------+-------------------+
+| max_users (u32)   | uptime_seconds (u64)                |
++-------------------+------------------------------------- +
+| is_public (bool)  | channel_count (u32)                 |
++-------------------+-------------------------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>hostname</code>: DNS hostname or IP address</li>
+<li><code>port</code>: TCP port (typically 6465)</li>
+<li><code>name</code>: Human-readable server name</li>
+<li><code>description</code>: Server description/purpose</li>
+<li><code>user_count</code>: Current number of connected users</li>
+<li><code>max_users</code>: Maximum user capacity (0 = unlimited)</li>
+<li><code>uptime_seconds</code>: How long server has been running</li>
+<li><code>is_public</code>: Whether server accepts public registrations</li>
+<li><code>channel_count</code>: Number of channels available on the server</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Sorted by last heartbeat time (most recent first)</li>
+<li>Only includes servers with recent heartbeats (within 2x heartbeat interval)</li>
+</ul>
+<h3>0x56 - REGISTER_SERVER (Server → Directory)</h3>
+<p>Register or update server entry in directory.</p>
+<pre><code>+-------------------+-------------------+-------------------+
+| hostname (String) | port (u16)        | name (String)     |
++-------------------+-------------------+-------------------+
+| description (String)                | max_users (u32)   |
++-------------------------------------+-------------------+
+| is_public (bool)  | channel_count (u32)                 |
++-------------------+-------------------------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>hostname</code>: Server&#39;s publicly accessible hostname or IP</li>
+<li><code>port</code>: Server&#39;s port (must be reachable from directory)</li>
+<li><code>name</code>: Human-readable server name (e.g., &quot;Gaming Community&quot;)</li>
+<li><code>description</code>: Server description/purpose</li>
+<li><code>max_users</code>: Maximum user capacity (0 = unlimited)</li>
+<li><code>is_public</code>: Whether server accepts public registrations</li>
+<li><code>channel_count</code>: Number of channels available on the server</li>
+</ul>
+<p><strong>Behavior:</strong></p>
+<ul>
+<li>If hostname:port already registered: updates existing entry</li>
+<li>If new registration: triggers verification challenge (VERIFY_REGISTRATION)</li>
+<li>Directory may reject if rate limit exceeded (30/hour)</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Server must respond to VERIFY_REGISTRATION challenge to complete registration</li>
+<li>After successful registration, server must send HEARTBEAT periodically</li>
+<li>Failed verification removes server from directory</li>
+</ul>
+<h3>0x9C - REGISTER_ACK (Directory → Server)</h3>
+<p>Acknowledgment of server registration with heartbeat interval.</p>
+<pre><code>+-------------------+------------------------+-------------------+
+| success (bool)    | heartbeat_interval(u32)| message (String)  |
+|                   | (only if success)      | (error if failed) |
++-------------------+------------------------+-------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>success</code>: Whether registration was successful</li>
+<li><code>heartbeat_interval</code>: Seconds between heartbeats (e.g., 300 = 5 minutes)</li>
+<li><code>message</code>: Error description if failed, or welcome message if success</li>
+</ul>
+<p><strong>Heartbeat Interval:</strong></p>
+<ul>
+<li>Directory calculates based on current load (number of registered servers)</li>
+<li>Typical values: 300s (5 min), 600s (10 min), 1800s (30 min), 3600s (1 hour)</li>
+<li>Server must send HEARTBEAT before interval expires or be removed</li>
+</ul>
+<p><strong>Error Cases:</strong></p>
+<ul>
+<li>Rate limit exceeded: <code>success = false</code>, <code>message = &quot;Rate limit exceeded&quot;</code></li>
+<li>Invalid hostname/port: <code>success = false</code>, <code>message = &quot;Invalid hostname or port&quot;</code></li>
+<li>Verification failed: <code>success = false</code>, <code>message = &quot;Could not verify server&quot;</code></li>
+</ul>
+<h3>0x9E - VERIFY_REGISTRATION (Directory → Server)</h3>
+<p>Challenge sent to verify server is reachable and authentic.</p>
+<pre><code>+-------------------+
+| challenge (u64)   |
++-------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>challenge</code>: Random 64-bit nonce</li>
+</ul>
+<p><strong>Behavior:</strong></p>
+<ul>
+<li>Directory connects to server&#39;s hostname:port</li>
+<li>Sends VERIFY_REGISTRATION with random challenge</li>
+<li>Server must respond with VERIFY_RESPONSE containing same challenge</li>
+<li>If response matches, registration is confirmed (server added to directory)</li>
+<li>If connection fails or response incorrect, registration is rejected</li>
+</ul>
+<p><strong>Two Use Cases:</strong></p>
+<ol>
+<li><p><strong>Initial Registration</strong> (server-initiated):</p>
+<ul>
+<li>Server sends REGISTER_SERVER to directory</li>
+<li>Directory immediately verifies by sending VERIFY_REGISTRATION</li>
+<li>If verification succeeds, server is added and receives REGISTER_ACK</li>
+<li>If verification fails, server receives REGISTER_ACK with <code>success = false</code></li>
+</ul>
+</li>
+<li><p><strong>Gossip Discovery</strong> (directory-initiated):</p>
+<ul>
+<li>Directory A discovers Server C through gossip from Directory B</li>
+<li>Directory A connects to Server C and sends VERIFY_REGISTRATION</li>
+<li>If verification succeeds, Server C is added to Directory A&#39;s list (no REGISTER_SERVER needed)</li>
+<li>If verification fails, Directory A ignores Server C</li>
+<li>Server C is NOT notified of successful gossip-based addition (silent verification)</li>
+</ul>
+</li>
+</ol>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Prevents registering fake/unreachable servers</li>
+<li>Prevents malicious directories from injecting fake servers through gossip</li>
+<li>Directory times out after 10 seconds if no response</li>
+<li>Servers must respond to VERIFY_REGISTRATION from any directory (not just ones they registered to)</li>
+</ul>
+<h3>0x58 - VERIFY_RESPONSE (Server → Directory)</h3>
+<p>Response to verification challenge.</p>
+<pre><code>+-------------------+
+| challenge (u64)   |
++-------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>challenge</code>: Echo back the challenge from VERIFY_REGISTRATION</li>
+</ul>
+<p><strong>Behavior:</strong></p>
+<ul>
+<li>Server receives VERIFY_REGISTRATION on its main listener</li>
+<li>Immediately responds with VERIFY_RESPONSE containing same challenge</li>
+<li>Directory verifies challenge matches and completes registration</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Must be sent within 10 seconds of receiving VERIFY_REGISTRATION</li>
+<li>Failure to respond correctly removes server from directory</li>
+</ul>
+<h3>0x57 - HEARTBEAT (Server → Directory)</h3>
+<p>Periodic heartbeat to maintain directory listing.</p>
+<pre><code>+-------------------+-------------------+
+| hostname (String) | port (u16)        |
++-------------------+-------------------+
+| user_count (u32)  | uptime_seconds(u64)|
++-------------------+-------------------+
+| channel_count (u32)                   |
++---------------------------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>hostname</code>: Server&#39;s hostname (must match registration)</li>
+<li><code>port</code>: Server&#39;s port (must match registration)</li>
+<li><code>user_count</code>: Current number of connected users (updated)</li>
+<li><code>uptime_seconds</code>: Server uptime in seconds (updated)</li>
+<li><code>channel_count</code>: Number of channels available on the server (updated)</li>
+</ul>
+<p><strong>Behavior:</strong></p>
+<ul>
+<li>Sent at interval specified in REGISTER_ACK or HEARTBEAT_ACK</li>
+<li>Updates server&#39;s metadata in directory (user count, uptime)</li>
+<li>Resets &quot;last seen&quot; timestamp to prevent removal</li>
+</ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Must be sent before heartbeat_interval expires</li>
+<li>Missing 3 consecutive heartbeats removes server from directory</li>
+<li>Includes updated stats so directory has current info</li>
+</ul>
+<h3>0x9D - HEARTBEAT_ACK (Directory → Server)</h3>
+<p>Acknowledgment of heartbeat with updated interval.</p>
+<pre><code>+-------------------+
+| heartbeat_interval(u32)|
++-------------------+
+</code></pre>
+<p><strong>Fields:</strong></p>
+<ul>
+<li><code>heartbeat_interval</code>: Seconds until next heartbeat (may be adjusted)</li>
+</ul>
+<p><strong>Behavior:</strong></p>
+<ul>
+<li>Directory may adjust interval based on current load</li>
+<li>If interval changes, server should use new value for next heartbeat</li>
+<li>Allows directory to scale heartbeat frequency dynamically</li>
+</ul>
+<p><strong>Load-Based Intervals:</strong></p>
+<pre><code>&lt; 100 servers:   300s (5 minutes)
+&lt; 1000 servers:  600s (10 minutes)
+&lt; 5000 servers:  1800s (30 minutes)
+&gt;= 5000 servers: 3600s (1 hour)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Server should log interval changes for debugging</li>
+<li>If server ignores interval adjustments, directory may remove it</li>
+<li>Prevents directory overload with thousands of servers</li>
+</ul>
+<h2>Connection Flow</h2>
+<h3>Anonymous TCP Connection (Read-Only)</h3>
+<pre><code>Client                                  Server
+  |                                       |
+  |--- TCP Connect -------------------&gt;  |
+  |                                       |
+  |--- LIST_CHANNELS ------------------&gt;  |
+  |&lt;-- CHANNEL_LIST --------------------  |
+  |                                       |
+  |--- JOIN_CHANNEL ------------------&gt;  |
+  |&lt;-- JOIN_RESPONSE -------------------  |
+  |&lt;-- MESSAGE_LIST (initial) ----------  |
+  |                                       |
+  |&lt;-- NEW_MESSAGE (real-time) ---------  |
+  |&lt;-- NEW_MESSAGE ---------------------  |
+  |                                       |
+</code></pre>
+<p><strong>Note:</strong> Anonymous users can browse and read without setting a nickname. Nickname is only required when posting a message.</p>
+<h3>Anonymous TCP Connection (Posting)</h3>
+<pre><code>Client                                  Server
+  |                                       |
+  |--- (already connected, browsing) --  |
+  |                                       |
+  |--- POST_MESSAGE ------------------&gt;  |
+  |&lt;-- ERROR (nickname required) -------  |
+  |                                       |
+  |--- SET_NICKNAME ------------------&gt;  |
+  |&lt;-- NICKNAME_RESPONSE (success) ----  |
+  |                                       |
+  |--- POST_MESSAGE ------------------&gt;  |
+  |&lt;-- MESSAGE_POSTED -----------------  |
+  |                                       |
+</code></pre>
+<p><strong>Note:</strong> Server rejects POST_MESSAGE if session has no nickname set. Client must set nickname before posting.</p>
+<h3>Registered User via Password</h3>
+<pre><code>Client                                  Server
+  |                                       |
+  |--- TCP Connect -------------------&gt;  |
+  |                                       |
+  |--- SET_NICKNAME (&quot;alice&quot;) ---------&gt;  |
+  |&lt;-- NICKNAME_RESPONSE (fail) --------  |
+  |    &quot;Nickname registered&quot;              |
+  |                                       |
+  |--- AUTH_REQUEST -------------------&gt;  |
+  |&lt;-- AUTH_RESPONSE (success) ---------  |
+  |                                       |
+  |--- LIST_CHANNELS ------------------&gt;  |
+  |&lt;-- CHANNEL_LIST (with unread) ------  |
+  |                                       |
+</code></pre>
+<h3>SSH Connection</h3>
+<pre><code>Client                                  Server
+  |                                       |
+  |--- SSH Connect (key auth) ---------&gt;  |
+  |&lt;-- SSH authenticated ---------------  |
+  |    (Server checks key fingerprint)    |
+  |                                       |
+  |&lt;-- AUTH_RESPONSE (success) ---------  |
+  |    (nickname auto-set)                |
+  |                                       |
+  |--- LIST_CHANNELS ------------------&gt;  |
+  |&lt;-- CHANNEL_LIST -------------------  |
+  |                                       |
+</code></pre>
+<p><strong>SSH Key Authentication Flow:</strong></p>
+<ol>
+<li><p><strong>Client connects</strong>: <code>ssh username@superchat.example.com</code></p>
+</li>
+<li><p><strong>SSH protocol authenticates</strong>: Server verifies client has the private key matching their public key</p>
+</li>
+<li><p><strong>Server receives public key</strong>: Full public key is available after SSH authentication</p>
+</li>
+<li><p><strong>Server computes fingerprint</strong>: SHA256 hash of the public key</p>
+</li>
+<li><p><strong>Server looks up fingerprint</strong> in <code>SSHKey</code> table:</p>
+<p><strong>Case A - Key is registered:</strong></p>
+<ul>
+<li>Authenticate as the registered user (ignore SSH username)</li>
+<li>Set session nickname to registered user&#39;s nickname</li>
+<li>Example: Key registered to &#39;elegant&#39;, user connects as <code>bloopie@host</code> → signed in as &#39;elegant&#39;</li>
+</ul>
+<p><strong>Case B - Key is not registered (first connection):</strong></p>
+<ul>
+<li>Check if SSH username is already registered to a different user<ul>
+<li><strong>If username is taken</strong>: Reject SSH connection with error message</li>
+<li><strong>If username is available</strong>: Proceed with auto-registration</li>
+</ul>
+</li>
+<li>Auto-register new user with SSH username as nickname</li>
+<li>Store public key and fingerprint in <code>SSHKey</code> table</li>
+<li>Create <code>User</code> record with nickname from SSH username</li>
+<li>Set session nickname to the new username</li>
+<li>Example: New key, connects as <code>bloopie@host</code>, &#39;bloopie&#39; available → auto-register &#39;bloopie&#39; to this key</li>
+<li>Example: New key, connects as <code>bloopie@host</code>, &#39;bloopie&#39; already registered → reject connection</li>
+<li><strong>Race condition handling</strong>: The unique index on <code>User.nickname</code> prevents duplicate registrations.
+If two users attempt to register the same nickname simultaneously, the database constraint
+will cause the second INSERT to fail, and that SSH connection will be rejected with an error.</li>
+</ul>
+</li>
+<li><p><strong>Send AUTH_RESPONSE</strong>: Notify client of successful authentication with user_id</p>
+</li>
+</ol>
+<p><strong>Key Points:</strong></p>
+<ul>
+<li>SSH key is the source of truth for identity, not the SSH username</li>
+<li>Public key is stored on first connection for future authentication</li>
+<li>SSH username is only used for auto-registration on first connection</li>
+<li>If SSH username is already taken, connection is rejected (prevents confusion)</li>
+<li>Subsequent connections with the same key always authenticate as the registered user</li>
+<li>Users should connect with an available username on their first SSH connection</li>
+</ul>
+<h2>Direct Message (DM) Flow</h2>
+<p>Direct messages are private, encrypted (optional) channels between users. The flow handles key setup, encryption negotiation, and supports both registered and anonymous users.</p>
+<h3>DM Encryption Architecture</h3>
+<p>SuperChat uses <strong>hybrid encryption</strong> for DMs: RSA for key exchange, AES for message content.</p>
+<h4>Key Management by User Type</h4>
+<p><strong>SSH RSA Users:</strong></p>
+<ul>
+<li>SSH key can be used directly for encryption</li>
+<li>No additional setup needed</li>
+<li>Seamless experience</li>
+</ul>
+<p><strong>SSH ed25519/ECDSA Users:</strong></p>
+<ul>
+<li>SSH keys only support signing, not encryption</li>
+<li>Server detects this and prompts for companion RSA key</li>
+<li>User generates RSA-2048 keypair (client-side)</li>
+<li>Public key uploaded via PROVIDE_PUBLIC_KEY</li>
+<li>Private key stored in <code>~/.superchat/keys/</code> (never sent to server)</li>
+</ul>
+<p><strong>Password-Only Users:</strong></p>
+<ul>
+<li>Generate RSA-2048 keypair on first DM</li>
+<li>Public key uploaded to server</li>
+<li>Private key stored in <code>~/.superchat/keys/</code></li>
+</ul>
+<p><strong>Anonymous Users:</strong></p>
+<ul>
+<li>Generate ephemeral RSA-2048 keypair for session</li>
+<li>Keys destroyed on disconnect</li>
+<li>Channel key sent in plaintext (session-only security)</li>
+</ul>
+<h4>Encryption Process</h4>
+<ol>
+<li><p><strong>Channel Key Generation:</strong></p>
+<ul>
+<li>Server generates unique AES-256 symmetric key for each DM channel</li>
+<li>This key encrypts all messages in the DM</li>
+</ul>
+</li>
+<li><p><strong>Key Distribution:</strong></p>
+<ul>
+<li>Channel key is encrypted with RSA-OAEP-SHA256 using each participant&#39;s public key</li>
+<li>Encrypted keys stored in <code>ChannelAccess</code> table (one per participant)</li>
+<li>Each user decrypts their copy with their private key (client-side)</li>
+</ul>
+</li>
+<li><p><strong>Message Encryption:</strong></p>
+<ul>
+<li>Messages encrypted with AES-256-GCM using channel&#39;s symmetric key</li>
+<li>Nonce (12 bytes) generated per message</li>
+<li>Provides both confidentiality and integrity</li>
+</ul>
+</li>
+<li><p><strong>Wire Format:</strong></p>
+<pre><code>Encrypted Message:
++----------------+------------------+
+| Nonce (12 B)   | Ciphertext (N B) |
++----------------+------------------+
+</code></pre>
+</li>
+</ol>
+<h4>Security Properties</h4>
+<ul>
+<li><strong>Algorithms:</strong> RSA-2048 + AES-256-GCM (industry standard)</li>
+<li><strong>Forward Secrecy:</strong> Limited (per-channel keys, not per-message)</li>
+<li><strong>Authentication:</strong> Via SSH keys or passwords</li>
+<li><strong>Key Storage:</strong> Private keys never leave client</li>
+<li><strong>Anonymous Users:</strong> Session-only security (plaintext channel key)</li>
+</ul>
+<h3>Flow 1: Both Users Have Keys (Simple Case)</h3>
+<pre><code>User A (has key)                        Server                          User B (has key)
+  |                                       |                                       |
+  |--- START_DM(target: &quot;bob&quot;) --------&gt;  |                                       |
+  |                                       |--- DM_REQUEST from &quot;alice&quot; --------&gt;  |
+  |                                       |                                       |
+  |&lt;-- DM_PENDING (waiting for bob) ----  |                                       |
+  |                                       |                                  (B accepts)
+  |                                       |&lt;-- (implicit accept via          |
+  |                                       |     standard flow)                |
+  |                                       |                                       |
+  |&lt;-- DM_READY (channel_id, key) ------  |--- DM_READY (channel_id, key) -----&gt;  |
+  |                                       |                                       |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Server creates private channel with <code>is_private = true</code></li>
+<li>Generates symmetric channel key</li>
+<li>Encrypts channel key with both users&#39; public keys</li>
+<li>Stores in <code>ChannelAccess</code> table for each user</li>
+<li>Both users can now use standard messaging on this channel</li>
+</ul>
+<h3>Flow 2: Initiator Needs Key</h3>
+<pre><code>User A (no key)                         Server
+  |                                       |
+  |--- START_DM(target: &quot;bob&quot;) --------&gt;  |
+  |                                       |
+  |&lt;-- KEY_REQUIRED -------------------  |
+  |                                       |
+  |(Client prompts A to set up key)       |
+  |                                       |
+  |--- PROVIDE_PUBLIC_KEY -------------&gt;  |
+  |    or ALLOW_UNENCRYPTED               |
+  |                                       |
+  |&lt;-- DM_PENDING (waiting for bob) ----  |
+  |                                       |
+  |(continues as Flow 1)                  |
+</code></pre>
+<h3>Flow 3: Recipient Needs Key</h3>
+<pre><code>User A (has key)                        Server                          User B (no key)
+  |                                       |                                       |
+  |--- START_DM(target: &quot;bob&quot;) --------&gt;  |                                       |
+  |                                       |--- DM_REQUEST from &quot;alice&quot; --------&gt;  |
+  |                                       |--- KEY_REQUIRED ------------------&gt;  |
+  |                                       |                                       |
+  |&lt;-- DM_PENDING (waiting for bob) ----  |                                  (B sets up key)
+  |                                       |                                       |
+  |                                       |&lt;-- PROVIDE_PUBLIC_KEY ------------  |
+  |                                       |    or ALLOW_UNENCRYPTED              |
+  |                                       |                                       |
+  |&lt;-- DM_READY (channel_id, key) ------  |--- DM_READY (channel_id, key) -----&gt;  |
+  |                                       |                                       |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>User A sees DM_PENDING immediately</li>
+<li>User B sees DM_REQUEST + KEY_REQUIRED simultaneously</li>
+<li>While B is setting up their key, they don&#39;t see &quot;waiting for A&quot; (they&#39;re busy with key setup)</li>
+<li>Once B completes key setup, both get DM_READY</li>
+</ul>
+<h3>Flow 4: Both Users Need Keys</h3>
+<pre><code>User A (no key)                         Server                          User B (no key)
+  |                                       |                                       |
+  |--- START_DM(target: &quot;bob&quot;) --------&gt;  |                                       |
+  |                                       |                                       |
+  |&lt;-- KEY_REQUIRED -------------------  |                                       |
+  |                                       |                                       |
+  |(A sets up key)                        |                                       |
+  |                                       |                                       |
+  |--- PROVIDE_PUBLIC_KEY -------------&gt;  |                                       |
+  |                                       |--- DM_REQUEST from &quot;alice&quot; --------&gt;  |
+  |                                       |--- KEY_REQUIRED ------------------&gt;  |
+  |                                       |                                       |
+  |&lt;-- DM_PENDING (waiting for bob) ----  |                                  (B sets up key)
+  |                                       |                                       |
+  |(A sees waiting indicator)             |                                  (B busy with UI)
+  |                                       |                                       |
+  |                                       |&lt;-- PROVIDE_PUBLIC_KEY ------------  |
+  |                                       |                                       |
+  |&lt;-- DM_READY (channel_id, key) ------  |--- DM_READY (channel_id, key) -----&gt;  |
+  |                                       |                                       |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>A sets up key first, then waits for B</li>
+<li>B receives DM_REQUEST while setting up key</li>
+<li>Both complete key setup before DM_READY is sent</li>
+</ul>
+<h3>Flow 5: Unencrypted DM (Both Allow)</h3>
+<pre><code>User A (no key, allows unencrypted)    Server                          User B (no key, allows unencrypted)
+  |                                       |                                       |
+  |--- START_DM(target: &quot;bob&quot;,        --&gt;  |                                       |
+  |     allow_unencrypted: true)          |                                       |
+  |                                       |--- DM_REQUEST from &quot;alice&quot; --------&gt;  |
+  |                                       |    (initiator_allows_unencrypted:     |
+  |                                       |     true, requires_key: false)        |
+  |                                       |                                       |
+  |                                       |                                  (B accepts)
+  |                                       |&lt;-- (implicit accept)               |
+  |                                       |                                       |
+  |&lt;-- DM_READY (is_encrypted: false) --  |--- DM_READY (is_encrypted: false) -&gt; |
+  |                                       |                                       |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>No KEY_REQUIRED sent to either party</li>
+<li>Server creates unencrypted channel</li>
+<li>Messages are sent in plaintext</li>
+<li>Still private (not in public channel list), just not encrypted</li>
+</ul>
+<h3>Flow 6: Anonymous User DM</h3>
+<pre><code>User A (registered, has key)            Server                          User B (anonymous, no key)
+  |                                       |                                       |
+  |--- START_DM(target: session_123) -&gt;  |                                       |
+  |                                       |--- DM_REQUEST from &quot;alice&quot; --------&gt;  |
+  |                                       |--- KEY_REQUIRED ------------------&gt;  |
+  |                                       |                                       |
+  |&lt;-- DM_PENDING (waiting for bob) ----  |                                  (B generates local key)
+  |                                       |                                       |
+  |                                       |&lt;-- PROVIDE_PUBLIC_KEY ------------  |
+  |                                       |    (Note: B is still anonymous,      |
+  |                                       |     key is session-only)             |
+  |                                       |                                       |
+  |&lt;-- DM_READY (channel_id, key) ------  |--- DM_READY (channel_id,         --&gt;  |
+  |                                       |     key in plaintext for B)          |
+  |                                       |                                       |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Anonymous user B can receive DMs by session_id</li>
+<li>B can generate a local keypair for this session</li>
+<li>B&#39;s key is not permanently stored (lost on disconnect)</li>
+<li>B&#39;s channel key is sent in plaintext in DM_READY (session-only security)</li>
+<li>Alternatively, B can choose ALLOW_UNENCRYPTED</li>
+</ul>
+<h3>Encryption Details</h3>
+<p><strong>Key Management:</strong></p>
+<ul>
+<li>Each DM channel has a unique symmetric key (AES-256)</li>
+<li>Symmetric key is encrypted with each participant&#39;s public key</li>
+<li>Stored in <code>ChannelAccess.encryption_key</code> (one entry per participant)</li>
+</ul>
+<p><strong>Message Encryption:</strong></p>
+<ul>
+<li>Messages in encrypted DMs have Flags bit 1 set (0x02 or 0x03)</li>
+<li>Payload is encrypted with AES-256-GCM using the channel&#39;s symmetric key</li>
+<li>Each message includes a nonce/IV in the encrypted payload</li>
+</ul>
+<p><strong>Key Rotation:</strong></p>
+<ul>
+<li>If user adds a new public key, server re-encrypts all their channel keys</li>
+<li>Each <code>ChannelAccess</code> entry is updated with key encrypted for new public key</li>
+<li>Old keys can be removed after re-encryption</li>
+</ul>
+<p><strong>Anonymous User Keys:</strong></p>
+<ul>
+<li>Generated client-side, never sent to server (only public key is sent)</li>
+<li>Private key stored in memory only (lost on disconnect)</li>
+<li>Channel key sent in plaintext in DM_READY for anonymous users (no way to encrypt it)</li>
+<li>Trade-off: session-only privacy vs. no setup burden</li>
+</ul>
+<h2>Server Discovery Flow</h2>
+<h3>Client Browsing Servers</h3>
+<pre><code>Client                                  Directory (superchat.win)
+  |                                       |
+  |--- TCP Connect -------------------&gt;  |
+  |                                       |
+  |--- LIST_SERVERS (limit: 100) -----&gt;  |
+  |&lt;-- SERVER_LIST (50 servers) --------  |
+  |                                       |
+  |(User picks server from list)          |
+  |                                       |
+  |--- DISCONNECT ---------------------&gt;  |
+  |                                       |
+  (Client connects to chosen server at chat.example.com:6465)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Client connects to directory server(s) temporarily</li>
+<li>Receives server list, displays to user</li>
+<li>Disconnects from directory</li>
+<li>Connects to chosen server for actual chat</li>
+</ul>
+<h3>Server Registration</h3>
+<pre><code>Server (chat.example.com)              Directory (superchat.win)
+  |                                       |
+  |(Server startup with                   |
+  | --announce-to superchat.win:6465)     |
+  |                                       |
+  |--- TCP Connect -------------------&gt;  |
+  |                                       |
+  |--- REGISTER_SERVER ----------------&gt;  |
+  |    (hostname, port, name, desc)       |
+  |                                       |
+  |                                       |(Directory validates)
+  |                                       |
+  |                                       |--- TCP Connect to ---------&gt;  |
+  |                                       |    chat.example.com:6465      |
+  |                                       |                               |
+  |&lt;-- VERIFY_REGISTRATION (challenge) --|                               |
+  |                                       |                               |
+  |--- VERIFY_RESPONSE (challenge) -----&gt;|                               |
+  |                                       |(Verification OK)              |
+  |                                       |
+  |&lt;-- REGISTER_ACK (success,             |
+  |    heartbeat_interval: 300s) -------  |
+  |                                       |
+  |(Wait 5 minutes)                       |
+  |                                       |
+  |--- HEARTBEAT (hostname, port,         |
+  |    user_count, uptime) ------------&gt;  |
+  |                                       |
+  |&lt;-- HEARTBEAT_ACK (300s) ------------  |
+  |                                       |
+  |(Repeat heartbeat every 5 min)         |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Server maintains persistent connection to directory</li>
+<li>Sends heartbeat at interval specified by directory</li>
+<li>Directory can adjust interval via HEARTBEAT_ACK</li>
+<li>Missing 3 heartbeats removes server from directory</li>
+</ul>
+<h3>Server Registration Failure (Verification)</h3>
+<pre><code>Server (fake.example.com)               Directory (superchat.win)
+  |                                       |
+  |--- REGISTER_SERVER ----------------&gt;  |
+  |    (hostname: fake.example.com:6465)  |
+  |                                       |
+  |                                       |(Attempts to connect to
+  |                                       | fake.example.com:6465)
+  |                                       |
+  |                                       |(Connection fails - timeout)
+  |                                       |
+  |&lt;-- REGISTER_ACK (success: false,      |
+  |    message: &quot;Could not verify...&quot;) -  |
+  |                                       |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Directory rejects registration if it can&#39;t connect back</li>
+<li>Prevents spam registrations of fake servers</li>
+<li>Rate limiting prevents brute-force attempts</li>
+</ul>
+<h3>Directory Load Adaptation</h3>
+<pre><code>Server                                  Directory (has 1500 servers)
+  |                                       |
+  |--- REGISTER_SERVER ----------------&gt;  |
+  |                                       |
+  |(Verification succeeds)                |
+  |                                       |
+  |&lt;-- REGISTER_ACK (success,             |
+  |    heartbeat_interval: 600s) -------  |
+  |    &quot;High load, heartbeat every 10m&quot;   |
+  |                                       |
+  |(Wait 10 minutes - adjusted interval)  |
+  |                                       |
+  |--- HEARTBEAT ----------------------&gt;  |
+  |                                       |
+  |&lt;-- HEARTBEAT_ACK (600s) ------------  |
+  |                                       |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Directory dynamically adjusts heartbeat interval based on number of servers</li>
+<li>Servers respect the interval to avoid overloading directory</li>
+<li>Prevents performance degradation with thousands of servers</li>
+</ul>
+<h3>Directory Gossip (Network Expansion)</h3>
+<pre><code>Directory A (superchat.win)             Server B (chat.example.com, also a directory)
+  |                                       |
+  |(B already registered to A)            |
+  |                                       |
+  |(Gossip timer fires - every 3 hours)   |
+  |                                       |
+  |--- LIST_SERVERS (limit: 500) -----&gt;  |
+  |                                       |
+  |&lt;-- SERVER_LIST (B knows 20 servers) -|
+  |                                       |
+  |(A discovers new Server C)             |
+  |(A doesn&#39;t know C yet - needs verify)  |
+  |                                       |
+  |(A connects to Server C)               |
+  |                                       |
+  |                                       Server C (game.example.org)
+  |                                       |
+  |--- VERIFY_REGISTRATION (challenge) -----------------&gt;  |
+  |                                       |               |
+  |&lt;-- VERIFY_RESPONSE (challenge) -------------------  |
+  |                                       |
+  |(Verification OK - A adds C to list)   |
+  |(C doesn&#39;t know A registered it)       |
+  |                                       |
+  |(Later, A may announce itself to C)    |
+  |(A connects to C again)                |
+  |                                       |
+  |--- REGISTER_SERVER (A&#39;s info) ----------------------&gt;  |
+  |                                       |               |
+  |                                       |          (C verifies A)
+  |                                       |               |
+  |&lt;-- REGISTER_ACK (success) ------------------------  |
+  |                                       |
+  |(Now A and C know about each other)    |
+  |(B acted as bridge for discovery)      |
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Directories periodically query all registered servers for their server lists (gossip)</li>
+<li>New servers discovered through gossip are <strong>verified</strong> before being added</li>
+<li>Directory connects to discovered server and sends VERIFY_REGISTRATION</li>
+<li>Only servers that pass verification are added (prevents fake server injection)</li>
+<li>Server is silently added to directory (no notification sent to server)</li>
+<li>Directory may optionally register itself to newly discovered servers (bidirectional)</li>
+<li>This creates a mesh network where directories discover each other</li>
+<li>If superchat.win goes down, other directories continue discovering servers</li>
+<li>Gossip interval is randomized (1-6 hours) to prevent synchronized queries</li>
+<li>Only servers in directory mode respond with SERVER_LIST, regular chat servers return empty list</li>
+</ul>
+<p><strong>Network Resilience:</strong></p>
+<ul>
+<li>No single point of failure - multiple directories can exist</li>
+<li>Directories learn from each other through gossip</li>
+<li>Clients can configure multiple directories as fallbacks</li>
+<li>If primary directory fails, clients use secondary directories</li>
+</ul>
+<h2>Protocol Extensions</h2>
+<h3>Future Considerations</h3>
+<ul>
+<li><strong>Typing Indicators</strong>: Real-time typing notifications (optional)</li>
+<li><strong>Read Receipts</strong>: Show when other party has read your messages (optional)</li>
+<li><strong>Multi-party DMs</strong>: Group DMs with 3+ participants</li>
+<li><strong>Channel Moderation</strong>: Tools for channel operators (kick, ban, mute)</li>
+</ul>
+<h3>Explicitly Not Supported</h3>
+<p>To maintain the old-school, text-focused nature of SuperChat:</p>
+<ul>
+<li><strong>No file attachments / binary blobs</strong>: Text only, keeps it simple and prevents abuse</li>
+<li><strong>No emoji reactions</strong>: Want to react? Reply with &quot;+1&quot; or &quot;agreed&quot; like the old days</li>
+<li><strong>No rich text / markdown</strong>: Plain text only, no formatting wars</li>
+</ul>
+<h2>Implementation Notes</h2>
+<h3>Client Implementation</h3>
+<ul>
+<li>Maintain persistent TCP connection</li>
+<li>Implement automatic reconnection with exponential backoff</li>
+<li>Buffer outgoing messages during disconnection</li>
+<li>Store local state for anonymous users in <code>~/.config/superchat-client/state.db</code></li>
+<li><strong>SSH connections</strong>: Notify user if connected username differs from authenticated nickname<ul>
+<li>Example: &quot;Connected as &#39;bloopie@host&#39; but authenticated as &#39;elegant&#39; (SSH key registered to &#39;elegant&#39;)&quot;</li>
+<li>Prevents confusion when SSH username doesn&#39;t match registered identity</li>
+<li>Display authenticated nickname prominently in UI</li>
+</ul>
+</li>
+</ul>
+<h3>Server Implementation</h3>
+<ul>
+<li>Use event loop for handling multiple connections (goroutines + channels in Go)</li>
+<li>Implement per-user rate limiting (messages per minute)</li>
+<li>Broadcast NEW_MESSAGE to all sessions in the same channel</li>
+<li>Periodically send SERVER_STATS to all connected clients</li>
+<li>Implement graceful shutdown (notify clients before closing)</li>
+</ul>
+<h3>Security Considerations</h3>
+<ul>
+<li>Validate all string inputs for length and content</li>
+<li>Sanitize message content (strip control characters)</li>
+<li>Rate limit message posting (e.g., 10 messages/minute per user)</li>
+<li>Limit max connections per IP address</li>
+<li>Implement flood protection for channel creation</li>
+<li>Use TLS for TCP connections (or SSH tunneling)</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

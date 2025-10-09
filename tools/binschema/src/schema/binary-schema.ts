@@ -146,6 +146,15 @@ const ArrayKindSchema = z.enum([
 ]);
 export type ArrayKind = z.infer<typeof ArrayKindSchema>;
 
+/**
+ * String encoding
+ */
+const StringEncodingSchema = z.enum([
+  "ascii",  // 7-bit ASCII (one byte per character)
+  "utf8",   // UTF-8 encoding (variable bytes per character)
+]);
+export type StringEncoding = z.infer<typeof StringEncodingSchema>;
+
 // ============================================================================
 // Element Types (for array items - no 'name' field required)
 // ============================================================================
@@ -237,6 +246,42 @@ const TypeRefElementSchema = z.object({
 });
 
 /**
+ * Discriminated union variant (define before use)
+ */
+const DiscriminatedUnionVariantSchema = z.object({
+  when: z.string().optional(), // Condition expression (e.g., "value >= 0xC0"), optional for fallback
+  type: z.string(), // Type name to parse if condition matches
+  description: z.string().optional(),
+});
+
+/**
+ * Discriminated union element (without name - for type aliases)
+ */
+const DiscriminatedUnionElementSchema = z.object({
+  type: z.literal("discriminated_union"),
+  discriminator: z.object({
+    peek: z.enum(["uint8", "uint16", "uint32"]).optional(),
+    field: z.string().optional(),
+    endianness: EndiannessSchema.optional(),
+  }),
+  variants: z.array(DiscriminatedUnionVariantSchema).min(1),
+  description: z.string().optional(),
+});
+
+/**
+ * Pointer element (without name - for type aliases)
+ */
+const PointerElementSchema = z.object({
+  type: z.literal("pointer"),
+  storage: z.enum(["uint8", "uint16", "uint32"]),
+  offset_mask: z.string(),
+  offset_from: z.enum(["message_start", "current_position"]),
+  target_type: z.string(),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+/**
  * Array element schema (array without name - for nested arrays)
  */
 const ArrayElementSchema = z.object({
@@ -247,6 +292,9 @@ const ArrayElementSchema = z.object({
   },
   length: z.number().int().min(1).optional(),
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(),
+  length_field: z.string().optional(), // Optional: name to display for the length field
+  variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
+  notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
   description: z.string().optional(),
 }).refine(
   (data) => {
@@ -256,6 +304,27 @@ const ArrayElementSchema = z.object({
   },
   {
     message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type'",
+  }
+);
+
+/**
+ * String element schema (string without name - for array items)
+ */
+const StringElementSchema = z.object({
+  type: z.literal("string"),
+  kind: ArrayKindSchema,
+  encoding: StringEncodingSchema.optional().default("utf8"),
+  length: z.number().int().min(1).optional(), // For fixed length
+  length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
+  description: z.string().optional(),
+}).refine(
+  (data) => {
+    if (data.kind === "fixed") return data.length !== undefined;
+    if (data.kind === "length_prefixed") return data.length_type !== undefined;
+    return true;
+  },
+  {
+    message: "Fixed strings require 'length', length_prefixed strings require 'length_type'",
   }
 );
 
@@ -279,6 +348,9 @@ const ElementTypeSchema: z.ZodType<any> = z.union([
     Float32ElementSchema,
     Float64ElementSchema,
     ArrayElementSchema, // Support nested arrays
+    StringElementSchema, // Support strings
+    DiscriminatedUnionElementSchema, // Support discriminated unions
+    PointerElementSchema, // Support pointers
   ]),
   // Type reference for user-defined types
   TypeRefElementSchema,
@@ -297,6 +369,9 @@ const ArrayFieldSchema = z.object({
   },
   length: z.number().int().min(1).optional(), // For fixed arrays
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
+  length_field: z.string().optional(), // Optional: name to display for the length field
+  variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
+  notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
   description: z.string().optional(),
 }).refine(
   (data) => {
@@ -308,6 +383,58 @@ const ArrayFieldSchema = z.object({
     message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type'",
   }
 );
+
+/**
+ * String field (variable or fixed length)
+ */
+const StringFieldSchema = z.object({
+  name: z.string(),
+  type: z.literal("string"),
+  kind: ArrayKindSchema,
+  encoding: StringEncodingSchema.optional().default("utf8"),
+  length: z.number().int().min(1).optional(), // For fixed length
+  length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
+  description: z.string().optional(),
+}).refine(
+  (data) => {
+    if (data.kind === "fixed") return data.length !== undefined;
+    if (data.kind === "length_prefixed") return data.length_type !== undefined;
+    return true;
+  },
+  {
+    message: "Fixed strings require 'length', length_prefixed strings require 'length_type'",
+  }
+);
+
+/**
+ * Discriminated union field
+ * Choose type variant based on discriminator value (peek or field-based)
+ */
+const DiscriminatedUnionFieldSchema = z.object({
+  name: z.string(),
+  type: z.literal("discriminated_union"),
+  discriminator: z.object({
+    peek: z.enum(["uint8", "uint16", "uint32"]).optional(), // Peek at current position
+    field: z.string().optional(), // Reference to earlier field in same struct
+    endianness: EndiannessSchema.optional(), // Required for uint16/uint32 peek
+  }),
+  variants: z.array(DiscriminatedUnionVariantSchema).min(1),
+  description: z.string().optional(),
+});
+
+/**
+ * Pointer field (for compression via backwards references)
+ */
+const PointerFieldSchema = z.object({
+  name: z.string(),
+  type: z.literal("pointer"),
+  storage: z.enum(["uint8", "uint16", "uint32"]), // How pointer is stored
+  offset_mask: z.string(), // Bit mask to extract offset (e.g., "0x3FFF")
+  offset_from: z.enum(["message_start", "current_position"]), // Offset calculation
+  target_type: z.string(), // Type to parse at offset
+  endianness: EndiannessSchema.optional(), // Required for uint16/uint32
+  description: z.string().optional(),
+});
 
 /**
  * Bitfield container (pack multiple bit-level fields)
@@ -373,7 +500,10 @@ const FieldTypeRefSchema: z.ZodType<any> = z.union([
     Float32FieldSchema,
     Float64FieldSchema,
     ArrayFieldSchema,
+    StringFieldSchema,
     BitfieldFieldSchema,
+    DiscriminatedUnionFieldSchema,
+    PointerFieldSchema,
   ]),
 
   // Third: Fallback to type reference for user-defined types
@@ -391,12 +521,44 @@ export type Field = z.infer<typeof FieldSchema>;
 // ============================================================================
 
 /**
- * Type definition (struct/composite type)
+ * Composite type with sequence of fields
+ *
+ * Supports both 'sequence' (new format) and 'fields' (backwards compatibility).
+ * A composite type represents an ordered sequence of types on the wire.
  */
-export const TypeDefSchema = z.object({
-  fields: z.array(FieldSchema),
-  description: z.string().optional(),
-});
+const CompositeTypeSchema = z.union([
+  // New format with 'sequence' - represents ordered byte sequence
+  z.object({
+    sequence: z.array(FieldSchema),
+    description: z.string().optional(),
+  }),
+  // Backwards compatibility with 'fields'
+  z.object({
+    fields: z.array(FieldSchema),
+    description: z.string().optional(),
+  })
+]);
+
+/**
+ * Type definition - either composite or type alias
+ *
+ * A type can be:
+ * 1. Composite type: Has a 'sequence' (or 'fields') of named types that appear in order on the wire
+ *    Example: AuthRequest is a sequence of [String nickname, String password]
+ *
+ * 2. Type alias: Directly references a type/primitive without wrapping
+ *    Example: String IS a length-prefixed array of uint8, not a struct containing one
+ *
+ * This distinction clarifies that binary schemas represent wire format (ordered byte sequences),
+ * not TypeScript structure (nested objects).
+ */
+export const TypeDefSchema = z.union([
+  CompositeTypeSchema,
+  // Type alias - any element type (primitive, array, etc) with optional description
+  ElementTypeSchema.and(z.object({
+    description: z.string().optional()
+  }))
+]);
 export type TypeDef = z.infer<typeof TypeDefSchema>;
 
 // ============================================================================

@@ -12,7 +12,7 @@ export const boundaryValuesTestSuite = defineTestSuite({
   schema: {
     types: {
       "BoundaryTest": {
-        fields: [
+        sequence: [
           { name: "value_127", type: "uint8" },    // Max signed int8
           { name: "value_128", type: "uint8" },    // Min signed int8 (if interpreted as signed)
           { name: "value_255", type: "uint8" },    // Max uint8
@@ -67,7 +67,7 @@ export const powerOfTwoBoundariesTestSuite = defineTestSuite({
   schema: {
     types: {
       "PowerOfTwo": {
-        fields: [
+        sequence: [
           { name: "pow2_7", type: "uint8" },    // 128 = 2^7
           { name: "pow2_8_minus_1", type: "uint8" }, // 255 = 2^8 - 1
           { name: "pow2_8", type: "uint16" },   // 256 = 2^8
@@ -119,7 +119,7 @@ export const bitPatternTestSuite = defineTestSuite({
   schema: {
     types: {
       "BitPattern": {
-        fields: [
+        sequence: [
           { name: "pattern_aa", type: "uint8" },   // 0xAA = 10101010
           { name: "pattern_55", type: "uint8" },   // 0x55 = 01010101
           { name: "pattern_ff", type: "uint8" },   // 0xFF = 11111111
@@ -177,7 +177,7 @@ export const signedBoundariesTestSuite = defineTestSuite({
     },
     types: {
       "SignedBoundaries": {
-        fields: [
+        sequence: [
           { name: "int8_max", type: "int8" },       // 127
           { name: "int8_min", type: "int8" },       // -128
           { name: "int8_minus_one", type: "int8" }, // -1

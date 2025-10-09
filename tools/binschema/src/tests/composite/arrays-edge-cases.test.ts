@@ -15,7 +15,7 @@ export const emptyArraysAllTypesTestSuite = defineTestSuite({
     },
     types: {
       "EmptyUint8Array": {
-        fields: [{
+        sequence: [{
           name: "data",
           type: "array",
           kind: "length_prefixed",
@@ -24,7 +24,7 @@ export const emptyArraysAllTypesTestSuite = defineTestSuite({
         }]
       },
       "EmptyUint16Array": {
-        fields: [{
+        sequence: [{
           name: "data",
           type: "array",
           kind: "length_prefixed",
@@ -33,7 +33,7 @@ export const emptyArraysAllTypesTestSuite = defineTestSuite({
         }]
       },
       "EmptyUint32Array": {
-        fields: [{
+        sequence: [{
           name: "data",
           type: "array",
           kind: "length_prefixed",
@@ -42,7 +42,7 @@ export const emptyArraysAllTypesTestSuite = defineTestSuite({
         }]
       },
       "EmptyUint64Array": {
-        fields: [{
+        sequence: [{
           name: "data",
           type: "array",
           kind: "length_prefixed",
@@ -74,7 +74,7 @@ export const emptyUint16ArrayTestSuite = defineTestSuite({
     },
     types: {
       "EmptyUint16Array": {
-        fields: [{
+        sequence: [{
           name: "data",
           type: "array",
           kind: "length_prefixed",
@@ -106,7 +106,7 @@ export const emptyUint32ArrayTestSuite = defineTestSuite({
     },
     types: {
       "EmptyUint32Array": {
-        fields: [{
+        sequence: [{
           name: "data",
           type: "array",
           kind: "length_prefixed",
@@ -138,7 +138,7 @@ export const emptyUint64ArrayTestSuite = defineTestSuite({
     },
     types: {
       "EmptyUint64Array": {
-        fields: [{
+        sequence: [{
           name: "data",
           type: "array",
           kind: "length_prefixed",
@@ -175,7 +175,7 @@ export const largeArrayLengthTestSuite = defineTestSuite({
     },
     types: {
       "LargeArray": {
-        fields: [{
+        sequence: [{
           name: "data",
           type: "array",
           kind: "length_prefixed",

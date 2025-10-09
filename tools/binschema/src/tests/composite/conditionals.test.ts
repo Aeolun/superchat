@@ -16,7 +16,7 @@ export const conditionalFieldTestSuite = defineTestSuite({
     },
     types: {
       "ConditionalMessage": {
-        fields: [
+        sequence: [
           { name: "flags", type: "uint8" },
           {
             name: "timestamp",
@@ -67,7 +67,7 @@ export const multipleConditionalsTestSuite = defineTestSuite({
     },
     types: {
       "FeatureFlags": {
-        fields: [
+        sequence: [
           { name: "flags", type: "uint8" },
           {
             name: "user_id",
@@ -155,7 +155,7 @@ export const versionConditionalTestSuite = defineTestSuite({
     },
     types: {
       "VersionedMessage": {
-        fields: [
+        sequence: [
           { name: "version", type: "uint8" },
           { name: "type", type: "uint8" },
           {
@@ -200,12 +200,12 @@ export const conditionalEqualityTestSuite = defineTestSuite({
   schema: {
     types: {
       "String": {
-        fields: [
+        sequence: [
           { name: "data", type: "array", kind: "length_prefixed", length_type: "uint32", items: { type: "uint8" } }
         ]
       },
       "TypedMessage": {
-        fields: [
+        sequence: [
           { name: "type", type: "uint8" },
           { name: "text", type: "String", conditional: "type & 0x01" },
           { name: "number", type: "uint32", conditional: "type & 0x02" },
@@ -288,7 +288,7 @@ export const conditionalComparisonTestSuite = defineTestSuite({
   schema: {
     types: {
       "RangeMessage": {
-        fields: [
+        sequence: [
           { name: "level", type: "uint8" },
           { name: "basic_info", type: "uint8", conditional: "level >= 1" },
           { name: "extended_info", type: "uint16", conditional: "level >= 2" },

@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat Security Guide - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat Security Guide</h1>
+<p>Complete security hardening guide for SuperChat server deployment.</p>
+<h2>Table of Contents</h2>
+<ul>
+<li><a href="#security-overview">Security Overview</a></li>
+<li><a href="#system-security">System Security</a></li>
+<li><a href="#network-security">Network Security</a></li>
+<li><a href="#protocol-security">Protocol Security</a></li>
+<li><a href="#ssh-security">SSH Security</a></li>
+<li><a href="#rate-limiting">Rate Limiting</a></li>
+<li><a href="#database-security">Database Security</a></li>
+<li><a href="#monitoring-for-abuse">Monitoring for Abuse</a></li>
+<li><a href="#attack-mitigation">Attack Mitigation</a></li>
+<li><a href="#security-checklist">Security Checklist</a></li>
+</ul>
+<h2>Security Overview</h2>
+<p>Super Chat implements security through multiple layers:</p>
+<ol>
+<li><strong>System-level:</strong> Non-root user, file permissions, SELinux/AppArmor</li>
+<li><strong>Network-level:</strong> Firewall rules, port restrictions, reverse proxy options</li>
+<li><strong>Protocol-level:</strong> Frame size limits, session timeouts, input validation</li>
+<li><strong>Application-level:</strong> Rate limiting, authentication, authorization</li>
+<li><strong>Data-level:</strong> Password hashing (bcrypt), database permissions</li>
+</ol>
+<p><strong>Threat Model:</strong></p>
+<ul>
+<li>DoS/DDoS attacks (resource exhaustion)</li>
+<li>Spam and flooding (message spam, connection spam)</li>
+<li>Information disclosure (metrics/pprof exposure)</li>
+<li>Unauthorized access (weak passwords, SSH key theft)</li>
+<li>Data breaches (database exposure)</li>
+</ul>
+<h2>System Security</h2>
+<h3>Run as Non-Root User</h3>
+<p><strong>NEVER run SuperChat as root.</strong> Create a dedicated system user.</p>
+<pre><code class="language-bash"># Create dedicated user
+sudo useradd -r -s /bin/false -d /var/lib/superchat superchat
+
+# Create directories
+sudo mkdir -p /var/lib/superchat
+sudo chown superchat:superchat /var/lib/superchat
+sudo chmod 750 /var/lib/superchat
+</code></pre>
+<p><strong>Rationale:</strong> If the server is compromised, the attacker is limited to the <code>superchat</code> user&#39;s permissions, not full system access.</p>
+<h3>File Permissions</h3>
+<p><strong>Recommended permissions:</strong></p>
+<pre><code class="language-bash"># Config file (contains sensitive paths, but no secrets)
+sudo chmod 640 /etc/superchat/config.toml
+sudo chown superchat:superchat /etc/superchat/config.toml
+
+# SSH host key (private key, highly sensitive!)
+sudo chmod 600 /var/lib/superchat/ssh_host_key
+sudo chown superchat:superchat /var/lib/superchat/ssh_host_key
+
+# Database file
+sudo chmod 640 /var/lib/superchat/superchat.db
+sudo chown superchat:superchat /var/lib/superchat/superchat.db
+
+# Data directory
+sudo chmod 750 /var/lib/superchat
+sudo chown superchat:superchat /var/lib/superchat
+
+# Binary (world-executable, but not writable)
+sudo chmod 755 /usr/local/bin/scd
+sudo chown root:root /usr/local/bin/scd
+</code></pre>
+<p><strong>File permission checklist:</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> Config file: 640 (owner read/write, group read)</li>
+<li><input disabled="" type="checkbox"> SSH host key: 600 (owner read/write only)</li>
+<li><input disabled="" type="checkbox"> Database: 640 (owner read/write, group read)</li>
+<li><input disabled="" type="checkbox"> Data directory: 750 (owner full, group read/execute)</li>
+<li><input disabled="" type="checkbox"> Binary: 755 (world-executable, owner-writable)</li>
+</ul>
+<h3>SELinux / AppArmor</h3>
+<p><strong>SELinux (RHEL/CentOS/Fedora):</strong></p>
+<pre><code class="language-bash"># Create SELinux policy (basic example)
+sudo semanage fcontext -a -t bin_t &#39;/usr/local/bin/scd&#39;
+sudo semanage port -a -t http_port_t -p tcp 6465
+sudo semanage port -a -t ssh_port_t -p tcp 6466
+sudo semanage port -a -t http_port_t -p tcp 6467
+sudo restorecon -v /usr/local/bin/scd
+
+# Set context for data directory
+sudo semanage fcontext -a -t var_lib_t &#39;/var/lib/superchat(/.*)?&#39;
+sudo restorecon -Rv /var/lib/superchat
+</code></pre>
+<p><strong>AppArmor (Ubuntu/Debian):</strong></p>
+<p>Create <code>/etc/apparmor.d/usr.local.bin.scd</code>:</p>
+<pre><code>#include &lt;tunables/global&gt;
+
+/usr/local/bin/scd {
+  #include &lt;abstractions/base&gt;
+  #include &lt;abstractions/nameservice&gt;
+
+  # Binary
+  /usr/local/bin/scd mr,
+
+  # Config and data
+  /etc/superchat/** r,
+  /var/lib/superchat/** rw,
+
+  # Temp files
+  /tmp/** rw,
+
+  # Network
+  network inet stream,
+  network inet6 stream,
+
+  # Deny dangerous capabilities
+  deny capability sys_admin,
+  deny capability sys_module,
+}
+</code></pre>
+<p>Enable AppArmor profile:</p>
+<pre><code class="language-bash">sudo apparmor_parser -r /etc/apparmor.d/usr.local.bin.scd
+sudo aa-enforce /usr.local.bin.scd
+</code></pre>
+<h3>systemd Hardening</h3>
+<p>Add security directives to <code>/etc/systemd/system/superchat.service</code>:</p>
+<pre><code class="language-ini">[Service]
+# ... other directives ...
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/superchat
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+</code></pre>
+<p><strong>What these do:</strong></p>
+<ul>
+<li><code>NoNewPrivileges</code>: Prevents privilege escalation</li>
+<li><code>PrivateTmp</code>: Isolates /tmp directory</li>
+<li><code>ProtectSystem=strict</code>: Mounts /usr and /boot read-only</li>
+<li><code>ReadWritePaths</code>: Only allows writes to /var/lib/superchat</li>
+<li><code>CapabilityBoundingSet</code>: Limits Linux capabilities</li>
+<li><code>RestrictNamespaces</code>: Prevents container breakout</li>
+</ul>
+<h2>Network Security</h2>
+<h3>Firewall Rules</h3>
+<p><strong>Critical: NEVER expose ports 9090 (metrics) or 6060 (pprof) publicly!</strong></p>
+<h4>iptables (Traditional)</h4>
+<pre><code class="language-bash"># Flush existing rules (CAREFUL in production!)
+# sudo iptables -F
+
+# Allow loopback
+sudo iptables -A INPUT -i lo -j ACCEPT
+
+# Allow established connections
+sudo iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Allow SuperChat ports
+sudo iptables -A INPUT -p tcp --dport 6465 -j ACCEPT  # Binary TCP
+sudo iptables -A INPUT -p tcp --dport 6466 -j ACCEPT  # SSH
+sudo iptables -A INPUT -p tcp --dport 6467 -j ACCEPT  # WebSocket
+
+# DENY metrics and profiling (even from external IPs)
+sudo iptables -A INPUT -p tcp --dport 9090 -j DROP
+sudo iptables -A INPUT -p tcp --dport 6060 -j DROP
+
+# Allow SSH for management (adjust port if non-standard)
+sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+
+# Default: Drop all other input
+sudo iptables -P INPUT DROP
+sudo iptables -P FORWARD DROP
+sudo iptables -P OUTPUT ACCEPT
+
+# Save rules
+sudo iptables-save | sudo tee /etc/iptables/rules.v4
+</code></pre>
+<h4>ufw (Ubuntu/Debian)</h4>
+<pre><code class="language-bash"># Reset (CAREFUL in production!)
+# sudo ufw --force reset
+
+# Default policies
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+# Allow SuperChat ports
+sudo ufw allow 6465/tcp comment &#39;SuperChat Binary&#39;
+sudo ufw allow 6466/tcp comment &#39;SuperChat SSH&#39;
+sudo ufw allow 6467/tcp comment &#39;SuperChat WebSocket&#39;
+
+# DENY metrics and profiling explicitly
+sudo ufw deny 9090/tcp comment &#39;SuperChat Metrics (internal only)&#39;
+sudo ufw deny 6060/tcp comment &#39;SuperChat pprof (internal only)&#39;
+
+# Allow SSH for management
+sudo ufw allow 22/tcp comment &#39;SSH management&#39;
+
+# Enable firewall
+sudo ufw enable
+
+# Verify rules
+sudo ufw status numbered
+</code></pre>
+<h4>firewalld (RHEL/CentOS/Fedora)</h4>
+<pre><code class="language-bash"># Add SuperChat ports
+sudo firewall-cmd --permanent --add-port=6465/tcp  # Binary TCP
+sudo firewall-cmd --permanent --add-port=6466/tcp  # SSH
+sudo firewall-cmd --permanent --add-port=6467/tcp  # WebSocket
+
+# Block metrics and profiling
+sudo firewall-cmd --permanent --add-rich-rule=&#39;rule family=&quot;ipv4&quot; port port=&quot;9090&quot; protocol=&quot;tcp&quot; reject&#39;
+sudo firewall-cmd --permanent --add-rich-rule=&#39;rule family=&quot;ipv4&quot; port port=&quot;6060&quot; protocol=&quot;tcp&quot; reject&#39;
+
+# Reload firewall
+sudo firewall-cmd --reload
+
+# Verify
+sudo firewall-cmd --list-all
+</code></pre>
+<h3>Port Security</h3>
+<p><strong>Port Usage Summary:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Port</th>
+<th>Protocol</th>
+<th>Public?</th>
+<th>Purpose</th>
+<th>Security Level</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>6465</td>
+<td>TCP</td>
+<td>✅ Yes</td>
+<td>Binary protocol connections</td>
+<td>Public-facing</td>
+</tr>
+<tr>
+<td>6466</td>
+<td>TCP</td>
+<td>✅ Yes</td>
+<td>SSH connections</td>
+<td>Public-facing</td>
+</tr>
+<tr>
+<td>6467</td>
+<td>TCP</td>
+<td>✅ Yes</td>
+<td>WebSocket connections</td>
+<td>Public-facing</td>
+</tr>
+<tr>
+<td>9090</td>
+<td>HTTP</td>
+<td>❌ <strong>NO!</strong></td>
+<td>Prometheus metrics</td>
+<td><strong>INTERNAL ONLY</strong></td>
+</tr>
+<tr>
+<td>6060</td>
+<td>HTTP</td>
+<td>❌ <strong>NO!</strong></td>
+<td>pprof profiling</td>
+<td><strong>INTERNAL ONLY</strong></td>
+</tr>
+</tbody></table>
+<p><strong>Why ports 9090 and 6060 must be blocked:</strong></p>
+<ul>
+<li><strong>Port 9090 (metrics):</strong> Exposes server statistics, connection counts, error rates (information disclosure)</li>
+<li><strong>Port 6060 (pprof):</strong> Exposes CPU/memory profiles, heap dumps, goroutine stacks (severe information disclosure, potential DoS)</li>
+</ul>
+<p><strong>Accessing metrics/pprof safely:</strong></p>
+<p>Use SSH tunneling:</p>
+<pre><code class="language-bash"># From your local machine
+ssh -L 9090:localhost:9090 user@server
+
+# Now access http://localhost:9090/metrics locally
+curl http://localhost:9090/metrics
+</code></pre>
+<h3>Reverse Proxy Considerations</h3>
+<p>If using a reverse proxy (nginx, caddy, traefik):</p>
+<p><strong>nginx example (WebSocket):</strong></p>
+<pre><code class="language-nginx">server {
+    listen 80;
+    server_name chat.example.com;
+
+    # WebSocket upgrade
+    location /ws {
+        proxy_pass http://localhost:6467;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection &quot;Upgrade&quot;;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 3600s;
+    }
+}
+</code></pre>
+<p><strong>Security notes:</strong></p>
+<ul>
+<li>WebSocket endpoint (<code>/ws</code>) can be proxied</li>
+<li>Binary TCP (6465) and SSH (6466) cannot be proxied (not HTTP)</li>
+<li>Use HTTPS/WSS for WebSocket if reverse proxy supports it</li>
+<li>Set appropriate timeouts (<code>proxy_read_timeout</code>)</li>
+</ul>
+<h2>Protocol Security</h2>
+<h3>Frame Size Limits</h3>
+<p>SuperChat enforces a <strong>1MB maximum frame size</strong> to prevent DoS attacks.</p>
+<p><strong>What this prevents:</strong></p>
+<ul>
+<li>Memory exhaustion (attacker sends huge frames)</li>
+<li>Bandwidth exhaustion</li>
+<li>Processing delays</li>
+</ul>
+<p><strong>Protocol enforcement:</strong></p>
+<ul>
+<li>Clients sending frames &gt;1MB are disconnected</li>
+<li>Server rejects oversized messages before processing</li>
+<li>No user configuration needed (hardcoded for safety)</li>
+</ul>
+<h3>Session Timeouts</h3>
+<p><strong>Default:</strong> 120 seconds of inactivity</p>
+<p><strong>How it works:</strong></p>
+<ul>
+<li>Client sends PING every 30 seconds</li>
+<li>Server expects activity every 120 seconds</li>
+<li>Inactive sessions are disconnected automatically</li>
+</ul>
+<p><strong>Tuning (in config.toml):</strong></p>
+<pre><code class="language-toml">[limits]
+session_timeout_seconds = 120  # 60-300 recommended
+</code></pre>
+<p><strong>Security impact:</strong></p>
+<ul>
+<li>Lower timeout: Faster cleanup of abandoned connections, but may disconnect slow clients</li>
+<li>Higher timeout: More lenient for slow networks, but resources held longer</li>
+</ul>
+<h3>Input Validation</h3>
+<p>SuperChat validates all user input:</p>
+<p><strong>Nickname validation:</strong></p>
+<ul>
+<li>Length: 3-20 characters (configurable max)</li>
+<li>Characters: Letters, numbers, <code>-</code>, <code>_</code></li>
+<li>Reserved prefixes: <code>$</code> (admin), <code>@</code> (moderator), <code>~</code> (anonymous - server-assigned only)</li>
+</ul>
+<p><strong>Message validation:</strong></p>
+<ul>
+<li>Max length: 4096 bytes (configurable)</li>
+<li>UTF-8 encoding enforced</li>
+<li>No null bytes</li>
+</ul>
+<p><strong>Channel names:</strong></p>
+<ul>
+<li>Length: 3-50 characters</li>
+<li>Characters: Lowercase letters, numbers, hyphens</li>
+<li>Unique per server</li>
+</ul>
+<p><strong>Validation is defense-in-depth:</strong> Even if an attacker bypasses client-side validation, server-side validation rejects invalid input.</p>
+<h2>SSH Security</h2>
+<h3>SSH Host Key Management</h3>
+<p><strong>Protect the SSH host key!</strong></p>
+<pre><code class="language-bash"># Set correct permissions
+sudo chmod 600 /var/lib/superchat/ssh_host_key
+sudo chown superchat:superchat /var/lib/superchat/ssh_host_key
+
+# Backup the host key (important!)
+sudo cp /var/lib/superchat/ssh_host_key /var/lib/superchat/ssh_host_key.backup
+sudo chmod 600 /var/lib/superchat/ssh_host_key.backup
+</code></pre>
+<p><strong>Why this matters:</strong></p>
+<ul>
+<li>If host key is regenerated, all SSH clients see &quot;host key changed&quot; warnings</li>
+<li>Attackers could perform MITM attacks if they can replace the host key</li>
+<li>Losing the host key forces all SSH users to re-trust the server</li>
+</ul>
+<p><strong>Host key rotation:</strong></p>
+<p>If you must rotate the host key (e.g., after a breach):</p>
+<pre><code class="language-bash"># Backup old key
+sudo mv /var/lib/superchat/ssh_host_key /var/lib/superchat/ssh_host_key.old
+
+# Generate new key
+sudo ssh-keygen -t ed25519 -f /var/lib/superchat/ssh_host_key -N &quot;&quot;
+sudo chmod 600 /var/lib/superchat/ssh_host_key
+sudo chown superchat:superchat /var/lib/superchat/ssh_host_key
+
+# Restart server
+sudo systemctl restart superchat
+
+# Notify users: They will see &quot;WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!&quot;
+# They must run: ssh-keygen -R chat.example.com:6466
+</code></pre>
+<h3>SSH Public Key Authentication</h3>
+<p>SuperChat uses <strong>public key authentication only</strong> (no passwords for SSH).</p>
+<p><strong>Security benefits:</strong></p>
+<ul>
+<li>Immune to password brute-force</li>
+<li>Phishing-resistant</li>
+<li>Supports hardware keys (YubiKey, etc.)</li>
+</ul>
+<p><strong>User key management:</strong></p>
+<p>Users can add/remove their own SSH keys via the client UI:</p>
+<ul>
+<li>Press <code>Ctrl+K</code> to open SSH Key Manager</li>
+<li>Add keys: Paste public key or select key file</li>
+<li>List keys: View all registered keys</li>
+<li>Delete keys: Remove compromised/old keys</li>
+<li>Rename keys: Label keys for identification</li>
+</ul>
+<p><strong>Admin key management (direct DB):</strong></p>
+<pre><code class="language-bash"># List all SSH keys
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db \
+  &quot;SELECT user_id, name, fingerprint FROM SSHKey;&quot;
+
+# Delete a specific key
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db \
+  &quot;DELETE FROM SSHKey WHERE fingerprint = &#39;SHA256:...&#39;;&quot;
+
+# Delete all keys for a user
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db \
+  &quot;DELETE FROM SSHKey WHERE user_id = (SELECT id FROM User WHERE nickname = &#39;username&#39;);&quot;
+</code></pre>
+<h3>SSH Auto-Registration Rate Limiting</h3>
+<p><strong>TODO:</strong> SSH auto-registration is not currently rate-limited (see V2.md).</p>
+<p><strong>Current behavior:</strong></p>
+<ul>
+<li>Users connecting via SSH with unknown keys are auto-registered</li>
+<li>No rate limit on auto-registration (potential DoS vector)</li>
+</ul>
+<p><strong>Planned mitigation (not yet implemented):</strong></p>
+<ul>
+<li>Rate limit auto-registrations to X per IP per hour</li>
+<li>Log auto-registration attempts for monitoring</li>
+<li>Implement CAPTCHA or proof-of-work for auto-registration</li>
+</ul>
+<p><strong>Temporary workaround:</strong></p>
+<ul>
+<li>Disable SSH auto-registration via code change (requires rebuild)</li>
+<li>Use firewall rate limiting on port 6466:<pre><code class="language-bash">sudo iptables -A INPUT -p tcp --dport 6466 -m state --state NEW -m recent --set
+sudo iptables -A INPUT -p tcp --dport 6466 -m state --state NEW -m recent --update --seconds 60 --hitcount 10 -j DROP
+</code></pre>
+</li>
+</ul>
+<h2>Rate Limiting</h2>
+<h3>Message Rate Limiting</h3>
+<p><strong>Default:</strong> 10 messages per minute per session</p>
+<p><strong>Configuration:</strong></p>
+<pre><code class="language-toml">[limits]
+message_rate_limit = 10  # messages per minute
+</code></pre>
+<p><strong>How it works:</strong></p>
+<ul>
+<li>Sliding window: Tracks messages sent in the last 60 seconds</li>
+<li>Per-session: Each connection has independent rate limit</li>
+<li>Exceeded limit: Server returns ERROR 1003 (rate limit exceeded)</li>
+</ul>
+<p><strong>Tuning recommendations:</strong></p>
+<ul>
+<li>Anti-spam (strict): 5-10 messages/min</li>
+<li>Balanced: 10-20 messages/min</li>
+<li>Chat-heavy: 30-60 messages/min</li>
+<li>Internal (trusted): 100+ messages/min</li>
+</ul>
+<h3>Connection Rate Limiting</h3>
+<p><strong>Default:</strong> 10 connections per IP</p>
+<p><strong>Configuration:</strong></p>
+<pre><code class="language-toml">[limits]
+max_connections_per_ip = 10
+</code></pre>
+<p><strong>What this prevents:</strong></p>
+<ul>
+<li>Connection flooding (DoS via connection exhaustion)</li>
+<li>Single-IP abuse (one attacker opening thousands of connections)</li>
+</ul>
+<p><strong>Considerations:</strong></p>
+<ul>
+<li>Shared IPs (NAT, VPN): Increase limit (50-200)</li>
+<li>Public servers: Balance between usability and security</li>
+<li>Corporate/internal: High limit (200+) for NAT</li>
+</ul>
+<h3>Firewall-Level Rate Limiting</h3>
+<p><strong>Additional protection: Firewall rate limiting</strong></p>
+<p><strong>iptables (connection rate limiting):</strong></p>
+<pre><code class="language-bash"># Limit new connections to 10/minute per IP
+sudo iptables -A INPUT -p tcp --dport 6465 -m state --state NEW -m recent --set
+sudo iptables -A INPUT -p tcp --dport 6465 -m state --state NEW -m recent --update --seconds 60 --hitcount 10 -j DROP
+
+# Same for SSH and WebSocket
+sudo iptables -A INPUT -p tcp --dport 6466 -m state --state NEW -m recent --set
+sudo iptables -A INPUT -p tcp --dport 6466 -m state --state NEW -m recent --update --seconds 60 --hitcount 10 -j DROP
+
+sudo iptables -A INPUT -p tcp --dport 6467 -m state --state NEW -m recent --set
+sudo iptables -A INPUT -p tcp --dport 6467 -m state --state NEW -m recent --update --seconds 60 --hitcount 10 -j DROP
+</code></pre>
+<h2>Database Security</h2>
+<h3>Password Hashing</h3>
+<p>SuperChat uses <strong>bcrypt with cost 10</strong> for password hashing.</p>
+<p><strong>Security properties:</strong></p>
+<ul>
+<li>Slow hashing (prevents brute-force)</li>
+<li>Unique salt per password</li>
+<li>Adaptive cost (can increase in future)</li>
+</ul>
+<p><strong>User password table:</strong></p>
+<pre><code class="language-sql">CREATE TABLE User (
+  id INTEGER PRIMARY KEY,
+  nickname TEXT UNIQUE NOT NULL,
+  password_hash TEXT,  -- bcrypt hash, NULL for SSH-only users
+  ...
+);
+</code></pre>
+<p><strong>Hashing implementation:</strong></p>
+<pre><code class="language-go">import &quot;golang.org/x/crypto/bcrypt&quot;
+
+// Hashing
+hash, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+
+// Verification
+err := bcrypt.CompareHashAndPassword(hash, []byte(password))
+</code></pre>
+<p><strong>Password policy (enforced client-side):</strong></p>
+<ul>
+<li>Minimum 8 characters</li>
+<li>No maximum (bcrypt handles long passwords)</li>
+<li>No complexity requirements (length &gt; complexity for security)</li>
+</ul>
+<p><strong>Admin recommendation:</strong> Encourage users to use password managers (diceware passphrases, random strings, etc.).</p>
+<h3>Database File Permissions</h3>
+<pre><code class="language-bash"># Database file: Read/write for superchat user only
+sudo chmod 640 /var/lib/superchat/superchat.db
+sudo chown superchat:superchat /var/lib/superchat/superchat.db
+
+# WAL and SHM files (created by SQLite)
+sudo chmod 640 /var/lib/superchat/superchat.db-wal
+sudo chmod 640 /var/lib/superchat/superchat.db-shm
+</code></pre>
+<p><strong>Why this matters:</strong></p>
+<ul>
+<li>Database contains password hashes (bcrypt, but still sensitive)</li>
+<li>User data (messages, nicknames, SSH keys)</li>
+<li>Unauthorized access could allow data exfiltration</li>
+</ul>
+<h3>Database Encryption at Rest</h3>
+<p><strong>SuperChat does not encrypt the database by default.</strong></p>
+<p><strong>Options for encryption at rest:</strong></p>
+<ol>
+<li><p><strong>Full-disk encryption (LUKS):</strong></p>
+<pre><code class="language-bash"># Encrypt the partition containing /var/lib/superchat
+sudo cryptsetup luksFormat /dev/sdX
+sudo cryptsetup open /dev/sdX superchat_data
+sudo mkfs.ext4 /dev/mapper/superchat_data
+sudo mount /dev/mapper/superchat_data /var/lib/superchat
+</code></pre>
+</li>
+<li><p><strong>SQLite encryption extensions:</strong></p>
+<ul>
+<li>SQLCipher: Transparent database encryption</li>
+<li>Requires recompiling SuperChat with SQLCipher support (not default)</li>
+</ul>
+</li>
+<li><p><strong>Filesystem-level encryption (eCryptfs, EncFS):</strong></p>
+<pre><code class="language-bash"># Mount encrypted filesystem for /var/lib/superchat
+sudo mount -t ecryptfs /var/lib/superchat /var/lib/superchat
+</code></pre>
+</li>
+</ol>
+<p><strong>Recommendation:</strong> Use full-disk encryption (LUKS) for simplicity and performance.</p>
+<h2>Monitoring for Abuse</h2>
+<h3>Log Monitoring</h3>
+<p><strong>Monitor for suspicious patterns:</strong></p>
+<pre><code class="language-bash"># High connection rate from single IP
+sudo journalctl -u superchat | grep &quot;Connection from&quot; | awk &#39;{print $NF}&#39; | sort | uniq -c | sort -rn
+
+# Rate limit violations
+sudo journalctl -u superchat | grep &quot;rate limit exceeded&quot;
+
+# Failed authentication attempts
+sudo journalctl -u superchat | grep &quot;authentication failed&quot;
+
+# SSH key mismatches
+sudo journalctl -u superchat | grep &quot;public key does not match&quot;
+</code></pre>
+<p><strong>Automated alerts (syslog + monitoring tool):</strong></p>
+<p>Use Prometheus alerts or log aggregation (see MONITORING.md).</p>
+<h3>Metrics Monitoring</h3>
+<p><strong>Key metrics to watch (via Prometheus on port 9090):</strong></p>
+<pre><code class="language-bash"># Active sessions (sudden spike = potential DoS)
+curl -s http://localhost:9090/metrics | grep superchat_active_sessions
+
+# Message rate (sudden spike = spam attack)
+curl -s http://localhost:9090/metrics | grep superchat_messages_received_total
+
+# Error rate (high rate = attack or bug)
+curl -s http://localhost:9090/metrics | grep superchat_errors_total
+
+# Goroutine count (increasing = goroutine leak)
+curl -s http://localhost:9090/metrics | grep go_goroutines
+</code></pre>
+<p>See MONITORING.md for full Prometheus/Grafana setup.</p>
+<h2>Attack Mitigation</h2>
+<h3>Denial of Service (DoS)</h3>
+<p><strong>Attack vectors:</strong></p>
+<ol>
+<li>Connection flooding (many connections from single IP)</li>
+<li>Message flooding (spam messages)</li>
+<li>Large frame attacks (send 1MB frames repeatedly)</li>
+</ol>
+<p><strong>Mitigations:</strong></p>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Max connections per IP (configurable)</li>
+<li><input checked="" disabled="" type="checkbox"> Message rate limiting (per session)</li>
+<li><input checked="" disabled="" type="checkbox"> Frame size limit (1MB hardcoded)</li>
+<li><input checked="" disabled="" type="checkbox"> Session timeout (disconnect inactive sessions)</li>
+<li><input disabled="" type="checkbox"> Firewall rate limiting (manual setup)</li>
+<li><input disabled="" type="checkbox"> DDoS protection (Cloudflare, AWS Shield, etc. for HTTP/WS only)</li>
+</ul>
+<p><strong>Note:</strong> Binary TCP (port 6465) and SSH (port 6466) cannot use Cloudflare/CDN. Use firewall-level DDoS protection.</p>
+<h3>Distributed Denial of Service (DDoS)</h3>
+<p><strong>SuperChat is vulnerable to DDoS without additional protection.</strong></p>
+<p><strong>Mitigations:</strong></p>
+<ol>
+<li><strong>Firewall-level rate limiting:</strong> (see &quot;Firewall-Level Rate Limiting&quot; above)</li>
+<li><strong>Cloud DDoS protection:</strong> AWS Shield, Cloudflare Spectrum (Layer 4)</li>
+<li><strong>Upstream filtering:</strong> ISP-level DDoS mitigation</li>
+<li><strong>Overprovisioning:</strong> Rent more server capacity than needed</li>
+</ol>
+<p><strong>For WebSocket connections (port 6467):</strong></p>
+<ul>
+<li>Can use Cloudflare Proxy (HTTP-based, supports WebSocket)</li>
+<li>Enable &quot;Under Attack&quot; mode during DDoS</li>
+</ul>
+<h3>Spam and Flooding</h3>
+<p><strong>Attack:</strong> User sends many messages to spam channels.</p>
+<p><strong>Mitigations:</strong></p>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Message rate limiting (10 msg/min default)</li>
+<li><input checked="" disabled="" type="checkbox"> Max message length (4096 bytes default)</li>
+<li><input disabled="" type="checkbox"> Admin tools for message deletion (manual SQL)</li>
+<li><input disabled="" type="checkbox"> Automatic spam detection (not implemented)</li>
+</ul>
+<p><strong>Manual spam cleanup:</strong></p>
+<pre><code class="language-bash"># Soft-delete messages from a user
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db \
+  &quot;UPDATE Message SET deleted_at = strftime(&#39;%s&#39;, &#39;now&#39;) WHERE author_user_id = X;&quot;
+
+# Hard-delete messages (permanent)
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db \
+  &quot;DELETE FROM Message WHERE author_user_id = X;&quot;
+
+# Ban user (delete user record - harsh)
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db \
+  &quot;DELETE FROM User WHERE id = X;&quot;
+</code></pre>
+<h3>Information Disclosure</h3>
+<p><strong>Attack:</strong> Attacker accesses metrics/pprof endpoints.</p>
+<p><strong>Mitigations:</strong></p>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Firewall blocks ports 9090 and 6060</li>
+<li><input checked="" disabled="" type="checkbox"> Metrics only on localhost by default</li>
+<li><input checked="" disabled="" type="checkbox"> SSH tunneling for safe access</li>
+<li><input disabled="" type="checkbox"> Authentication for metrics (not implemented - use firewall)</li>
+</ul>
+<p><strong>Verify firewall:</strong></p>
+<pre><code class="language-bash"># Should timeout or be refused
+curl http://your-server-ip:9090/metrics
+curl http://your-server-ip:6060/debug/pprof/
+</code></pre>
+<h3>Man-in-the-Middle (MITM)</h3>
+<p><strong>Attack:</strong> Attacker intercepts client-server communication.</p>
+<p><strong>SuperChat does not encrypt binary TCP connections (port 6465).</strong></p>
+<p><strong>Mitigations:</strong></p>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> SSH connections (port 6466) are encrypted via SSH transport</li>
+<li><input checked="" disabled="" type="checkbox"> WebSocket can use WSS (HTTPS/TLS) via reverse proxy</li>
+<li><input disabled="" type="checkbox"> TLS for binary TCP (not implemented)<ul>
+<li>V3 future feature: Add TLS support</li>
+</ul>
+</li>
+</ul>
+<p><strong>Current recommendations:</strong></p>
+<ul>
+<li>Use SSH connections for security-sensitive deployments</li>
+<li>Use WebSocket over HTTPS (WSS) via reverse proxy</li>
+<li>Binary TCP is unencrypted (use on trusted networks only)</li>
+</ul>
+<h2>Security Checklist</h2>
+<h3>Pre-Deployment</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Server runs as non-root user (<code>superchat</code>)</li>
+<li><input disabled="" type="checkbox"> File permissions set correctly (640 for configs/db, 600 for SSH key)</li>
+<li><input disabled="" type="checkbox"> Firewall configured (allow 6465, 6466, 6467; deny 9090, 6060)</li>
+<li><input disabled="" type="checkbox"> SELinux or AppArmor enabled and configured</li>
+<li><input disabled="" type="checkbox"> systemd service hardened (<code>NoNewPrivileges</code>, <code>ProtectSystem</code>, etc.)</li>
+<li><input disabled="" type="checkbox"> SSH host key generated and backed up</li>
+<li><input disabled="" type="checkbox"> Database file permissions set (640, owned by superchat)</li>
+<li><input disabled="" type="checkbox"> Config file reviewed (no default passwords, correct paths)</li>
+</ul>
+<h3>Post-Deployment</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Verify ports are accessible (6465, 6466, 6467)</li>
+<li><input disabled="" type="checkbox"> Verify metrics port is NOT accessible externally (9090)</li>
+<li><input disabled="" type="checkbox"> Verify pprof port is NOT accessible externally (6060)</li>
+<li><input disabled="" type="checkbox"> Test connection from client (sc --server your-server:6465)</li>
+<li><input disabled="" type="checkbox"> Test SSH connection (sc --server ssh://user@your-server:6466)</li>
+<li><input disabled="" type="checkbox"> Test WebSocket connection (sc --server ws://your-server:6467)</li>
+<li><input disabled="" type="checkbox"> Monitor logs for errors (sudo journalctl -u superchat -f)</li>
+<li><input disabled="" type="checkbox"> Set up monitoring (Prometheus alerts)</li>
+<li><input disabled="" type="checkbox"> Set up backups (automated daily backups)</li>
+<li><input disabled="" type="checkbox"> Document SSH host key fingerprint (for user verification)</li>
+</ul>
+<h3>Ongoing Maintenance</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Review logs weekly for suspicious activity</li>
+<li><input disabled="" type="checkbox"> Monitor metrics for unusual spikes</li>
+<li><input disabled="" type="checkbox"> Update SuperChat to latest version (security patches)</li>
+<li><input disabled="" type="checkbox"> Rotate SSH host key annually (or after breach)</li>
+<li><input disabled="" type="checkbox"> Review user accounts monthly (delete inactive/spam accounts)</li>
+<li><input disabled="" type="checkbox"> Test backups quarterly (restore from backup)</li>
+<li><input disabled="" type="checkbox"> Review firewall rules quarterly (ensure 9090/6060 still blocked)</li>
+</ul>
+<h2>Next Steps</h2>
+<ul>
+<li><a href="DEPLOYMENT.md">DEPLOYMENT.md</a> - Server deployment guide</li>
+<li><a href="CONFIGURATION.md">CONFIGURATION.md</a> - Configuration reference</li>
+<li><a href="MONITORING.md">MONITORING.md</a> - Monitoring and alerting</li>
+<li><a href="BACKUP_AND_RECOVERY.md">BACKUP_AND_RECOVERY.md</a> - Backup strategies</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

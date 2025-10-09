@@ -16,7 +16,7 @@ export const singleBitTestSuite = defineTestSuite({
     },
     types: {
       "BitValue": {
-        fields: [
+        sequence: [
           { name: "flag", type: "bit", size: 1 }
         ]
       }

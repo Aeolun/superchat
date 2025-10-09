@@ -16,7 +16,7 @@ export const mixedEndiannessTestSuite = defineTestSuite({
     },
     types: {
       "MixedHeader": {
-        fields: [
+        sequence: [
           { name: "magic", type: "uint16" }, // Uses big_endian (global)
           { name: "version", type: "uint16", endianness: "little_endian" }, // Override!
           { name: "length", type: "uint32" }, // Uses big_endian (global)
@@ -72,7 +72,7 @@ export const littleEndianWithBigOverrideTestSuite = defineTestSuite({
     },
     types: {
       "NetworkPacket": {
-        fields: [
+        sequence: [
           { name: "local_timestamp", type: "uint32" }, // Little endian
           { name: "network_id", type: "uint16", endianness: "big_endian" }, // Network byte order!
           { name: "local_sequence", type: "uint32" }, // Little endian
@@ -115,7 +115,7 @@ export const floatEndiannessOverrideTestSuite = defineTestSuite({
     },
     types: {
       "SensorData": {
-        fields: [
+        sequence: [
           { name: "sensor_id", type: "uint16" }, // Big endian
           { name: "temperature", type: "float32", endianness: "little_endian" }, // Little!
           { name: "timestamp", type: "uint32" }, // Big endian
@@ -158,12 +158,12 @@ export const nestedStructEndiannessOverrideTestSuite = defineTestSuite({
     },
     types: {
       "Inner": {
-        fields: [
+        sequence: [
           { name: "value", type: "uint32", endianness: "little_endian" }
         ]
       },
       "Outer": {
-        fields: [
+        sequence: [
           { name: "id", type: "uint16" }, // Uses big_endian (global)
           { name: "inner", type: "Inner" },
           { name: "checksum", type: "uint16" }, // Uses big_endian (global)
@@ -219,18 +219,18 @@ export const deeplyNestedEndiannessTestSuite = defineTestSuite({
     },
     types: {
       "Level3": {
-        fields: [
+        sequence: [
           { name: "data", type: "uint32", endianness: "little_endian" }
         ]
       },
       "Level2": {
-        fields: [
+        sequence: [
           { name: "header", type: "uint16" }, // Big endian
           { name: "level3", type: "Level3" }
         ]
       },
       "Level1": {
-        fields: [
+        sequence: [
           { name: "id", type: "uint8" },
           { name: "level2", type: "Level2" },
           { name: "footer", type: "uint16" } // Big endian
@@ -274,7 +274,7 @@ export const cursedMixedEndiannessTestSuite = defineTestSuite({
   schema: {
     types: {
       "CursedFormat": {
-        fields: [
+        sequence: [
           { name: "field_a", type: "uint16", endianness: "big_endian" },
           { name: "field_b", type: "uint16", endianness: "little_endian" },
           { name: "field_c", type: "uint32", endianness: "big_endian" },

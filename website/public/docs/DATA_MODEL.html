@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat Data Model Specification - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="./favicon.png">
+    <link rel="stylesheet" href="./src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="./index.html" class="logo">
+                    <img src="./mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="./index.html">Home</a>
+                    <a href="./docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="./docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="./docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="./docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="./docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="./docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="./docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="./docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="./docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="./docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="./docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="./docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="./docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="./docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="./docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat Data Model Specification</h1>
+<h2>Overview</h2>
+<p>This document defines the data structures and relationships for SuperChat, a terminal-based threaded chat/forum application.</p>
+<h2>Core Entities</h2>
+<h3>User</h3>
+<p>Users can be anonymous or registered. Registration is optional and can happen at any time.</p>
+<pre><code>User {
+  id: integer (primary key)
+  nickname: string (unique if registered, null if anonymous)
+  registered: boolean
+  password_hash: string (nullable, bcrypt)
+  allow_unencrypted_dms: boolean (default: false)
+  created_at: timestamp
+  last_seen: timestamp
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Anonymous users don&#39;t have a User record</li>
+<li>Registered users claim a nickname permanently</li>
+<li><code>password_hash</code> is only set if user registers with password (vs SSH key)</li>
+<li><code>allow_unencrypted_dms</code> indicates user&#39;s preference for DM encryption<ul>
+<li><code>false</code> (default): User requires encryption for DMs (or will be prompted per-DM)</li>
+<li><code>true</code>: User allows all DMs to be unencrypted without prompting</li>
+</ul>
+</li>
+</ul>
+<h3>SSHKey</h3>
+<p>SSH keys provide automatic authentication for registered users. Also stores encryption keys for DM encryption.</p>
+<pre><code>SSHKey {
+  id: integer (primary key)
+  user_id: integer (foreign key -&gt; User.id)
+  fingerprint: string (unique, SHA256 fingerprint of public key)
+  public_key: text (full SSH public key in OpenSSH format)
+  key_type: enum (&#39;ssh_rsa&#39;, &#39;ssh_ed25519&#39;, &#39;ssh_ecdsa&#39;, &#39;generated_rsa&#39;, &#39;ephemeral&#39;)
+  can_encrypt: boolean (true for RSA keys, false for ed25519/ECDSA)
+  encryption_public_key: text (nullable, RSA public key in PEM format for encryption)
+  added_at: timestamp
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>When a user connects via SSH with an unregistered key, we auto-register their nickname</li>
+<li>Users can add multiple SSH keys to their account</li>
+<li>Fingerprint is used for quick lookups during authentication</li>
+<li><strong>Encryption key handling:</strong><ul>
+<li><strong>SSH RSA keys</strong>: Can be used directly for encryption (<code>can_encrypt = true</code>, <code>encryption_public_key = null</code>)</li>
+<li><strong>SSH ed25519/ECDSA keys</strong>: Cannot encrypt, require companion RSA key (<code>can_encrypt = false</code>, <code>encryption_public_key</code> stores RSA-2048 public key)</li>
+<li><strong>Password-only users</strong>: Generate RSA-2048 keypair (<code>key_type = &#39;generated_rsa&#39;</code>, <code>can_encrypt = true</code>)</li>
+<li><strong>Anonymous users</strong>: Generate ephemeral RSA-2048 keypair (<code>key_type = &#39;ephemeral&#39;</code>, keys lost on disconnect)</li>
+</ul>
+</li>
+<li>Private encryption keys are NEVER stored on server (client-side only in <code>~/.superchat/keys/</code>)</li>
+<li>Server only stores public keys for encrypting channel keys</li>
+</ul>
+<h3>Session</h3>
+<p>Tracks active connections to the server.</p>
+<pre><code>Session {
+  id: integer (primary key)
+  user_id: integer (nullable, foreign key -&gt; User.id, null for anonymous)
+  nickname: string (current nickname for this session)
+  connection_type: enum (&#39;ssh&#39;, &#39;tcp&#39;)
+  connected_at: timestamp
+  last_activity: timestamp
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Anonymous sessions have <code>user_id = null</code> but still have a nickname</li>
+<li>Anonymous users can post messages using their session nickname</li>
+<li>Multiple anonymous users can use the same nickname simultaneously (no enforcement)</li>
+<li>Used for presence counts and real-time message delivery</li>
+<li>Cleaned up on disconnect</li>
+</ul>
+<h3>Channel</h3>
+<p>Top-level container for conversations. Can optionally contain subchannels.</p>
+<pre><code>Channel {
+  id: integer (primary key)
+  name: string (unique, e.g., &quot;tech-community&quot;)
+  display_name: string (e.g., &quot;#tech-community&quot;)
+  description: text (nullable)
+  channel_type: enum (&#39;chat&#39;, &#39;forum&#39;)
+  message_retention_hours: integer (default: 168 = 7 days)
+  created_by: integer (nullable, foreign key -&gt; User.id)
+  created_at: timestamp
+  is_private: boolean (default: false, true for DM channels)
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>name</code> is the canonical identifier (no # prefix)</li>
+<li><code>display_name</code> includes formatting for UI (with # prefix)</li>
+<li><code>is_private</code> marks DM channels (hidden from public channel list)</li>
+<li><code>created_by</code> is the channel operator (admin)</li>
+<li><code>channel_type</code> and <code>message_retention_hours</code> are used when channel has no subchannels</li>
+<li>If channel has subchannels, each subchannel&#39;s type and retention take precedence</li>
+</ul>
+<h3>Subchannel</h3>
+<p>Optional organizational layer within a channel.</p>
+<pre><code>Subchannel {
+  id: integer (primary key)
+  channel_id: integer (foreign key -&gt; Channel.id)
+  name: string (e.g., &quot;announcements&quot;)
+  display_name: string (e.g., &quot;/announcements&quot;)
+  description: text (nullable)
+  message_retention_hours: integer (default: 168 = 7 days)
+  subchannel_type: enum (&#39;chat&#39;, &#39;forum&#39;)
+  created_at: timestamp
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>name</code> is unique within a channel</li>
+<li><code>message_retention_hours</code> determines how long messages are kept<ul>
+<li>Chat: 1 hour (configurable)</li>
+<li>Forum: 168 hours / 7 days (configurable)</li>
+</ul>
+</li>
+<li>Messages older than retention period are automatically purged</li>
+<li>Channels without subchannels have messages directly in the channel</li>
+</ul>
+<h3>Message</h3>
+<p>Individual messages in a channel or subchannel. Can be threaded.</p>
+<pre><code>Message {
+  id: integer (primary key)
+  channel_id: integer (foreign key -&gt; Channel.id)
+  subchannel_id: integer (nullable, foreign key -&gt; Subchannel.id)
+  parent_id: integer (nullable, foreign key -&gt; Message.id, for threading)
+  author_user_id: integer (nullable, foreign key -&gt; User.id)
+  author_nickname: string (nickname at time of posting)
+  content: text
+  created_at: timestamp
+  edited_at: timestamp (nullable)
+  deleted_at: timestamp (nullable)
+  thread_depth: integer (computed, 0-5+)
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>parent_id = null</code> means this is a root message (thread starter)</li>
+<li><code>parent_id != null</code> means this is a reply in a thread</li>
+<li><code>thread_depth</code> indicates nesting level (0 = root, 1 = direct reply, etc.)<ul>
+<li>Calculated on INSERT: if parent_id is null, depth = 0; else depth = parent.thread_depth + 1</li>
+<li>Simple lookup: <code>SELECT thread_depth FROM Message WHERE id = parent_id</code>, then add 1</li>
+<li>Stored denormalized for display performance (avoid recursive queries)</li>
+<li>Immutable once set (parent_id cannot be changed)</li>
+<li>Max display depth: 5 (deeper messages stay at indent level 5)</li>
+</ul>
+</li>
+<li><code>author_user_id</code> is null for anonymous users (no User record exists)</li>
+<li><code>author_user_id</code> is set for registered users (links to User record)</li>
+<li><code>author_nickname</code> always preserves the nickname at time of posting<ul>
+<li>For registered users: shows their registered nickname</li>
+<li>For anonymous users: shows whatever nickname they chose in their session</li>
+</ul>
+</li>
+<li>Multiple messages can have the same <code>author_nickname</code> but different (or null) <code>author_user_id</code></li>
+<li>UI should distinguish registered vs anonymous users (e.g., &quot;bob&quot; vs &quot;bob*&quot;)</li>
+<li>If <code>subchannel_id</code> is null, message is directly in the channel</li>
+</ul>
+<p><strong>Anonymous vs Registered Message Authors:</strong></p>
+<pre><code>author_user_id | author_nickname | Meaning
+---------------|-----------------|------------------------------------------
+123            | &quot;alice&quot;         | Registered user alice (verified identity)
+NULL           | &quot;bob&quot;           | Anonymous user calling themselves bob
+NULL           | &quot;bob&quot;           | Different anonymous user, also using bob
+456            | &quot;bob&quot;           | Registered user bob (different from above)
+</code></pre>
+<p><strong>Soft Deletion:</strong></p>
+<ul>
+<li><code>deleted_at</code> marks when a message was deleted</li>
+<li><strong>Server overwrites <code>content</code> field with <code>&quot;[deleted]&quot;</code> immediately</strong> (no deleted content sent to clients)</li>
+<li>Original content is preserved in MessageVersion table for moderation</li>
+<li>Thread structure maintained (message record remains)</li>
+<li>Hard deletion only happens via retention policy (based on <code>created_at</code>), which removes entire Message record and all MessageVersion records</li>
+</ul>
+<h3>MessageVersion</h3>
+<p>Stores edit and deletion history for moderation and accountability.</p>
+<pre><code>MessageVersion {
+  id: integer (primary key)
+  message_id: integer (foreign key -&gt; Message.id)
+  content: text (content at this version)
+  author_nickname: string (nickname at time of this version)
+  created_at: timestamp (when this version was created)
+  version_type: enum (&#39;created&#39;, &#39;edited&#39;, &#39;deleted&#39;)
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Automatically created on POST_MESSAGE (<code>version_type = &#39;created&#39;</code>)</li>
+<li>Created on EDIT_MESSAGE (<code>version_type = &#39;edited&#39;</code>)</li>
+<li>Created on DELETE_MESSAGE (<code>version_type = &#39;deleted&#39;</code>)</li>
+<li>When Message is hard-deleted (retention policy), all MessageVersion records CASCADE delete</li>
+<li>Prevents abuse where users edit offensive content before deleting</li>
+<li>Available for moderation review</li>
+<li>Not exposed to regular users via protocol (admin/moderation tool only)</li>
+</ul>
+<h3>ChannelAccess</h3>
+<p>Controls access to private channels (primarily for DMs).</p>
+<pre><code>ChannelAccess {
+  id: integer (primary key)
+  channel_id: integer (foreign key -&gt; Channel.id)
+  user_id: integer (foreign key -&gt; User.id)
+  encryption_key: text (nullable, for E2E encrypted DMs)
+  added_at: timestamp
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Only used for private channels (DMs)</li>
+<li><code>encryption_key</code> stores the channel&#39;s symmetric AES-256 key, encrypted with the user&#39;s RSA public key</li>
+<li><strong>Encryption approach:</strong><ul>
+<li>Each DM channel has a unique AES-256 symmetric key for encrypting messages</li>
+<li>This symmetric key is encrypted with RSA-OAEP using each participant&#39;s public key</li>
+<li>One ChannelAccess record per participant stores their encrypted copy of the channel key</li>
+<li>Messages are encrypted with AES-256-GCM using the channel&#39;s symmetric key</li>
+<li>For anonymous users with no persistent key: <code>encryption_key</code> is plaintext (session-only security)</li>
+</ul>
+</li>
+<li>For public channels, this table is not used (implicit access for all)</li>
+<li>When a new participant is added, server re-encrypts channel key with their public key</li>
+</ul>
+<h3>UserChannelState</h3>
+<p>Tracks per-user state for channels (last read position, etc.) - <strong>server-side only for registered users</strong>.</p>
+<pre><code>UserChannelState {
+  id: integer (primary key)
+  user_id: integer (foreign key -&gt; User.id)
+  channel_id: integer (foreign key -&gt; Channel.id)
+  subchannel_id: integer (nullable, foreign key -&gt; Subchannel.id)
+  last_read_at: timestamp
+  last_read_message_id: integer (nullable, foreign key -&gt; Message.id)
+}
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><strong>Server-side state for registered users only</strong></li>
+<li>Used to calculate unread counts and sync read state across devices</li>
+<li>One record per user per subchannel (or per channel if no subchannels)</li>
+<li>State is periodically cleaned up for inactive users (e.g., no connection in 90 days)</li>
+<li><strong>Anonymous users</strong>: Clients should implement local state tracking<ul>
+<li>Store <code>last_read_at</code> per channel/subchannel in client-side database</li>
+<li>Persists across reconnections from the same client (even with different nicknames)</li>
+<li>Not synced to server, not shared across devices</li>
+<li>Provides good UX on regular device while incentivizing registration for multi-device sync</li>
+</ul>
+</li>
+</ul>
+<h2>Relationships</h2>
+<h3>User Relationships</h3>
+<ul>
+<li>User → SSHKey: one-to-many</li>
+<li>User → Session: one-to-many (can be connected from multiple devices)</li>
+<li>User → Channel: one-to-many (channels created by user)</li>
+<li>User → ChannelAccess: one-to-many (private channels user can access)</li>
+<li>User → UserChannelState: one-to-many (read state per channel/subchannel)</li>
+</ul>
+<h3>Channel Relationships</h3>
+<ul>
+<li>Channel → Subchannel: one-to-many (optional)</li>
+<li>Channel → Message: one-to-many</li>
+<li>Channel → ChannelAccess: one-to-many (for private channels)</li>
+</ul>
+<h3>Subchannel Relationships</h3>
+<ul>
+<li>Subchannel → Message: one-to-many</li>
+</ul>
+<h3>Message Relationships</h3>
+<ul>
+<li>Message → Message: one-to-many (parent → replies, recursive)</li>
+</ul>
+<h2>Threading Model</h2>
+<p>Messages form a tree structure:</p>
+<pre><code>Message (id: 1, parent_id: null, depth: 0)  [root]
+├─ Message (id: 2, parent_id: 1, depth: 1)
+│  ├─ Message (id: 3, parent_id: 2, depth: 2)
+│  │  └─ Message (id: 4, parent_id: 3, depth: 3)
+│  │     └─ Message (id: 5, parent_id: 4, depth: 4)
+│  │        └─ Message (id: 6, parent_id: 5, depth: 5)
+│  │           └─ Message (id: 7, parent_id: 6, depth: 6) [displays at depth 5]
+│  └─ Message (id: 8, parent_id: 2, depth: 2)
+└─ Message (id: 9, parent_id: 1, depth: 1)
+</code></pre>
+<p><strong>Display Rules:</strong></p>
+<ul>
+<li>Depth 0-5: Indent proportionally</li>
+<li>Depth 6+: Display at depth 5 indent level</li>
+<li>Show actual depth number in UI for clarity</li>
+</ul>
+<h2>Data Lifecycle</h2>
+<h3>Message Retention</h3>
+<ul>
+<li>Messages are automatically hard-deleted based on <code>Subchannel.message_retention_hours</code> (or <code>Channel.message_retention_hours</code> if no subchannel)</li>
+<li>Retention policy runs periodically (e.g., hourly cron job)</li>
+<li><strong>Thread-aware deletion policy:</strong><ul>
+<li>A message is eligible for deletion when <code>created_at &lt; (now - retention_hours)</code></li>
+<li><strong>Root messages:</strong> Only deleted when ALL descendants are also eligible for deletion</li>
+<li><strong>Reply messages:</strong> Deleted when eligible, regardless of siblings</li>
+<li>This preserves thread structure: recent replies keep the entire thread alive</li>
+<li>When a root is deleted, all descendants are CASCADE deleted (entire thread removed atomically)</li>
+</ul>
+</li>
+<li><strong>Example:</strong><pre><code>Root message (8 days old, retention: 7 days) -&gt; eligible
+├─ Reply (7 days old) -&gt; eligible
+└─ Reply (1 day old) -&gt; NOT eligible
+
+Result: Root is NOT deleted because it has a non-eligible child
+The entire thread is retained until all messages exceed retention period
+</code></pre>
+</li>
+<li>Hard deletion removes Message record and all associated MessageVersion records (CASCADE)</li>
+</ul>
+<h3>Session Cleanup</h3>
+<ul>
+<li>Sessions are deleted when connection closes (socket dies)</li>
+<li><strong>Timeout:</strong> Sessions with no activity for 60 seconds are automatically disconnected<ul>
+<li>Activity = any message received from client (PING, POST_MESSAGE, etc.)</li>
+<li>Server updates <code>Session.last_activity</code> on every message</li>
+<li>Clients send PING every 30 seconds during idle periods to keep session alive</li>
+</ul>
+</li>
+<li>Cleanup job runs periodically (e.g., every 30 seconds) to disconnect stale sessions</li>
+</ul>
+<h3>UserChannelState Cleanup</h3>
+<ul>
+<li>State for inactive registered users is purged periodically (e.g., no connection in 90 days)</li>
+<li>Reduces database size for users who have abandoned the server</li>
+<li>Configurable retention period per server</li>
+</ul>
+<h3>Anonymous User Lifecycle</h3>
+<ul>
+<li>Anonymous users can connect, choose a nickname, and post messages</li>
+<li>No User record is created for anonymous users</li>
+<li>Anonymous sessions have no persistent state across disconnects</li>
+<li>Messages posted by anonymous users remain (with <code>author_user_id = null</code>)</li>
+<li>Anonymous users provide incentive to register (verified identity, persistent nickname)</li>
+</ul>
+<h2>Indexes</h2>
+<p>Performance-critical indexes:</p>
+<pre><code class="language-sql">-- Fast user lookups and prevents duplicate registrations
+-- This index serves as the locking mechanism for SSH auto-registration:
+-- If two users try to register the same nickname simultaneously,
+-- the second INSERT will fail with a constraint violation
+CREATE UNIQUE INDEX idx_users_nickname ON User(nickname) WHERE registered = true;
+
+-- Fast SSH key authentication
+CREATE UNIQUE INDEX idx_sshkeys_fingerprint ON SSHKey(fingerprint);
+
+-- Fast message retrieval
+CREATE INDEX idx_messages_channel_subchannel ON Message(channel_id, subchannel_id, created_at DESC);
+CREATE INDEX idx_messages_parent ON Message(parent_id) WHERE parent_id IS NOT NULL;
+
+-- Fast retention cleanup queries (find messages older than retention period)
+CREATE INDEX idx_messages_retention ON Message(created_at, parent_id);
+
+-- Fast channel access checks
+CREATE INDEX idx_channel_access_user ON ChannelAccess(user_id, channel_id);
+
+-- Fast unread state lookups
+CREATE UNIQUE INDEX idx_user_channel_state ON UserChannelState(user_id, channel_id, subchannel_id);
+
+-- Fast message version lookups for moderation
+CREATE INDEX idx_message_version_message ON MessageVersion(message_id, created_at DESC);
+</code></pre>
+<h2>Transaction Boundaries</h2>
+<p>Multi-table operations MUST be wrapped in transactions to maintain data integrity:</p>
+<h3>User Registration (Password or SSH)</h3>
+<pre><code class="language-sql">BEGIN TRANSACTION;
+  INSERT INTO User (nickname, registered, password_hash, ...) VALUES (...);
+  INSERT INTO SSHKey (user_id, fingerprint, public_key, ...) VALUES (...);  -- if SSH
+COMMIT;
+</code></pre>
+<ul>
+<li>On constraint violation (duplicate nickname), ROLLBACK occurs automatically</li>
+<li>Ensures User and SSHKey are created atomically</li>
+</ul>
+<h3>Channel Creation (Private/DM)</h3>
+<pre><code class="language-sql">BEGIN TRANSACTION;
+  INSERT INTO Channel (name, is_private, ...) VALUES (...);
+  INSERT INTO ChannelAccess (channel_id, user_id, ...) VALUES (...);  -- for each participant
+COMMIT;
+</code></pre>
+<ul>
+<li>Ensures private channels always have access records</li>
+<li>Prevents orphaned channels</li>
+</ul>
+<h3>DM Setup with Encryption</h3>
+<pre><code class="language-sql">BEGIN TRANSACTION;
+  INSERT INTO Channel (name, is_private, ...) VALUES (...);
+  INSERT INTO ChannelAccess (channel_id, user_id, encryption_key, ...) VALUES (...);  -- participant 1
+  INSERT INTO ChannelAccess (channel_id, user_id, encryption_key, ...) VALUES (...);  -- participant 2
+COMMIT;
+</code></pre>
+<ul>
+<li>Ensures all participants have encrypted channel keys</li>
+<li>Atomic DM creation</li>
+</ul>
+<h3>Message Posting with Version History</h3>
+<pre><code class="language-sql">BEGIN TRANSACTION;
+  INSERT INTO Message (channel_id, content, author_nickname, ...) VALUES (...);
+  INSERT INTO MessageVersion (message_id, content, version_type, ...) VALUES (..., &#39;created&#39;);
+COMMIT;
+</code></pre>
+<ul>
+<li>Ensures message and initial version are created together</li>
+</ul>
+<h3>Message Editing with Version History</h3>
+<pre><code class="language-sql">BEGIN TRANSACTION;
+  UPDATE Message SET content = ?, edited_at = ? WHERE id = ?;
+  INSERT INTO MessageVersion (message_id, content, version_type, ...) VALUES (..., &#39;edited&#39;);
+COMMIT;
+</code></pre>
+<ul>
+<li>Preserves edit history atomically</li>
+</ul>
+<h3>Message Deletion (Soft)</h3>
+<pre><code class="language-sql">BEGIN TRANSACTION;
+  -- First, save original content to MessageVersion
+  INSERT INTO MessageVersion (message_id, content, version_type, ...)
+    SELECT id, content, &#39;deleted&#39;, ... FROM Message WHERE id = ?;
+
+  -- Then overwrite the message content (server never sends deleted content to clients)
+  UPDATE Message SET deleted_at = ?, content = &#39;[deleted]&#39; WHERE id = ?;
+COMMIT;
+</code></pre>
+<ul>
+<li>Saves original content to MessageVersion first (for moderation)</li>
+<li>Overwrites Message.content with &#39;[deleted]&#39; (server never sends deleted content to clients)</li>
+<li>Maintains thread structure (message record remains with deleted_at timestamp)</li>
+</ul>
+<h2>Foreign Key Cascade Behavior</h2>
+<pre><code class="language-sql">-- User deletion: preserve anonymous-like messages
+User.id -&gt; Message.author_user_id: SET NULL
+
+-- User deletion: preserve channels they created
+User.id -&gt; Channel.created_by: SET NULL
+
+-- User deletion: clean up sessions
+User.id -&gt; Session.user_id: CASCADE DELETE
+
+-- User deletion: remove their channel access
+User.id -&gt; ChannelAccess.user_id: CASCADE DELETE
+
+-- Channel deletion: remove all subchannels
+Channel.id -&gt; Subchannel.channel_id: CASCADE DELETE
+
+-- Channel deletion: remove all messages
+Channel.id -&gt; Message.channel_id: CASCADE DELETE
+
+-- Channel deletion: remove access records
+Channel.id -&gt; ChannelAccess.channel_id: CASCADE DELETE
+
+-- Message deletion: cascade to children (preserves thread structure via deleted_at soft-delete)
+Message.id -&gt; Message.parent_id: CASCADE DELETE
+
+-- Message deletion: remove version history
+Message.id -&gt; MessageVersion.message_id: CASCADE DELETE
+</code></pre>
+<p><strong>Important:</strong> Message soft-deletion (setting <code>deleted_at</code>) is the normal user-facing delete operation.
+Hard deletion (CASCADE DELETE) only occurs during retention policy cleanup, which removes the entire
+Message record and all associated MessageVersion records.</p>
+<h2>Notes on Implementation</h2>
+<ul>
+<li>Use SQLite for embedded database</li>
+<li>Store database in <code>~/.config/superchat/superchat.db</code> by default</li>
+<li>Allow custom path via config file</li>
+<li>Use foreign key constraints for referential integrity</li>
+<li>Use transactions for all multi-table operations (see Transaction Boundaries above)</li>
+<li>Consider VACUUM periodically after message deletion</li>
+</ul>
+<h3>Schema Migrations</h3>
+<ul>
+<li>Use a Go migration library for SQLite (e.g., <code>golang-migrate/migrate</code>, <code>pressly/goose</code>, or <code>rubenv/sql-migrate</code>)</li>
+<li>Store migration files in <code>server/migrations/</code> directory</li>
+<li>Track current schema version in database (migrations table)</li>
+<li>Run migrations automatically on server startup</li>
+<li>Support both up and down migrations for rollback capability</li>
+<li>Example migration naming: <code>001_initial_schema.sql</code>, <code>002_add_message_version.sql</code>, etc.</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

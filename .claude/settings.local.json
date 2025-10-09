@@ -15,7 +15,16 @@
       "Bash(awk:*)",
       "Read(//home/bart/.local/share/superchat/**)",
       "Bash(git reset:*)",
-      "Read(//Users/bart.riepe/.local/share/superchat/**)"
+      "Read(//Users/bart.riepe/.local/share/superchat/**)",
+      "Bash(git pull:*)",
+      "Bash(npm run build:docs:*)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)",
+      "Bash(node:*)",
+      "Bash(timeout:*)",
+      "Read(//home/bart/Projects/zod/**)",
+      "Bash(npm test:*)",
+      "Bash(bun:*)"
     ],
     "deny": [],
     "ask": []

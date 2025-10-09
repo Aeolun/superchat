@@ -16,7 +16,7 @@ export const twelveBitsTestSuite = defineTestSuite({
     },
     types: {
       "TwelveBitValue": {
-        fields: [
+        sequence: [
           { name: "value", type: "bit", size: 12 }
         ]
       }
@@ -80,7 +80,7 @@ export const twentyBitsTestSuite = defineTestSuite({
     },
     types: {
       "TwentyBitValue": {
-        fields: [
+        sequence: [
           { name: "value", type: "bit", size: 20 }
         ]
       }
@@ -129,7 +129,7 @@ export const twentyFourBitsTestSuite = defineTestSuite({
     },
     types: {
       "TwentyFourBitValue": {
-        fields: [
+        sequence: [
           { name: "value", type: "bit", size: 24 }
         ]
       }
@@ -193,7 +193,7 @@ export const fortyBitsTestSuite = defineTestSuite({
     },
     types: {
       "FortyBitValue": {
-        fields: [
+        sequence: [
           { name: "timestamp", type: "bit", size: 40 }
         ]
       }
@@ -237,7 +237,7 @@ export const fortyEightBitsTestSuite = defineTestSuite({
     },
     types: {
       "FortyEightBitValue": {
-        fields: [
+        sequence: [
           { name: "value", type: "bit", size: 48 }
         ]
       }
@@ -286,7 +286,7 @@ export const sixtyFourBitsTestSuite = defineTestSuite({
     },
     types: {
       "SixtyFourBitValue": {
-        fields: [
+        sequence: [
           { name: "value", type: "bit", size: 64 }
         ]
       }
@@ -334,7 +334,7 @@ export const unalignedTenBitsTestSuite = defineTestSuite({
     },
     types: {
       "UnalignedValue": {
-        fields: [
+        sequence: [
           { name: "header", type: "bit", size: 6 },
           { name: "value", type: "bit", size: 10 },
         ]

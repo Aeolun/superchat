@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat Backup and Recovery Guide - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat Backup and Recovery Guide</h1>
+<p>Complete guide for backing up and restoring SuperChat server data.</p>
+<h2>Table of Contents</h2>
+<ul>
+<li><a href="#what-to-backup">What to Backup</a></li>
+<li><a href="#database-backup-strategies">Database Backup Strategies</a></li>
+<li><a href="#automatic-migration-backups">Automatic Migration Backups</a></li>
+<li><a href="#backup-automation">Backup Automation</a></li>
+<li><a href="#off-site-backups">Off-Site Backups</a></li>
+<li><a href="#recovery-procedures">Recovery Procedures</a></li>
+<li><a href="#testing-backups">Testing Backups</a></li>
+<li><a href="#disaster-recovery-scenarios">Disaster Recovery Scenarios</a></li>
+</ul>
+<h2>What to Backup</h2>
+<h3>Critical Data (Must Backup)</h3>
+<p><strong>1. Database File</strong></p>
+<ul>
+<li><strong>Location:</strong> <code>~/.local/share/superchat/superchat.db</code> or <code>$XDG_DATA_HOME/superchat/superchat.db</code></li>
+<li><strong>Contains:</strong> All messages, users, channels, SSH keys, message history</li>
+<li><strong>Backup frequency:</strong> Daily (minimum), hourly (recommended for active servers)</li>
+<li><strong>Retention:</strong> 7-30 days minimum</li>
+</ul>
+<p><strong>2. SSH Host Key</strong></p>
+<ul>
+<li><strong>Location:</strong> <code>~/.superchat/ssh_host_key</code> or configured path</li>
+<li><strong>Contains:</strong> Server&#39;s SSH private key</li>
+<li><strong>Backup frequency:</strong> Once (after generation), then whenever rotated</li>
+<li><strong>Retention:</strong> Permanent (until rotated)</li>
+<li><strong>Critical:</strong> Losing this requires all SSH users to re-trust the server</li>
+</ul>
+<h3>Important Data (Should Backup)</h3>
+<p><strong>3. Configuration File</strong></p>
+<ul>
+<li><strong>Location:</strong> <code>~/.superchat/config.toml</code> or <code>/etc/superchat/config.toml</code></li>
+<li><strong>Contains:</strong> Server settings, rate limits, retention policy</li>
+<li><strong>Backup frequency:</strong> After changes</li>
+<li><strong>Retention:</strong> Keep historical versions for rollback</li>
+</ul>
+<p><strong>4. Log Files (Optional)</strong></p>
+<ul>
+<li><strong>Location:</strong> <code>~/.local/share/superchat/*.log</code></li>
+<li><strong>Contains:</strong> Server activity, errors, debug info</li>
+<li><strong>Backup frequency:</strong> Weekly (or use log rotation + archival)</li>
+<li><strong>Retention:</strong> 30-90 days for compliance/debugging</li>
+</ul>
+<h3>Backup Priority</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Priority</th>
+<th>Frequency</th>
+<th>Retention</th>
+<th>Size</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Database</td>
+<td><strong>Critical</strong></td>
+<td>Hourly</td>
+<td>30 days</td>
+<td>Varies (MB-GB)</td>
+</tr>
+<tr>
+<td>SSH Host Key</td>
+<td><strong>Critical</strong></td>
+<td>Once</td>
+<td>Permanent</td>
+<td>4KB</td>
+</tr>
+<tr>
+<td>Config File</td>
+<td>Important</td>
+<td>On change</td>
+<td>1 year</td>
+<td>1KB</td>
+</tr>
+<tr>
+<td>Log Files</td>
+<td>Optional</td>
+<td>Weekly</td>
+<td>90 days</td>
+<td>MB-GB</td>
+</tr>
+</tbody></table>
+<h2>Database Backup Strategies</h2>
+<h3>Hot Backup (Recommended)</h3>
+<p><strong>Hot backup</strong> = Backup while server is running.</p>
+<p><strong>Method 1: SQLite <code>.backup</code> command (Best)</strong></p>
+<pre><code class="language-bash">#!/bin/bash
+# hot-backup.sh - Hot backup using SQLite .backup command
+
+set -e
+
+DB_PATH=&quot;/var/lib/superchat/superchat.db&quot;
+BACKUP_DIR=&quot;/var/backups/superchat&quot;
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP_FILE=&quot;$BACKUP_DIR/superchat-$TIMESTAMP.db&quot;
+
+# Ensure backup directory exists
+mkdir -p &quot;$BACKUP_DIR&quot;
+
+# Perform hot backup using SQLite .backup
+sqlite3 &quot;$DB_PATH&quot; &quot;.backup &#39;$BACKUP_FILE&#39;&quot;
+
+# Verify backup integrity
+if sqlite3 &quot;$BACKUP_FILE&quot; &quot;PRAGMA integrity_check;&quot; | grep -q &quot;ok&quot;; then
+  echo &quot;Backup successful: $BACKUP_FILE&quot;
+
+  # Compress backup
+  gzip &quot;$BACKUP_FILE&quot;
+  echo &quot;Compressed: $BACKUP_FILE.gz&quot;
+else
+  echo &quot;ERROR: Backup verification failed!&quot;
+  rm -f &quot;$BACKUP_FILE&quot;
+  exit 1
+fi
+</code></pre>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Consistent backup (SQLite handles locking)</li>
+<li>Works while server is running</li>
+<li>No downtime required</li>
+</ul>
+<p><strong>Method 2: WAL checkpoint + file copy</strong></p>
+<pre><code class="language-bash">#!/bin/bash
+# wal-checkpoint-backup.sh
+
+set -e
+
+DB_PATH=&quot;/var/lib/superchat/superchat.db&quot;
+BACKUP_DIR=&quot;/var/backups/superchat&quot;
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+mkdir -p &quot;$BACKUP_DIR&quot;
+
+# Checkpoint WAL (merge WAL into main database)
+sqlite3 &quot;$DB_PATH&quot; &quot;PRAGMA wal_checkpoint(FULL);&quot;
+
+# Copy database file
+cp &quot;$DB_PATH&quot; &quot;$BACKUP_DIR/superchat-$TIMESTAMP.db&quot;
+
+# Verify
+sqlite3 &quot;$BACKUP_DIR/superchat-$TIMESTAMP.db&quot; &quot;PRAGMA integrity_check;&quot;
+
+# Compress
+gzip &quot;$BACKUP_DIR/superchat-$TIMESTAMP.db&quot;
+</code></pre>
+<p><strong>Note:</strong> This method may briefly block writes during checkpoint.</p>
+<h3>Cold Backup</h3>
+<p><strong>Cold backup</strong> = Backup while server is stopped.</p>
+<pre><code class="language-bash">#!/bin/bash
+# cold-backup.sh
+
+set -e
+
+DB_PATH=&quot;/var/lib/superchat/superchat.db&quot;
+BACKUP_DIR=&quot;/var/backups/superchat&quot;
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+# Stop server
+sudo systemctl stop superchat
+
+# Copy database
+cp &quot;$DB_PATH&quot; &quot;$BACKUP_DIR/superchat-$TIMESTAMP.db&quot;
+
+# Restart server
+sudo systemctl start superchat
+
+# Compress backup
+gzip &quot;$BACKUP_DIR/superchat-$TIMESTAMP.db&quot;
+</code></pre>
+<p><strong>Use case:</strong> Maintenance windows, low-traffic periods.</p>
+<h3>Incremental Backup (Advanced)</h3>
+<p><strong>Using WAL mode for incremental backups:</strong></p>
+<p>SQLite&#39;s WAL (Write-Ahead Log) mode allows incremental backups by backing up the WAL file.</p>
+<pre><code class="language-bash"># Main database backup (full)
+cp /var/lib/superchat/superchat.db /backups/superchat.db
+
+# Incremental: Backup WAL file
+cp /var/lib/superchat/superchat.db-wal /backups/superchat-$(date +%H%M).db-wal
+
+# To restore: Copy both main + WAL files, then checkpoint
+</code></pre>
+<p><strong>Note:</strong> SuperChat uses WAL mode by default.</p>
+<h2>Automatic Migration Backups</h2>
+<p>SuperChat <strong>automatically creates backups before applying migrations</strong>.</p>
+<h3>Backup Format</h3>
+<p><strong>Filename:</strong> <code>superchat.db.backup-v{version}-{timestamp}</code></p>
+<p><strong>Example:</strong> <code>superchat.db.backup-v1-20250108-143022</code></p>
+<p><strong>Location:</strong> Same directory as database file</p>
+<h3>How It Works</h3>
+<ol>
+<li>Server starts</li>
+<li>Checks for pending migrations</li>
+<li><strong>Before applying:</strong> Creates timestamped backup</li>
+<li>Applies migrations</li>
+<li>If migration fails: Backup remains for manual restoration</li>
+</ol>
+<h3>Example</h3>
+<pre><code>/var/lib/superchat/
+├── superchat.db                          # Current database (v3)
+├── superchat.db.backup-v1-20250101-120000  # Backup before v2 migration
+├── superchat.db.backup-v2-20250105-140000  # Backup before v3 migration
+└── superchat.db-wal                      # WAL file (if server running)
+</code></pre>
+<h3>Manual Cleanup</h3>
+<p>Migration backups persist indefinitely. Clean up old backups manually:</p>
+<pre><code class="language-bash"># List migration backups
+ls -lh /var/lib/superchat/*.backup-*
+
+# Delete backups older than 90 days
+find /var/lib/superchat -name &quot;*.backup-*&quot; -mtime +90 -delete
+</code></pre>
+<p><strong>Recommendation:</strong> Keep at least 2 most recent migration backups permanently (in case you need to rollback multiple versions).</p>
+<h2>Backup Automation</h2>
+<h3>Cron Job (Hourly Backups)</h3>
+<p>Create <code>/etc/cron.d/superchat-backup</code>:</p>
+<pre><code class="language-bash"># SuperChat hourly backup
+0 * * * * superchat /usr/local/bin/superchat-backup.sh &gt;&gt; /var/log/superchat-backup.log 2&gt;&amp;1
+</code></pre>
+<p><strong>Backup script</strong> (<code>/usr/local/bin/superchat-backup.sh</code>):</p>
+<pre><code class="language-bash">#!/bin/bash
+# superchat-backup.sh - Automated database backup with rotation
+
+set -e
+
+DB_PATH=&quot;/var/lib/superchat/superchat.db&quot;
+BACKUP_DIR=&quot;/var/backups/superchat&quot;
+RETENTION_DAYS=30
+
+# Ensure backup directory exists
+mkdir -p &quot;$BACKUP_DIR&quot;
+
+# Timestamp for backup file
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP_FILE=&quot;$BACKUP_DIR/superchat-$TIMESTAMP.db&quot;
+
+# Perform backup
+if sqlite3 &quot;$DB_PATH&quot; &quot;.backup &#39;$BACKUP_FILE&#39;&quot; 2&gt;&amp;1; then
+  # Verify backup
+  if sqlite3 &quot;$BACKUP_FILE&quot; &quot;PRAGMA integrity_check;&quot; | grep -q &quot;ok&quot;; then
+    # Compress
+    gzip &quot;$BACKUP_FILE&quot;
+    echo &quot;[$(date)] Backup successful: $BACKUP_FILE.gz&quot;
+
+    # Rotate old backups (delete files older than RETENTION_DAYS)
+    find &quot;$BACKUP_DIR&quot; -name &quot;superchat-*.db.gz&quot; -mtime +$RETENTION_DAYS -delete
+    echo &quot;[$(date)] Rotated backups (retention: $RETENTION_DAYS days)&quot;
+  else
+    echo &quot;[$(date)] ERROR: Backup verification failed!&quot;
+    rm -f &quot;$BACKUP_FILE&quot;
+    exit 1
+  fi
+else
+  echo &quot;[$(date)] ERROR: Backup command failed!&quot;
+  exit 1
+fi
+</code></pre>
+<p><strong>Make executable:</strong></p>
+<pre><code class="language-bash">sudo chmod +x /usr/local/bin/superchat-backup.sh
+</code></pre>
+<h3>systemd Timer (Alternative to Cron)</h3>
+<p><strong>Service file</strong> (<code>/etc/systemd/system/superchat-backup.service</code>):</p>
+<pre><code class="language-ini">[Unit]
+Description=SuperChat Database Backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=superchat
+ExecStart=/usr/local/bin/superchat-backup.sh
+StandardOutput=journal
+StandardError=journal
+</code></pre>
+<p><strong>Timer file</strong> (<code>/etc/systemd/system/superchat-backup.timer</code>):</p>
+<pre><code class="language-ini">[Unit]
+Description=SuperChat Backup Timer (Hourly)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+</code></pre>
+<p><strong>Enable timer:</strong></p>
+<pre><code class="language-bash">sudo systemctl daemon-reload
+sudo systemctl enable superchat-backup.timer
+sudo systemctl start superchat-backup.timer
+
+# Check timer status
+sudo systemctl list-timers | grep superchat-backup
+</code></pre>
+<h2>Off-Site Backups</h2>
+<p><strong>Critical:</strong> Always maintain off-site backups (separate from server).</p>
+<h3>rsync to Remote Server</h3>
+<pre><code class="language-bash">#!/bin/bash
+# offsite-sync.sh - Sync backups to remote server
+
+BACKUP_DIR=&quot;/var/backups/superchat&quot;
+REMOTE_USER=&quot;backup&quot;
+REMOTE_HOST=&quot;backup.example.com&quot;
+REMOTE_DIR=&quot;/backups/superchat&quot;
+
+# Sync backups via rsync over SSH
+rsync -avz --delete \
+  &quot;$BACKUP_DIR/&quot; \
+  &quot;$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/&quot;
+
+# Sync SSH host key (once per day is enough)
+if [ $(date +%H) -eq 03 ]; then
+  rsync -avz /var/lib/superchat/ssh_host_key \
+    &quot;$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/ssh_host_key.backup&quot;
+fi
+</code></pre>
+<p><strong>Run daily at 2 AM:</strong></p>
+<pre><code class="language-bash"># /etc/cron.d/superchat-offsite
+0 2 * * * superchat /usr/local/bin/offsite-sync.sh &gt;&gt; /var/log/offsite-sync.log 2&gt;&amp;1
+</code></pre>
+<h3>S3 / Object Storage</h3>
+<pre><code class="language-bash">#!/bin/bash
+# s3-backup.sh - Upload backups to S3
+
+BACKUP_DIR=&quot;/var/backups/superchat&quot;
+S3_BUCKET=&quot;s3://my-backups/superchat/&quot;
+
+# Upload all .gz files to S3
+aws s3 sync &quot;$BACKUP_DIR&quot; &quot;$S3_BUCKET&quot; \
+  --exclude &quot;*&quot; \
+  --include &quot;*.db.gz&quot; \
+  --storage-class STANDARD_IA
+
+# Upload SSH host key
+aws s3 cp /var/lib/superchat/ssh_host_key \
+  &quot;$S3_BUCKET/ssh_host_key.backup&quot;
+</code></pre>
+<p><strong>Prerequisites:</strong></p>
+<pre><code class="language-bash">sudo apt-get install awscli
+aws configure  # Set access key, secret, region
+</code></pre>
+<h3>Backup to External Drive</h3>
+<pre><code class="language-bash">#!/bin/bash
+# external-backup.sh - Copy to mounted external drive
+
+BACKUP_DIR=&quot;/var/backups/superchat&quot;
+EXTERNAL=&quot;/mnt/backup-drive/superchat&quot;
+
+# Check if external drive is mounted
+if mountpoint -q /mnt/backup-drive; then
+  # Copy backups
+  rsync -avz &quot;$BACKUP_DIR/&quot; &quot;$EXTERNAL/&quot;
+  echo &quot;[$(date)] External backup successful&quot;
+else
+  echo &quot;[$(date)] ERROR: External drive not mounted!&quot;
+  exit 1
+fi
+</code></pre>
+<h2>Recovery Procedures</h2>
+<h3>Scenario 1: Restore from Regular Backup</h3>
+<p><strong>When:</strong> Database corruption, accidental deletion, rolling back changes.</p>
+<p><strong>Steps:</strong></p>
+<pre><code class="language-bash"># 1. Stop server
+sudo systemctl stop superchat
+
+# 2. Move current database (don&#39;t delete yet!)
+sudo mv /var/lib/superchat/superchat.db /var/lib/superchat/superchat.db.corrupted
+
+# 3. Decompress backup
+sudo gunzip -c /var/backups/superchat/superchat-20250108-140000.db.gz &gt; /var/lib/superchat/superchat.db
+
+# 4. Verify integrity
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db &quot;PRAGMA integrity_check;&quot;
+# Should output: ok
+
+# 5. Set ownership
+sudo chown superchat:superchat /var/lib/superchat/superchat.db
+sudo chmod 640 /var/lib/superchat/superchat.db
+
+# 6. Start server
+sudo systemctl start superchat
+
+# 7. Verify server started
+sudo systemctl status superchat
+
+# 8. Test connection
+sc --server localhost:6465
+</code></pre>
+<p><strong>Data loss:</strong> Any messages posted between backup time and restore time are lost.</p>
+<h3>Scenario 2: Restore from Migration Backup</h3>
+<p><strong>When:</strong> Migration failed, need to rollback schema version.</p>
+<p><strong>Steps:</strong></p>
+<pre><code class="language-bash"># 1. Stop server
+sudo systemctl stop superchat
+
+# 2. List available migration backups
+ls -lh /var/lib/superchat/*.backup-*
+
+# Example output:
+# superchat.db.backup-v1-20250101-120000
+# superchat.db.backup-v2-20250105-140000
+
+# 3. Choose backup (e.g., v2 to rollback from v3)
+sudo cp /var/lib/superchat/superchat.db.backup-v2-20250105-140000 /var/lib/superchat/superchat.db
+
+# 4. Verify
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db &quot;PRAGMA integrity_check;&quot;
+
+# 5. Start server
+sudo systemctl start superchat
+</code></pre>
+<p><strong>Warning:</strong> Server will attempt to re-apply migrations on next startup. If the failed migration keeps failing, you&#39;ll need to fix the migration SQL or manually apply schema changes.</p>
+<h3>Scenario 3: Database Corruption Recovery</h3>
+<p><strong>When:</strong> <code>PRAGMA integrity_check</code> fails, SQLite reports corruption.</p>
+<p><strong>Option A: Restore from backup (preferred)</strong></p>
+<p>Follow &quot;Scenario 1: Restore from Regular Backup&quot; above.</p>
+<p><strong>Option B: SQLite .recover (last resort)</strong></p>
+<pre><code class="language-bash"># 1. Stop server
+sudo systemctl stop superchat
+
+# 2. Attempt to recover data
+sudo -u superchat sqlite3 /var/lib/superchat/superchat.db &quot;.recover&quot; | \
+  sudo -u superchat sqlite3 /var/lib/superchat/superchat-recovered.db
+
+# 3. Verify recovered database
+sudo -u superchat sqlite3 /var/lib/superchat/superchat-recovered.db &quot;PRAGMA integrity_check;&quot;
+
+# 4. If OK, replace corrupted database
+sudo mv /var/lib/superchat/superchat.db /var/lib/superchat/superchat.db.corrupted
+sudo mv /var/lib/superchat/superchat-recovered.db /var/lib/superchat/superchat.db
+
+# 5. Start server
+sudo systemctl start superchat
+</code></pre>
+<p><strong>Warning:</strong> <code>.recover</code> may lose data. Use backups instead if possible.</p>
+<h3>Scenario 4: Complete Server Failure</h3>
+<p><strong>When:</strong> Hardware failure, server loss, moving to new hardware.</p>
+<p><strong>Steps:</strong></p>
+<pre><code class="language-bash"># On new server:
+
+# 1. Install SuperChat
+curl -fsSL https://raw.githubusercontent.com/aeolun/superchat/main/install.sh | sudo sh -s -- --global
+
+# 2. Create directories
+sudo useradd -r -s /bin/false -d /var/lib/superchat superchat
+sudo mkdir -p /var/lib/superchat /etc/superchat
+sudo chown superchat:superchat /var/lib/superchat
+
+# 3. Restore configuration
+sudo cp /path/to/backup/config.toml /etc/superchat/config.toml
+sudo chown superchat:superchat /etc/superchat/config.toml
+sudo chmod 640 /etc/superchat/config.toml
+
+# 4. Restore SSH host key (CRITICAL!)
+sudo cp /path/to/backup/ssh_host_key /var/lib/superchat/ssh_host_key
+sudo chown superchat:superchat /var/lib/superchat/ssh_host_key
+sudo chmod 600 /var/lib/superchat/ssh_host_key
+
+# 5. Restore database
+sudo gunzip -c /path/to/backup/superchat-latest.db.gz &gt; /var/lib/superchat/superchat.db
+sudo chown superchat:superchat /var/lib/superchat/superchat.db
+sudo chmod 640 /var/lib/superchat/superchat.db
+
+# 6. Set up systemd service
+# (copy from DEPLOYMENT.md)
+
+# 7. Start server
+sudo systemctl start superchat
+
+# 8. Verify
+sudo systemctl status superchat
+sc --server localhost:6465
+</code></pre>
+<p><strong>RTO (Recovery Time Objective):</strong> ~15-30 minutes with good backups.</p>
+<p><strong>RPO (Recovery Point Objective):</strong> Last backup (1 hour with hourly backups).</p>
+<h2>Testing Backups</h2>
+<p><strong>Critical:</strong> Untested backups are not backups!</p>
+<h3>Monthly Restore Test</h3>
+<p><strong>Schedule:</strong> Run on first day of each month.</p>
+<pre><code class="language-bash">#!/bin/bash
+# test-restore.sh - Verify backup can be restored
+
+set -e
+
+BACKUP_FILE=$(ls -t /var/backups/superchat/*.db.gz | head -1)
+TEST_DB=&quot;/tmp/superchat-restore-test.db&quot;
+
+echo &quot;Testing restore of: $BACKUP_FILE&quot;
+
+# Decompress
+gunzip -c &quot;$BACKUP_FILE&quot; &gt; &quot;$TEST_DB&quot;
+
+# Verify integrity
+if sqlite3 &quot;$TEST_DB&quot; &quot;PRAGMA integrity_check;&quot; | grep -q &quot;ok&quot;; then
+  echo &quot;✓ Backup integrity OK&quot;
+else
+  echo &quot;✗ Backup integrity FAILED!&quot;
+  rm -f &quot;$TEST_DB&quot;
+  exit 1
+fi
+
+# Check schema version
+VERSION=$(sqlite3 &quot;$TEST_DB&quot; &quot;SELECT MAX(version) FROM schema_migrations;&quot;)
+echo &quot;✓ Schema version: $VERSION&quot;
+
+# Check record counts
+USERS=$(sqlite3 &quot;$TEST_DB&quot; &quot;SELECT COUNT(*) FROM User;&quot;)
+CHANNELS=$(sqlite3 &quot;$TEST_DB&quot; &quot;SELECT COUNT(*) FROM Channel;&quot;)
+MESSAGES=$(sqlite3 &quot;$TEST_DB&quot; &quot;SELECT COUNT(*) FROM Message;&quot;)
+
+echo &quot;✓ Users: $USERS&quot;
+echo &quot;✓ Channels: $CHANNELS&quot;
+echo &quot;✓ Messages: $MESSAGES&quot;
+
+# Cleanup
+rm -f &quot;$TEST_DB&quot;
+
+echo &quot;✓ Backup restore test PASSED&quot;
+</code></pre>
+<p><strong>Add to cron:</strong></p>
+<pre><code class="language-bash"># /etc/cron.d/superchat-restore-test
+0 3 1 * * root /usr/local/bin/test-restore.sh &gt;&gt; /var/log/restore-test.log 2&gt;&amp;1
+</code></pre>
+<h3>Quarterly Disaster Recovery Drill</h3>
+<p><strong>Full server rebuild test:</strong></p>
+<ol>
+<li>Provision new VM/container</li>
+<li>Restore from backup (follow &quot;Scenario 4: Complete Server Failure&quot;)</li>
+<li>Verify all functionality:<ul>
+<li>Client can connect</li>
+<li>Messages can be posted</li>
+<li>SSH authentication works</li>
+<li>User registration works</li>
+</ul>
+</li>
+<li>Document time taken (RTO)</li>
+<li>Document any issues encountered</li>
+</ol>
+<p><strong>Goal:</strong> Complete recovery in &lt; 30 minutes.</p>
+<h2>Disaster Recovery Scenarios</h2>
+<h3>Lost SSH Host Key</h3>
+<p><strong>Impact:</strong> All SSH clients see &quot;WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!&quot; error.</p>
+<p><strong>Recovery:</strong></p>
+<ol>
+<li><strong>If you have backup:</strong> Restore SSH host key from backup (see &quot;Scenario 4&quot;)</li>
+<li><strong>If no backup:</strong> Generate new key (users must re-trust server):</li>
+</ol>
+<pre><code class="language-bash">sudo ssh-keygen -t ed25519 -f /var/lib/superchat/ssh_host_key -N &quot;&quot;
+sudo chmod 600 /var/lib/superchat/ssh_host_key
+sudo chown superchat:superchat /var/lib/superchat/ssh_host_key
+sudo systemctl restart superchat
+
+# Notify users: They must run:
+# ssh-keygen -R chat.example.com:6466
+</code></pre>
+<p><strong>Prevention:</strong> Always backup SSH host key to off-site location.</p>
+<h3>Database Size Exceeds Disk Space</h3>
+<p><strong>Impact:</strong> Server can&#39;t write new messages, database may become corrupted.</p>
+<p><strong>Recovery:</strong></p>
+<ol>
+<li>Immediately stop writes:</li>
+</ol>
+<pre><code class="language-bash"># Emergency: Stop server to prevent corruption
+sudo systemctl stop superchat
+</code></pre>
+<ol start="2">
+<li>Free up space:</li>
+</ol>
+<pre><code class="language-bash"># Delete old migration backups
+sudo find /var/lib/superchat -name &quot;*.backup-*&quot; -mtime +30 -delete
+
+# Compress old log files
+sudo gzip /var/lib/superchat/*.log
+
+# Move backups to external storage
+sudo mv /var/backups/superchat/*.db.gz /mnt/external/
+</code></pre>
+<ol start="3">
+<li>Reduce retention (if appropriate):</li>
+</ol>
+<pre><code class="language-toml"># /etc/superchat/config.toml
+[retention]
+default_retention_hours = 72  # Reduce from 168 (7 days) to 72 (3 days)
+</code></pre>
+<ol start="4">
+<li>Restart server and run cleanup:</li>
+</ol>
+<pre><code class="language-bash">sudo systemctl start superchat
+# Wait for retention cleanup to run (every 60 minutes by default)
+</code></pre>
+<p><strong>Prevention:</strong> Monitor disk usage, set up alerts at 80% full.</p>
+<h3>All Backups Corrupted/Lost</h3>
+<p><strong>Impact:</strong> Cannot restore from backup.</p>
+<p><strong>Recovery:</strong></p>
+<ol>
+<li>Attempt SQLite .recover (see &quot;Scenario 3: Database Corruption Recovery&quot;)</li>
+<li>Check for WAL file (<code>superchat.db-wal</code>):</li>
+</ol>
+<pre><code class="language-bash"># If WAL exists, checkpoint it
+sqlite3 /var/lib/superchat/superchat.db &quot;PRAGMA wal_checkpoint(FULL);&quot;
+</code></pre>
+<ol start="3">
+<li>Check for migration backups (automatic backups before migrations)</li>
+<li>Last resort: Start fresh database (data loss)</li>
+</ol>
+<p><strong>Prevention:</strong></p>
+<ul>
+<li>Multiple backup locations (local + off-site)</li>
+<li>Test backups monthly</li>
+<li>Monitor backup success/failure</li>
+</ul>
+<h2>Next Steps</h2>
+<ul>
+<li><a href="DEPLOYMENT.md">DEPLOYMENT.md</a> - Server deployment guide</li>
+<li><a href="CONFIGURATION.md">CONFIGURATION.md</a> - Configuration reference</li>
+<li><a href="SECURITY.md">SECURITY.md</a> - Security hardening</li>
+<li><a href="MONITORING.md">MONITORING.md</a> - Monitoring and observability</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

@@ -15,7 +15,7 @@ export const fixedArrayTestSuite = defineTestSuite({
     },
     types: {
       "FixedByteArray": {
-        fields: [
+        sequence: [
           {
             name: "data",
             type: "array",
@@ -64,7 +64,7 @@ export const lengthPrefixedArrayTestSuite = defineTestSuite({
     },
     types: {
       "ByteArray": {
-        fields: [
+        sequence: [
           {
             name: "data",
             type: "array",
@@ -113,7 +113,7 @@ export const lengthPrefixedUint16ArrayTestSuite = defineTestSuite({
     },
     types: {
       "Uint16Array": {
-        fields: [
+        sequence: [
           {
             name: "values",
             type: "array",
@@ -161,7 +161,7 @@ export const nullTerminatedArrayTestSuite = defineTestSuite({
     },
     types: {
       "CString": {
-        fields: [
+        sequence: [
           {
             name: "chars",
             type: "array",

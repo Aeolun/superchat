@@ -15,13 +15,13 @@ export const nestedStructTestSuite = defineTestSuite({
     },
     types: {
       "Point": {
-        fields: [
+        sequence: [
           { name: "x", type: "uint16" },
           { name: "y", type: "uint16" },
         ]
       },
       "Rectangle": {
-        fields: [
+        sequence: [
           { name: "top_left", type: "Point" },     // Type reference
           { name: "bottom_right", type: "Point" }, // Type reference
         ]
@@ -76,14 +76,14 @@ export const deeplyNestedStructTestSuite = defineTestSuite({
     },
     types: {
       "Color": {
-        fields: [
+        sequence: [
           { name: "r", type: "uint8" },
           { name: "g", type: "uint8" },
           { name: "b", type: "uint8" },
         ]
       },
       "Pixel": {
-        fields: [
+        sequence: [
           { name: "x", type: "uint16" },
           { name: "y", type: "uint16" },
           { name: "color", type: "Color" },

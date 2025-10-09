@@ -15,7 +15,7 @@ export const simpleStructTestSuite = defineTestSuite({
     },
     types: {
       "Point": {
-        fields: [
+        sequence: [
           { name: "x", type: "uint16" },
           { name: "y", type: "uint16" },
         ]
@@ -59,7 +59,7 @@ export const mixedFieldsStructTestSuite = defineTestSuite({
     },
     types: {
       "Header": {
-        fields: [
+        sequence: [
           { name: "version", type: "uint8" },
           { name: "flags", type: "uint8" },
           { name: "length", type: "uint32" },

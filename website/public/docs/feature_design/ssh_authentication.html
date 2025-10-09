@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH Key Authentication Implementation Plan - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SSH Key Authentication Implementation Plan</h1>
+<p><strong>Status:</strong> ✅ MOSTLY COMPLETE - This is a historical design document</p>
+<p><strong>Implementation:</strong> SSH authentication is fully implemented with only minor TODOs:</p>
+<ul>
+<li>✅ All 8 implementation phases complete (see SSH_IMPLEMENTATION_STATUS.md for phase details)</li>
+<li>✅ Database schema (migration 005_add_ssh_keys.sql)</li>
+<li>✅ Server-side authentication with auto-registration</li>
+<li>✅ SSH key management UI (add/list/delete/rename)</li>
+<li>⚠️ Minor TODOs remaining:<ul>
+<li>Auto-registration rate limiting (placeholder implementation at <code>pkg/server/ssh.go:457</code>)</li>
+<li>Encrypted key passphrase support for direct disk loading (SSH agent already handles this)</li>
+</ul>
+</li>
+</ul>
+<p><strong>See:</strong> <code>docs/versions/V2.md</code> for V2 feature summary</p>
+<hr>
+<h2>Overview (Historical)</h2>
+<p>This document outlines the complete implementation plan for SSH key authentication in SuperChat V2.</p>
+<hr>
+<h2>Implementation Status (Historical Reference)</h2>
+<p>✅ <strong>What&#39;s Working:</strong></p>
+<ul>
+<li>SSH server infrastructure fully built (<code>pkg/server/ssh.go</code>)</li>
+<li>Host key generation and loading</li>
+<li>Binary protocol over SSH channels (same as TCP)</li>
+<li>Session management for SSH connections</li>
+</ul>
+<p>❌ <strong>What&#39;s Missing:</strong></p>
+<ul>
+<li>Line 38 in <code>ssh.go</code>: <code>NoClientAuth: true</code> - currently allows anonymous connections</li>
+<li>No SSHKey table to store user public keys</li>
+<li>No auto-registration flow</li>
+<li>No client-side SSH key management UI</li>
+<li>No password change functionality (needed for SSH-registered users)</li>
+<li>No server directory/discovery system</li>
+</ul>
+<hr>
+<h2>Architecture Overview</h2>
+<pre><code>┌─────────────┐                    ┌──────────────┐
+│   Client    │──── SSH + Key ───▶ │    Server    │
+│   (ssh)     │                    │  Port 2222   │
+└─────────────┘                    └──────┬───────┘
+                                          │
+                                          ▼
+                                   ┌──────────────┐
+                                   │ SSHKey Table │
+                                   │ - fingerprint│
+                                   │ - public_key │
+                                   │ - user_id    │
+                                   └──────────────┘
+</code></pre>
+<hr>
+<h2>Implementation Phases</h2>
+<h3>Phase 1: Database Schema (Migration 004)</h3>
+<p><strong>File:</strong> <code>pkg/database/migrations/004_add_ssh_keys.sql</code></p>
+<pre><code class="language-sql">-- @foreign_keys=on
+
+CREATE TABLE IF NOT EXISTS SSHKey (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  fingerprint TEXT UNIQUE NOT NULL,     -- SHA256:base64 format
+  public_key TEXT NOT NULL,              -- Actual SSH public key (authorized_keys format)
+  key_type TEXT NOT NULL,                -- &#39;ssh-rsa&#39;, &#39;ssh-ed25519&#39;, &#39;ecdsa-sha2-nistp256&#39;
+  label TEXT,                            -- User-friendly name (e.g., &quot;laptop&quot;, &quot;work&quot;)
+  added_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_fingerprint ON SSHKey(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_ssh_user ON SSHKey(user_id);
+</code></pre>
+<p><strong>Add to <code>pkg/database/database.go</code>:</strong></p>
+<pre><code class="language-go">type SSHKey struct {
+    ID          uint64
+    UserID      uint64
+    Fingerprint string // SHA256:base64 format
+    PublicKey   string // Full authorized_keys format
+    KeyType     string // ssh-rsa, ssh-ed25519, etc.
+    Label       string // Optional user-friendly name
+    AddedAt     int64
+    LastUsedAt  *int64
+}
+
+// SSHKey CRUD operations
+func (db *Database) CreateSSHKey(key *SSHKey) error
+func (db *Database) GetSSHKeyByFingerprint(fingerprint string) (*SSHKey, error)
+func (db *Database) GetSSHKeysByUserID(userID uint64) ([]SSHKey, error)
+func (db *Database) DeleteSSHKey(keyID uint64, userID uint64) error
+func (db *Database) UpdateSSHKeyLastUsed(fingerprint string) error
+func (db *Database) UpdateSSHKeyLabel(keyID uint64, userID uint64, label string) error
+</code></pre>
+<p><strong>Migration test requirements:</strong></p>
+<ul>
+<li>Test schema creation</li>
+<li>Test FK constraint (delete user → cascade delete keys)</li>
+<li>Test unique fingerprint constraint</li>
+<li>Test indexes</li>
+</ul>
+<hr>
+<h3>Phase 2: Password Management</h3>
+<p>Before implementing SSH auth, we need password change functionality for SSH-registered users.</p>
+<p><strong>New Protocol Messages:</strong></p>
+<p><strong>CHANGE_PASSWORD (0x0E) - Client → Server</strong></p>
+<pre><code>[old_password: string]  // Empty for SSH-registered users changing for first time
+[new_password: string]
+</code></pre>
+<p><strong>PASSWORD_CHANGED (0x8E) - Server → Client</strong></p>
+<pre><code>[success: bool]
+[error_message: string] (if failure)
+</code></pre>
+<p><strong>Add to <code>pkg/server/handlers.go</code>:</strong></p>
+<pre><code class="language-go">func (s *Server) handleChangePassword(sess *Session, payload []byte) error {
+    // Parse request
+    oldPassword, newPassword := parseChangePasswordRequest(payload)
+
+    // Must be authenticated
+    if sess.UserID == nil {
+        return s.sendError(sess, 1003, &quot;Must be authenticated to change password&quot;)
+    }
+
+    // Get user
+    user, err := s.db.GetUserByID(*sess.UserID)
+    if err != nil {
+        return s.sendError(sess, 9000, &quot;User not found&quot;)
+    }
+
+    // Verify old password (skip if user has SSH-generated password and this is first change)
+    if user.PasswordHash != &quot;&quot; {
+        if !verifyPassword(user.PasswordHash, oldPassword) {
+            return s.sendError(sess, 1004, &quot;Incorrect password&quot;)
+        }
+    }
+
+    // Validate new password (min 8 chars, etc.)
+    if len(newPassword) &lt; 8 {
+        return s.sendError(sess, 1005, &quot;Password must be at least 8 characters&quot;)
+    }
+
+    // Update password
+    newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+    if err != nil {
+        return s.sendError(sess, 9000, &quot;Failed to hash password&quot;)
+    }
+
+    if err := s.db.UpdateUserPassword(*sess.UserID, string(newHash)); err != nil {
+        return s.sendError(sess, 9000, &quot;Failed to update password&quot;)
+    }
+
+    // Send success
+    return s.sendPasswordChanged(sess, true, &quot;&quot;)
+}
+</code></pre>
+<p><strong>Client UI:</strong></p>
+<ul>
+<li>Add <code>[Ctrl+P] Change Password</code> to authenticated user commands</li>
+<li>Modal with old password + new password + confirm fields</li>
+<li>Skip old password field if user was SSH-registered (check via flag or empty initial password)</li>
+</ul>
+<hr>
+<h3>Phase 3: Server-Side SSH Authentication</h3>
+<p><strong>Update <code>pkg/server/ssh.go</code> line 36-39:</strong></p>
+<pre><code class="language-go">// Configure SSH server with public key authentication
+config := &amp;ssh.ServerConfig{
+    PublicKeyCallback: s.authenticateSSHKey,
+    ServerVersion:     &quot;SSH-2.0-SuperChat&quot;,
+}
+config.AddHostKey(hostKey)
+</code></pre>
+<p><strong>Add authentication method:</strong></p>
+<pre><code class="language-go">// authenticateSSHKey validates SSH public keys and auto-registers new users
+func (s *Server) authenticateSSHKey(conn ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+    // Compute fingerprint (SHA256 format like OpenSSH)
+    fingerprint := ssh.FingerprintSHA256(pubKey)
+
+    // Look up key in database
+    sshKey, err := s.db.GetSSHKeyByFingerprint(fingerprint)
+    if err == nil {
+        // Known key - authenticate as existing user
+        user, err := s.db.GetUserByID(sshKey.UserID)
+        if err != nil {
+            return nil, fmt.Errorf(&quot;user not found for SSH key&quot;)
+        }
+
+        // Update last used timestamp
+        s.db.UpdateSSHKeyLastUsed(fingerprint)
+
+        log.Printf(&quot;SSH auth: user %s (fingerprint: %s)&quot;, user.Nickname, fingerprint)
+
+        // Return permissions with user info
+        return &amp;ssh.Permissions{
+            Extensions: map[string]string{
+                &quot;user_id&quot;:   fmt.Sprintf(&quot;%d&quot;, user.ID),
+                &quot;nickname&quot;:  user.Nickname,
+                &quot;pubkey_fp&quot;: fingerprint,
+            },
+        }, nil
+    }
+
+    // Unknown key - auto-register new user
+    username := conn.User() // From ssh username@host
+    if username == &quot;&quot; {
+        username = &quot;user&quot; // Fallback
+    }
+
+    // Check rate limiting (max 10 auto-registers per hour from same IP)
+    if !s.checkAutoRegisterRateLimit(conn.RemoteAddr()) {
+        return nil, fmt.Errorf(&quot;auto-registration rate limit exceeded&quot;)
+    }
+
+    // Create new user with random password (user can change later)
+    randomPassword := generateSecureRandomPassword(32)
+    user, err := s.db.CreateUser(username, randomPassword, 0)
+    if err != nil {
+        return nil, fmt.Errorf(&quot;failed to auto-register user: %w&quot;, err)
+    }
+
+    // Store SSH key
+    sshKey := &amp;database.SSHKey{
+        UserID:      user.ID,
+        Fingerprint: fingerprint,
+        PublicKey:   string(ssh.MarshalAuthorizedKey(pubKey)),
+        KeyType:     pubKey.Type(),
+        Label:       &quot;Auto-registered&quot;,
+        AddedAt:     time.Now().UnixMilli(),
+    }
+    if err := s.db.CreateSSHKey(sshKey); err != nil {
+        // Rollback user creation
+        s.db.DeleteUser(user.ID)
+        return nil, fmt.Errorf(&quot;failed to store SSH key: %w&quot;, err)
+    }
+
+    log.Printf(&quot;Auto-registered new user %s via SSH (fingerprint: %s)&quot;, username, fingerprint)
+
+    return &amp;ssh.Permissions{
+        Extensions: map[string]string{
+            &quot;user_id&quot;:   fmt.Sprintf(&quot;%d&quot;, user.ID),
+            &quot;nickname&quot;:  user.Nickname,
+            &quot;pubkey_fp&quot;: fingerprint,
+        },
+    }, nil
+}
+
+func generateSecureRandomPassword(length int) string {
+    const charset = &quot;abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&amp;*&quot;
+    b := make([]byte, length)
+    if _, err := rand.Read(b); err != nil {
+        panic(err)
+    }
+    for i := range b {
+        b[i] = charset[int(b[i])%len(charset)]
+    }
+    return string(b)
+}
+
+func (s *Server) checkAutoRegisterRateLimit(addr net.Addr) bool {
+    // TODO: Implement rate limiting (in-memory map with cleanup goroutine)
+    // Track: IP → [timestamp, timestamp, ...] (last 10 registrations)
+    // Allow if &lt; 10 registrations in last hour
+    return true // For now
+}
+</code></pre>
+<p><strong>Update <code>handleSSHConnection</code> to pass permissions:</strong></p>
+<pre><code class="language-go">func (s *Server) handleSSHConnection(conn net.Conn, config *ssh.ServerConfig) {
+    // ... existing handshake code ...
+
+    // Handle incoming channels with permissions
+    for newChannel := range chans {
+        if newChannel.ChannelType() != &quot;session&quot; {
+            newChannel.Reject(ssh.UnknownChannelType, &quot;unknown channel type&quot;)
+            continue
+        }
+
+        channel, requests, err := newChannel.Accept()
+        if err != nil {
+            log.Printf(&quot;Could not accept channel: %v&quot;, err)
+            continue
+        }
+
+        s.wg.Add(1)
+        go func() {
+            defer s.wg.Done()
+            go s.handleSSHChannelRequests(requests)
+            // Pass permissions to session handler
+            s.handleSSHSession(channel, sshConn.Permissions)
+        }()
+    }
+}
+</code></pre>
+<p><strong>Update <code>handleSSHSession</code>:</strong></p>
+<pre><code class="language-go">func (s *Server) handleSSHSession(channel ssh.Channel, permissions *ssh.Permissions) {
+    defer channel.Close()
+
+    conn := &amp;sshChannelConn{channel: channel}
+
+    // Extract authenticated user info from SSH permissions
+    var userID *uint64
+    var nickname string
+    if permissions != nil {
+        if uidStr := permissions.Extensions[&quot;user_id&quot;]; uidStr != &quot;&quot; {
+            uid, _ := strconv.ParseUint(uidStr, 10, 64)
+            userID = &amp;uid
+        }
+        nickname = permissions.Extensions[&quot;nickname&quot;]
+    }
+
+    // Create authenticated session
+    sess, err := s.sessions.CreateSession(userID, nickname, &quot;ssh&quot;, conn)
+    if err != nil {
+        log.Printf(&quot;Failed to create SSH session: %v&quot;, err)
+        return
+    }
+    defer s.sessions.RemoveSession(sess.ID)
+
+    s.connectionsSinceReport.Add(1)
+    debugLog.Printf(&quot;New SSH connection: user=%s (session %d)&quot;, nickname, sess.ID)
+
+    // Send SERVER_CONFIG
+    if err := s.sendServerConfig(sess); err != nil {
+        return
+    }
+
+    // Automatically send AUTH_RESPONSE for SSH-authenticated users
+    if userID != nil {
+        user, _ := s.db.GetUserByID(*userID)
+        s.sendAuthResponse(sess, true, *userID, nickname, user.UserFlags)
+    }
+
+    // ... existing message loop ...
+}
+</code></pre>
+<hr>
+<h3>Phase 4: SSH Key Management Protocol Messages</h3>
+<p><strong>ADD_SSH_KEY (0x0C) - Client → Server</strong></p>
+<pre><code>[public_key: string]  // Full SSH public key (authorized_keys format)
+[label: string]       // User-friendly label (optional, can be empty)
+</code></pre>
+<p><strong>SSH_KEY_ADDED (0x8C) - Server → Client</strong></p>
+<pre><code>[success: bool]
+[fingerprint: string] (if success - so client can display it)
+[error_message: string] (if failure)
+</code></pre>
+<p><strong>LIST_SSH_KEYS (0x16) - Client → Server</strong></p>
+<pre><code>(no payload - lists current user&#39;s keys)
+</code></pre>
+<p><strong>SSH_KEY_LIST (0x98) - Server → Client</strong></p>
+<pre><code>[count: uint32]
+For each key:
+  [key_id: uint64]
+  [fingerprint: string]
+  [key_type: string]
+  [label: string]
+  [added_at: timestamp]
+  [last_used_at: optional timestamp]
+</code></pre>
+<p><strong>UPDATE_SSH_KEY_LABEL (0x0F) - Client → Server</strong></p>
+<pre><code>[key_id: uint64]
+[new_label: string]
+</code></pre>
+<p><strong>SSH_KEY_LABEL_UPDATED (0x8F) - Server → Client</strong></p>
+<pre><code>[success: bool]
+[error_message: string] (if failure)
+</code></pre>
+<p><strong>DELETE_SSH_KEY (0x0D) - Client → Server</strong></p>
+<pre><code>[key_id: uint64]
+</code></pre>
+<p><strong>SSH_KEY_DELETED (0x8D) - Server → Client</strong></p>
+<pre><code>[success: bool]
+[error_message: string] (if failure)
+</code></pre>
+<p><strong>Add handlers to <code>pkg/server/handlers.go</code>:</strong></p>
+<pre><code class="language-go">func (s *Server) handleAddSSHKey(sess *Session, payload []byte) error {
+    // Must be authenticated
+    if sess.UserID == nil {
+        return s.sendError(sess, 1003, &quot;Must be authenticated to add SSH keys&quot;)
+    }
+
+    // Parse public key
+    publicKey, label := parseAddSSHKeyRequest(payload)
+
+    // Parse and validate SSH public key format
+    parsedKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(publicKey))
+    if err != nil {
+        return s.sendSSHKeyAdded(sess, false, &quot;&quot;, &quot;Invalid SSH public key format&quot;)
+    }
+
+    // Compute fingerprint
+    fingerprint := ssh.FingerprintSHA256(parsedKey)
+
+    // Check if key already exists
+    existing, _ := s.db.GetSSHKeyByFingerprint(fingerprint)
+    if existing != nil {
+        if existing.UserID == *sess.UserID {
+            return s.sendSSHKeyAdded(sess, false, &quot;&quot;, &quot;You already added this key&quot;)
+        }
+        return s.sendSSHKeyAdded(sess, false, &quot;&quot;, &quot;This key is already registered to another user&quot;)
+    }
+
+    // Store key
+    sshKey := &amp;database.SSHKey{
+        UserID:      *sess.UserID,
+        Fingerprint: fingerprint,
+        PublicKey:   publicKey,
+        KeyType:     parsedKey.Type(),
+        Label:       label,
+        AddedAt:     time.Now().UnixMilli(),
+    }
+
+    if err := s.db.CreateSSHKey(sshKey); err != nil {
+        return s.sendSSHKeyAdded(sess, false, &quot;&quot;, &quot;Failed to store key&quot;)
+    }
+
+    log.Printf(&quot;User %s added SSH key: %s&quot;, sess.Nickname, fingerprint)
+    return s.sendSSHKeyAdded(sess, true, fingerprint, &quot;&quot;)
+}
+
+func (s *Server) handleListSSHKeys(sess *Session, payload []byte) error {
+    if sess.UserID == nil {
+        return s.sendError(sess, 1003, &quot;Must be authenticated&quot;)
+    }
+
+    keys, err := s.db.GetSSHKeysByUserID(*sess.UserID)
+    if err != nil {
+        return s.sendError(sess, 9000, &quot;Failed to fetch keys&quot;)
+    }
+
+    return s.sendSSHKeyList(sess, keys)
+}
+
+func (s *Server) handleUpdateSSHKeyLabel(sess *Session, payload []byte) error {
+    if sess.UserID == nil {
+        return s.sendError(sess, 1003, &quot;Must be authenticated&quot;)
+    }
+
+    keyID, newLabel := parseUpdateSSHKeyLabelRequest(payload)
+
+    if err := s.db.UpdateSSHKeyLabel(keyID, *sess.UserID, newLabel); err != nil {
+        return s.sendSSHKeyLabelUpdated(sess, false, &quot;Failed to update label&quot;)
+    }
+
+    return s.sendSSHKeyLabelUpdated(sess, true, &quot;&quot;)
+}
+
+func (s *Server) handleDeleteSSHKey(sess *Session, payload []byte) error {
+    if sess.UserID == nil {
+        return s.sendError(sess, 1003, &quot;Must be authenticated&quot;)
+    }
+
+    keyID := parseDeleteSSHKeyRequest(payload)
+
+    // Check if user has other keys or a password
+    keys, _ := s.db.GetSSHKeysByUserID(*sess.UserID)
+    user, _ := s.db.GetUserByID(*sess.UserID)
+
+    if len(keys) == 1 &amp;&amp; user.PasswordHash == &quot;&quot; {
+        return s.sendSSHKeyDeleted(sess, false, &quot;Cannot delete last SSH key without setting a password first&quot;)
+    }
+
+    if err := s.db.DeleteSSHKey(keyID, *sess.UserID); err != nil {
+        return s.sendSSHKeyDeleted(sess, false, &quot;Failed to delete key&quot;)
+    }
+
+    return s.sendSSHKeyDeleted(sess, true, &quot;&quot;)
+}
+</code></pre>
+<hr>
+<h3>Phase 5: Client-Side SSH Connection</h3>
+<p><strong>Update <code>pkg/client/connection.go</code>:</strong></p>
+<pre><code class="language-go">type ConnectionType int
+
+const (
+    ConnectionTCP ConnectionType = iota
+    ConnectionSSH
+)
+
+func Connect(address string, port int, connType ConnectionType) (net.Conn, error) {
+    switch connType {
+    case ConnectionSSH:
+        return ConnectSSH(address, port)
+    case ConnectionTCP:
+        return ConnectTCP(address, port)
+    default:
+        return nil, fmt.Errorf(&quot;unknown connection type&quot;)
+    }
+}
+
+func ConnectSSH(address string, port int) (net.Conn, error) {
+    // Find SSH keys in standard locations
+    homeDir, _ := os.UserHomeDir()
+    keyPaths := []string{
+        filepath.Join(homeDir, &quot;.ssh&quot;, &quot;id_ed25519&quot;),
+        filepath.Join(homeDir, &quot;.ssh&quot;, &quot;id_rsa&quot;),
+        filepath.Join(homeDir, &quot;.ssh&quot;, &quot;id_ecdsa&quot;),
+    }
+
+    var signers []ssh.Signer
+    for _, keyPath := range keyPaths {
+        if key, err := loadPrivateKey(keyPath); err == nil {
+            signers = append(signers, key)
+        }
+    }
+
+    if len(signers) == 0 {
+        return nil, fmt.Errorf(&quot;no SSH keys found in ~/.ssh/&quot;)
+    }
+
+    config := &amp;ssh.ClientConfig{
+        User: os.Getenv(&quot;USER&quot;), // Unix username
+        Auth: []ssh.AuthMethod{
+            ssh.PublicKeys(signers...),
+        },
+        HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: TOFU (Trust On First Use)
+        Timeout:         10 * time.Second,
+    }
+
+    addr := fmt.Sprintf(&quot;%s:%d&quot;, address, port)
+    client, err := ssh.Dial(&quot;tcp&quot;, addr, config)
+    if err != nil {
+        return nil, fmt.Errorf(&quot;SSH dial failed: %w&quot;, err)
+    }
+
+    // Open a session channel
+    session, err := client.NewSession()
+    if err != nil {
+        client.Close()
+        return nil, fmt.Errorf(&quot;failed to create SSH session: %w&quot;, err)
+    }
+
+    // Get stdin/stdout pipes
+    stdin, err := session.StdinPipe()
+    if err != nil {
+        session.Close()
+        client.Close()
+        return nil, err
+    }
+
+    stdout, err := session.StdoutPipe()
+    if err != nil {
+        session.Close()
+        client.Close()
+        return nil, err
+    }
+
+    // Start shell (server expects this)
+    if err := session.Shell(); err != nil {
+        session.Close()
+        client.Close()
+        return nil, err
+    }
+
+    // Return a connection wrapper
+    return &amp;sshConnection{
+        client:  client,
+        session: session,
+        stdin:   stdin,
+        stdout:  stdout,
+    }, nil
+}
+
+func loadPrivateKey(path string) (ssh.Signer, error) {
+    keyBytes, err := os.ReadFile(path)
+    if err != nil {
+        return nil, err
+    }
+
+    // Try without passphrase first
+    signer, err := ssh.ParsePrivateKey(keyBytes)
+    if err == nil {
+        return signer, nil
+    }
+
+    // TODO: Prompt for passphrase if key is encrypted
+    return nil, fmt.Errorf(&quot;encrypted keys not yet supported&quot;)
+}
+
+type sshConnection struct {
+    client  *ssh.Client
+    session *ssh.Session
+    stdin   io.WriteCloser
+    stdout  io.Reader
+}
+
+func (c *sshConnection) Read(b []byte) (int, error) {
+    return c.stdout.Read(b)
+}
+
+func (c *sshConnection) Write(b []byte) (int, error) {
+    return c.stdin.Write(b)
+}
+
+func (c *sshConnection) Close() error {
+    c.session.Close()
+    return c.client.Close()
+}
+
+// Implement remaining net.Conn methods...
+</code></pre>
+<hr>
+<h3>Phase 6: Client UI - SSH Key Manager Modal</h3>
+<p><strong>File:</strong> <code>pkg/client/ui/modal/ssh_key_manager.go</code></p>
+<pre><code class="language-go">type SSHKeyManagerModal struct {
+    keys       []SSHKeyInfo
+    cursor     int
+    width      int
+    height     int
+    showAddKey bool
+    newKeyPath string
+    newKeyLabel string
+}
+
+type SSHKeyInfo struct {
+    ID          uint64
+    Fingerprint string
+    KeyType     string
+    Label       string
+    AddedAt     time.Time
+    LastUsedAt  *time.Time
+}
+
+func (m *SSHKeyManagerModal) Render(width, height int) string {
+    if m.showAddKey {
+        return m.renderAddKeyForm(width, height)
+    }
+    return m.renderKeyList(width, height)
+}
+
+func (m *SSHKeyManagerModal) renderKeyList(width, height int) string {
+    // Title: &quot;SSH Keys&quot;
+    // List of keys with:
+    //   - Fingerprint (truncated)
+    //   - Label
+    //   - Last used
+    // Actions:
+    //   [a] Add new key
+    //   [r] Rename label
+    //   [d] Delete key
+    //   [Esc] Close
+}
+
+func (m *SSHKeyManagerModal) renderAddKeyForm(width, height int) string {
+    // File picker for ~/.ssh/*.pub files
+    // OR text input for pasting public key
+    // Label input field
+    // [Enter] Add, [Esc] Cancel
+}
+
+func (m *SSHKeyManagerModal) Update(msg tea.Msg) (Modal, tea.Cmd) {
+    switch msg := msg.(type) {
+    case tea.KeyMsg:
+        if m.showAddKey {
+            // Handle add key form
+        } else {
+            switch msg.String() {
+            case &quot;a&quot;:
+                m.showAddKey = true
+            case &quot;d&quot;:
+                // Confirm and send DELETE_SSH_KEY
+            case &quot;r&quot;:
+                // Prompt for new label, send UPDATE_SSH_KEY_LABEL
+            }
+        }
+    }
+    return m, nil
+}
+</code></pre>
+<p><strong>Add to command registry:</strong></p>
+<ul>
+<li><code>[Ctrl+K]</code> Open SSH Key Manager (when authenticated)</li>
+</ul>
+<hr>
+<h3>Phase 7: Connection Flow &amp; Server Discovery</h3>
+<p><strong>Current behavior:</strong> Client connects to default server or <code>--server</code> flag</p>
+<p><strong>New behavior:</strong></p>
+<ol>
+<li><p><strong>Server URL Formats:</strong></p>
+<ul>
+<li><code>tcp://host:port</code> - TCP connection</li>
+<li><code>ssh://host:port</code> - SSH connection</li>
+<li><code>host:port</code> - Defaults to TCP</li>
+<li><code>host</code> - Uses default port based on protocol</li>
+</ul>
+</li>
+<li><p><strong>Server Directory Support:</strong></p>
+<ul>
+<li><code>--server-directory https://superchat.win/servers.json</code></li>
+<li>Fetches list of available servers</li>
+<li>Shows server selection modal if &gt; 1 server</li>
+<li>Auto-connects if only 1 server</li>
+<li>Default directory: <code>https://superchat.win/servers.json</code></li>
+</ul>
+</li>
+<li><p><strong>servers.json Format:</strong></p>
+</li>
+</ol>
+<pre><code class="language-json">{
+  &quot;servers&quot;: [
+    {
+      &quot;name&quot;: &quot;SuperChat Official&quot;,
+      &quot;tcp_address&quot;: &quot;superchat.win:6465&quot;,
+      &quot;ssh_address&quot;: &quot;superchat.win:2222&quot;,
+      &quot;description&quot;: &quot;Official public server&quot;
+    },
+    {
+      &quot;name&quot;: &quot;Dev Server&quot;,
+      &quot;tcp_address&quot;: &quot;localhost:6465&quot;,
+      &quot;ssh_address&quot;: &quot;localhost:2222&quot;,
+      &quot;description&quot;: &quot;Local development&quot;
+    }
+  ]
+}
+</code></pre>
+<ol start="4">
+<li><strong>Client Startup Flow:</strong></li>
+</ol>
+<pre><code>1. Check --server flag
+   - If set: Use explicit server (skip directory)
+   - If not set: Fetch directory
+2. If directory has 1 server: Auto-connect
+3. If directory has &gt;1 servers: Show selection modal
+4. User selects connection type (TCP/SSH) and server
+5. Connect and authenticate
+</code></pre>
+<p><strong>Implementation:</strong></p>
+<pre><code class="language-go">// cmd/client/main.go
+func main() {
+    serverFlag := flag.String(&quot;server&quot;, &quot;&quot;, &quot;Server address (tcp://host:port or ssh://host:port)&quot;)
+    directoryFlag := flag.String(&quot;server-directory&quot;, &quot;https://superchat.win/servers.json&quot;, &quot;Server directory URL&quot;)
+
+    flag.Parse()
+
+    var servers []ServerInfo
+    if *serverFlag != &quot;&quot; {
+        // Explicit server - parse and use directly
+        servers = []ServerInfo{parseServerURL(*serverFlag)}
+    } else {
+        // Fetch from directory
+        servers = fetchServerDirectory(*directoryFlag)
+    }
+
+    if len(servers) == 1 {
+        // Auto-connect to single server
+        connectToServer(servers[0])
+    } else {
+        // Show server selection modal
+        showServerSelector(servers)
+    }
+}
+</code></pre>
+<hr>
+<h2>Security Considerations</h2>
+<ol>
+<li><strong>Fingerprint Format:</strong> Use SSH&#39;s standard SHA256 format (<code>SHA256:base64...</code>)</li>
+<li><strong>Key Types:</strong> Support RSA (2048+), Ed25519, ECDSA</li>
+<li><strong>Host Key Verification:</strong> Implement TOFU (Trust On First Use) for server host keys</li>
+<li><strong>Auto-Registration Rate Limiting:</strong> Max 10 new users/hour per IP</li>
+<li><strong>Key Deletion Safety:</strong> Require password OR another SSH key before deleting last key</li>
+<li><strong>Password Requirements:</strong> Min 8 chars (consider adding complexity requirements)</li>
+<li><strong>Encrypted Private Keys:</strong> Phase 2 - prompt for passphrase (not in MVP)</li>
+</ol>
+<hr>
+<h2>Testing Strategy</h2>
+<h3>Unit Tests</h3>
+<ol>
+<li><p><strong>Database:</strong></p>
+<ul>
+<li>SSHKey CRUD operations</li>
+<li>FK cascade on user deletion</li>
+<li>Fingerprint uniqueness</li>
+</ul>
+</li>
+<li><p><strong>Protocol:</strong></p>
+<ul>
+<li>Encode/decode all new message types</li>
+<li>Round-trip tests</li>
+</ul>
+</li>
+<li><p><strong>Server:</strong></p>
+<ul>
+<li>Fingerprint computation</li>
+<li>Auto-registration logic</li>
+<li>Rate limiting</li>
+<li>Password change validation</li>
+</ul>
+</li>
+</ol>
+<h3>Integration Tests</h3>
+<ol>
+<li><p><strong>SSH Authentication:</strong></p>
+<ul>
+<li>Connect with known key (should authenticate)</li>
+<li>Connect with unknown key (should auto-register)</li>
+<li>Connect with invalid key (should reject)</li>
+<li>Multiple keys per user</li>
+</ul>
+</li>
+<li><p><strong>Key Management:</strong></p>
+<ul>
+<li>Add key via TCP, connect via SSH</li>
+<li>Delete key (with safeguards)</li>
+<li>Update labels</li>
+<li>List keys</li>
+</ul>
+</li>
+<li><p><strong>Password Management:</strong></p>
+<ul>
+<li>Change password for TCP user</li>
+<li>Change password for SSH-registered user (first time)</li>
+<li>Change password with wrong old password (should fail)</li>
+</ul>
+</li>
+</ol>
+<h3>Manual Testing</h3>
+<pre><code class="language-bash"># Test SSH connection
+ssh -p 2222 myusername@localhost
+
+# Should auto-register if first time
+# Should authenticate if key exists
+
+# Test TCP connection with key management
+./superchat --server tcp://localhost:6465
+# Login, add SSH key, disconnect
+# Connect via SSH - should authenticate
+</code></pre>
+<hr>
+<h2>Estimated Timeline</h2>
+<ul>
+<li><strong>Phase 1</strong> (Database): 1 day</li>
+<li><strong>Phase 2</strong> (Password Management): 1 day</li>
+<li><strong>Phase 3</strong> (Server Auth): 2 days</li>
+<li><strong>Phase 4</strong> (Protocol Messages): 1 day</li>
+<li><strong>Phase 5</strong> (Client Connection): 1 day</li>
+<li><strong>Phase 6</strong> (SSH Key Manager UI): 2 days</li>
+<li><strong>Phase 7</strong> (Server Discovery): 1 day</li>
+</ul>
+<p><strong>Total:</strong> ~9 days (includes password management + server discovery)</p>
+<hr>
+<h2>Open Questions / Decisions Made</h2>
+<ol>
+<li><p><strong>✅ Should we support adding keys via TCP connection?</strong></p>
+<ul>
+<li><strong>Decision:</strong> YES - Users without SSH keys need a way to add them first</li>
+</ul>
+</li>
+<li><p><strong>✅ Should we allow password login after SSH registration?</strong></p>
+<ul>
+<li><strong>Decision:</strong> YES - Generate random password, user can change it via new CHANGE_PASSWORD flow</li>
+</ul>
+</li>
+<li><p><strong>✅ How should we handle server selection?</strong></p>
+<ul>
+<li><strong>Decision:</strong> Server directory system with auto-connect for single server, modal for multiple</li>
+</ul>
+</li>
+<li><p><strong>Server directory hosting:</strong></p>
+<ul>
+<li>Default to <code>superchat.win/servers.json</code></li>
+<li>Allow custom via <code>--server-directory</code> flag</li>
+<li>If directory fetch fails, allow manual server entry</li>
+</ul>
+</li>
+<li><p><strong>Encrypted private keys:</strong></p>
+<ul>
+<li>Phase 2 (not in MVP) - prompt for passphrase</li>
+<li>For now, only support unencrypted keys</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2>Files to Create/Modify Summary</h2>
+<h3>New Files</h3>
+<ul>
+<li><code>pkg/database/migrations/004_add_ssh_keys.sql</code></li>
+<li><code>pkg/client/ui/modal/ssh_key_manager.go</code></li>
+<li><code>pkg/client/ui/modal/password_change.go</code></li>
+<li><code>docs/SSH_AUTH_PLAN.md</code> (this file)</li>
+</ul>
+<h3>Modified Files</h3>
+<ul>
+<li><code>pkg/database/database.go</code> - SSHKey CRUD, password update</li>
+<li><code>pkg/protocol/messages.go</code> - New message types (0x0C-0x0F, 0x8C-0x8F, 0x98, 0x0E, 0x8E)</li>
+<li><code>pkg/server/ssh.go</code> - Remove NoClientAuth, add PublicKeyCallback</li>
+<li><code>pkg/server/handlers.go</code> - Add SSH key + password handlers</li>
+<li><code>pkg/client/connection.go</code> - Add SSH connection support</li>
+<li><code>cmd/client/main.go</code> - Server directory support</li>
+<li><code>docs/PROTOCOL.md</code> - Document new message types</li>
+<li><code>docs/versions/V2.md</code> - Update SSH feature status</li>
+</ul>
+<hr>
+<h2>Post-Implementation Checklist</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Migration 004 applied and tested</li>
+<li><input disabled="" type="checkbox"> All protocol messages implemented and tested (90%+ coverage)</li>
+<li><input disabled="" type="checkbox"> SSH authentication working (auto-register + existing users)</li>
+<li><input disabled="" type="checkbox"> Key management UI functional (add/delete/rename)</li>
+<li><input disabled="" type="checkbox"> Password change UI functional</li>
+<li><input disabled="" type="checkbox"> Server directory working</li>
+<li><input disabled="" type="checkbox"> Integration tests passing</li>
+<li><input disabled="" type="checkbox"> Manual SSH connection test: <code>ssh -p 2222 user@server</code></li>
+<li><input disabled="" type="checkbox"> Documentation updated (PROTOCOL.md, V2.md)</li>
+<li><input disabled="" type="checkbox"> V2 feature marked complete in V2.md</li>
+</ul>
+<hr>
+<h2>Notes</h2>
+<ul>
+<li>This is the last V2 feature! After this, SuperChat V2 is complete.</li>
+<li>Total V2 features: User registration ✅, User channels ✅, Message editing ✅, SSH auth (this plan)</li>
+<li>Next: V3 planning (DMs, encryption, compression)</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat V2 Specification - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat V2 Specification</h1>
+<h2>Overview</h2>
+<p>V2 adds user registration, advanced channel management, and message editing while maintaining backward compatibility with V1. All V2 features are <strong>parallel additions</strong> that don&#39;t break V1 clients or require V1 data migration.</p>
+<h2>V2 Feature Status</h2>
+<h3>✅ Completed Features</h3>
+<h4>1. User Registration &amp; Authentication</h4>
+<p><strong>Status:</strong> Complete (commit eabf559)</p>
+<ul>
+<li>✅ User table with password hashing (bcrypt cost 10)</li>
+<li>✅ User flags system (uint8 bitfield): admin (0x01), moderator (0x02)</li>
+<li>✅ Protocol messages: AUTH_REQUEST, AUTH_RESPONSE, REGISTER_USER, REGISTER_RESPONSE</li>
+<li>✅ Server-side nickname prefixes: <code>$</code> (admin), <code>@</code> (moderator), <code>~</code> (anonymous)</li>
+<li>✅ Session caching of user flags for efficient display</li>
+<li>✅ Normalized database design (user info stored once, looked up per message)</li>
+</ul>
+<p><strong>Migration:</strong> 002_add_user_table.sql</p>
+<p><strong>Key Files:</strong></p>
+<ul>
+<li><code>pkg/protocol/messages.go</code> - Auth/register message types</li>
+<li><code>pkg/protocol/user_flags.go</code> - UserFlags type with helpers</li>
+<li><code>pkg/server/handlers.go</code> - handleAuthRequest, handleRegisterUser</li>
+<li><code>pkg/database/database.go</code> - User CRUD operations</li>
+</ul>
+<h4>2. User-Created Channels</h4>
+<p><strong>Status:</strong> Complete (commit eabf559)</p>
+<ul>
+<li>✅ Registered users can create channels (anonymous users cannot)</li>
+<li>✅ Protocol messages: CREATE_CHANNEL (0x07), CHANNEL_CREATED (0x87)</li>
+<li>✅ Hybrid response+broadcast pattern (matches PROTOCOL.md spec)</li>
+<li>✅ Foreign key constraint: Channel.created_by → User.id</li>
+<li>✅ Validation: name (3-50 chars), description (max 500), retention (1h-1yr)</li>
+<li>✅ V2 supports forum channels only (type 1)</li>
+<li>✅ Broadcast to all connected users (except creator who gets response)</li>
+</ul>
+<p><strong>Migration:</strong> 003_user_created_channels.sql (with @foreign_keys=off header)</p>
+<p><strong>Key Files:</strong></p>
+<ul>
+<li><code>pkg/protocol/messages.go</code> - CREATE_CHANNEL, CHANNEL_CREATED messages</li>
+<li><code>pkg/server/handlers.go</code> - handleCreateChannel, broadcastChannelCreated</li>
+<li><code>pkg/database/migrations.go</code> - Migration metadata header support</li>
+</ul>
+<h4>3. Message Editing</h4>
+<p><strong>Status:</strong> Complete</p>
+<ul>
+<li>✅ Users can edit their own messages (identified by author_user_id)</li>
+<li>✅ EDIT_MESSAGE request (0x0B), MESSAGE_EDITED broadcast (0x8B)</li>
+<li>✅ Track edit history in MessageVersion table</li>
+<li>✅ Show &quot;(edited)&quot; indicator in UI</li>
+<li>✅ Server-side ownership validation</li>
+<li>✅ Anonymous users can edit by session (before disconnect)</li>
+<li>✅ Registered users checked by user_id</li>
+<li>✅ Broadcast MESSAGE_EDITED to all users in channel</li>
+</ul>
+<p><strong>Key Files:</strong></p>
+<ul>
+<li><code>pkg/protocol/messages.go</code> - EDIT_MESSAGE, MESSAGE_EDITED messages</li>
+<li><code>pkg/server/handlers.go</code> - handleEditMessage with ownership validation</li>
+<li><code>pkg/database/database.go</code> - UpdateMessage, CreateMessageVersion</li>
+<li><code>pkg/client/ui/</code> - Edit UI and &quot;(edited)&quot; indicator</li>
+</ul>
+<hr>
+<h4>4. Chat Channel Type</h4>
+<p><strong>Status:</strong> ✅ Complete</p>
+<ul>
+<li>✅ Support both forum (type 1) and chat (type 0) channels</li>
+<li>✅ Chat channels: linear chronological view (like IRC/Slack)</li>
+<li>✅ Forum channels: threaded discussion view (existing)</li>
+<li>✅ Channel type selection during creation</li>
+<li>✅ Different UI rendering based on channel type</li>
+<li>✅ Server validation: channel_type ∈ {0, 1}</li>
+</ul>
+<p><strong>Key Files:</strong></p>
+<ul>
+<li><code>pkg/server/handlers.go</code> - Channel type validation (lines 403-407)</li>
+<li><code>pkg/client/ui/model.go</code> - Channel type-aware navigation (line 721)</li>
+<li><code>pkg/client/ui/view.go</code> - Chronological rendering for chat channels (line 972)</li>
+</ul>
+<hr>
+<h4>5. SSH Key Authentication</h4>
+<p><strong>Status:</strong> ✅ Complete (with minor TODOs)</p>
+<ul>
+<li>✅ All 8 implementation phases complete</li>
+<li>✅ SSH server infrastructure (pkg/server/ssh.go)</li>
+<li>✅ Public key authentication with auto-registration</li>
+<li>✅ SSHKey table (migration 005_add_ssh_keys.sql)</li>
+<li>✅ Fingerprint-based identity (SHA256)</li>
+<li>✅ SSH key management UI (add/list/delete/rename)</li>
+<li>✅ Password change functionality</li>
+<li>✅ Server discovery system</li>
+<li>⚠️ Minor TODOs:<ul>
+<li>Auto-registration rate limiting (placeholder at pkg/server/ssh.go:457)</li>
+<li>Encrypted key passphrase support for direct disk loading (SSH agent already handles this)</li>
+</ul>
+</li>
+</ul>
+<p><strong>Migration:</strong> 005_add_ssh_keys.sql</p>
+<p><strong>Key Files:</strong></p>
+<ul>
+<li><code>pkg/server/ssh.go</code> - SSH authentication and auto-registration</li>
+<li><code>pkg/database/database.go</code> - SSHKey CRUD operations</li>
+<li><code>pkg/client/ui/modal/ssh_key_manager.go</code> - SSH key management UI</li>
+<li><code>pkg/client/connection.go</code> - SSH client connection</li>
+</ul>
+<p><strong>Design Document:</strong> See <code>docs/feature_design/ssh_authentication.md</code> for full implementation plan</p>
+<hr>
+<h2>V2 Status Summary</h2>
+<p><strong>V2 is COMPLETE!</strong> 🎉</p>
+<p>All 5 core V2 features are implemented:</p>
+<ol>
+<li>✅ User Registration &amp; Authentication</li>
+<li>✅ User-Created Channels</li>
+<li>✅ Message Editing</li>
+<li>✅ Chat Channel Type (type 0 for linear chat, type 1 for threaded forum)</li>
+<li>✅ SSH Key Authentication</li>
+</ol>
+<p><strong>Minor TODOs:</strong></p>
+<ul>
+<li>SSH auto-registration rate limiting (security hardening)</li>
+<li>Encrypted SSH key passphrase prompt (UX improvement)</li>
+</ul>
+<p><strong>See V3.md for next features:</strong></p>
+<ul>
+<li>Subchannels (two-level hierarchy)</li>
+<li>Direct messages (private channels)</li>
+<li>End-to-end encryption (AES-256-GCM)</li>
+<li>Message compression (LZ4)</li>
+</ul>
+<hr>
+<h2>Database Schema Changes (V2)</h2>
+<p>All V2 migrations are complete:</p>
+<ul>
+<li><strong>002_add_user_table.sql</strong> - User table with user_flags, password_hash</li>
+<li><strong>003_user_created_channels.sql</strong> - FK constraint on Channel.created_by</li>
+<li><strong>005_add_ssh_keys.sql</strong> - SSHKey table for SSH authentication</li>
+</ul>
+<hr>
+<h2>Testing Requirements</h2>
+<p>V2 features meet coverage requirements:</p>
+<ul>
+<li>Protocol package: 90%+ coverage (enforced)</li>
+<li>Server package: 80-90% coverage</li>
+<li>Database migrations: Path tests validate data integrity</li>
+</ul>
+<hr>
+<h2>Client UI Updates (V2)</h2>
+<p>All V2 UI features are implemented:</p>
+<ul>
+<li>✅ Registration prompt: <code>[Ctrl+R] Register</code></li>
+<li>✅ Login prompt: <code>[Ctrl+L] Login</code></li>
+<li>✅ Header shows authenticated user: <code>Connected: alice</code></li>
+<li>✅ Channel creation UI: <code>[Ctrl+N] New Channel</code> (registered users only)</li>
+<li>✅ SSH connection support with auto-discovery</li>
+<li>✅ Message edit UI: <code>[e] Edit</code> when message selected</li>
+<li>✅ Edit indicator: <code>(edited)</code> timestamp in message display</li>
+<li>✅ SSH key manager: <code>[Ctrl+K]</code> (add/list/delete/rename keys)</li>
+<li>✅ Password change modal: Change password for SSH or password-registered users</li>
+</ul>
+<hr>
+<h2>References</h2>
+<ul>
+<li><strong>Protocol:</strong> See <code>../PROTOCOL.md</code> for complete message specifications</li>
+<li><strong>V1 Spec:</strong> See <code>V1.md</code> for V1 implementation details</li>
+<li><strong>V3 Spec:</strong> See <code>V3.md</code> for planned V3 features</li>
+<li><strong>Data Model:</strong> See <code>../DATA_MODEL.md</code> for full database schema</li>
+<li><strong>Migrations:</strong> See <code>../MIGRATIONS.md</code> for migration system guide</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

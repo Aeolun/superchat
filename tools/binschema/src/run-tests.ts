@@ -34,6 +34,15 @@ import { emptyArraysAllTypesTestSuite, emptyUint16ArrayTestSuite, emptyUint32Arr
 import { fixedArrayOfStructsTestSuite, lengthPrefixedArrayOfStructsTestSuite, nestedArrayOfStructsTestSuite, arrayOfStructsWithOptionalsTestSuite } from "./tests/composite/array-of-structs.test.js";
 import { mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite, nestedStructEndiannessOverrideTestSuite, deeplyNestedEndiannessTestSuite } from "./tests/composite/endianness-overrides.test.js";
 import { stringTestSuite, shortStringTestSuite, cStringTestSuite, multipleStringsTestSuite } from "./tests/composite/strings.test.js";
+import {
+  lengthPrefixedUint8TestSuite,
+  lengthPrefixedUint16TestSuite,
+  lengthPrefixedUint32TestSuite,
+  nullTerminatedTestSuite,
+  fixedLengthTestSuite,
+  multipleStringsTestSuite as firstClassMultipleStringsTestSuite,
+  edgeCasesTestSuite
+} from "./tests/composite/first-class-strings.test.js";
 import { conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite, conditionalEqualityTestSuite, conditionalComparisonTestSuite } from "./tests/composite/conditionals.test.js";
 import { nestedFieldConditionalTestSuite, deeplyNestedConditionalTestSuite } from "./tests/composite/nested-conditionals.test.js";
 
@@ -116,8 +125,20 @@ async function main() {
       suites: [mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite, nestedStructEndiannessOverrideTestSuite, deeplyNestedEndiannessTestSuite],
     },
     {
-      name: "Composite - Strings",
+      name: "Composite - Strings (old array-based)",
       suites: [stringTestSuite, shortStringTestSuite, cStringTestSuite, multipleStringsTestSuite],
+    },
+    {
+      name: "Composite - Strings (first-class)",
+      suites: [
+        lengthPrefixedUint8TestSuite,
+        lengthPrefixedUint16TestSuite,
+        lengthPrefixedUint32TestSuite,
+        nullTerminatedTestSuite,
+        fixedLengthTestSuite,
+        firstClassMultipleStringsTestSuite,
+        edgeCasesTestSuite
+      ],
     },
     {
       name: "Composite - Conditionals",

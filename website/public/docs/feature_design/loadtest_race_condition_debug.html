@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Load Test Debugging Session - TCP Write Race Condition - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="../index.html" class="logo">
+                    <img src="../mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="../index.html">Home</a>
+                    <a href="../docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="../docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="../docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="../docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="../docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="../docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="../docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="../docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="../docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="../docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="../docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="../docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="../docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="../docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="../docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>Load Test Debugging Session - TCP Write Race Condition</h1>
+<p><strong>Status:</strong> ✅ FIXED - This is a historical debugging document</p>
+<p><strong>Date:</strong> 2025-10-04
+<strong>Issue:</strong> Random disconnections and corrupted frames under load (50+ concurrent clients)
+<strong>Root Cause:</strong> Unsynchronized concurrent writes to <code>net.Conn</code> caused frame interleaving
+<strong>Fix:</strong> Added <code>Session.writeMu</code> mutex to synchronize all protocol frame writes</p>
+<p><strong>Implementation:</strong> See <code>pkg/server/session.go</code> - all <code>EncodeFrame()</code> calls now protected by <code>writeMu.Lock()</code></p>
+<hr>
+<h2>Historical Debugging Session</h2>
+<h2>Symptoms</h2>
+<p>When running load tests with 50 clients over 10 seconds, we observed:</p>
+<ul>
+<li>Random client disconnections (reported as &quot;connection reset by peer&quot; on server)</li>
+<li>Timeouts waiting for responses (10s timeout with 0.58ms average response time)</li>
+<li>Corrupted frames with invalid message types (<code>0x00</code>, <code>0x01</code> - not in protocol spec)</li>
+<li>Clients receiving frames claiming to exceed 1MB max size</li>
+<li>Success rate: ~98.9% (15 failures out of 1683 messages)</li>
+</ul>
+<h2>Investigation</h2>
+<h3>Initial Hypotheses (Red Herrings)</h3>
+<ol>
+<li><strong>Broadcast message handling in loadtest</strong> - Fixed client code to properly skip broadcast messages while waiting for responses (loop with <code>continue</code> for TypeNewMessage)</li>
+<li><strong>Slow database transactions</strong> - Observed 126ms WriteBuffer flush, suspected it was blocking the server<ul>
+<li>This was a contributing factor (slowing responses) but NOT the root cause of corruption</li>
+</ul>
+</li>
+</ol>
+<h3>Key Diagnostic Steps</h3>
+<ol>
+<li><p><strong>Added comprehensive logging:</strong></p>
+<ul>
+<li>Client-side connection logging (per-bot with microsecond timestamps)</li>
+<li>Server-side frame encoding error logging</li>
+<li>Broadcast failure logging</li>
+</ul>
+</li>
+<li><p><strong>Analyzed the logs:</strong></p>
+<pre><code>[Bot 4] 2025/10/04 11:49:26.527861 Read error: frame exceeds maximum size (1 MB)
+</code></pre>
+<p>Client received a corrupted length prefix &gt; 1MB immediately after a successful POST.</p>
+</li>
+<li><p><strong>Traced the timeline:</strong></p>
+<ul>
+<li>Bot sends POST_MESSAGE at <code>.526541</code></li>
+<li>Server responds MESSAGE_POSTED at <code>.527856</code></li>
+<li>Next frame read gets corrupted length</li>
+<li>Client rejects frame → connection reset</li>
+</ul>
+</li>
+</ol>
+<h2>Root Cause</h2>
+<p><strong>Race condition on concurrent TCP connection writes</strong></p>
+<p>The server had <strong>two unsynchronized code paths</strong> writing to the same <code>net.Conn</code>:</p>
+<ol>
+<li><strong><code>sendMessage(sess *Session, ...)</code></strong> - Direct responses to client requests (handlers.go:367)</li>
+<li><strong><code>BroadcastToChannel(...)</code></strong> - Real-time broadcasts to all clients in channel (session.go:154)</li>
+</ol>
+<p>When a broadcast occurred while sending a direct response, frame bytes <strong>interleaved</strong>:</p>
+<pre><code>Thread A (sendMessage):  Write length=25
+Thread B (broadcast):    Write length=150  ← CORRUPTION!
+Thread A:                Write version=1
+Thread B:                Write version=1
+Thread A:                Write type=0x8A
+Thread B:                Write type=0x8D
+...
+</code></pre>
+<p>Result: Client reads corrupted length (e.g., combining bytes from two different frames) and sees &quot;frame exceeds 1MB&quot; or invalid message types like <code>0x00</code>/<code>0x01</code>.</p>
+<h3>Why This Wasn&#39;t Caught Earlier</h3>
+<ul>
+<li><strong>Low concurrency</strong>: Single client or small tests don&#39;t trigger concurrent writes often</li>
+<li><strong>Timing-dependent</strong>: Only manifests when a broadcast happens during another write</li>
+<li><strong>Silent corruption</strong>: TCP doesn&#39;t detect application-layer frame corruption</li>
+</ul>
+<h2>The Fix</h2>
+<p>Added write synchronization to the <code>Session</code> struct:</p>
+<pre><code class="language-go">// Session represents an active client connection
+type Session struct {
+    ID            uint64
+    DBSessionID   int64
+    UserID        *int64
+    Nickname      string
+    Conn          net.Conn
+    JoinedChannel *int64
+    mu            sync.RWMutex  // Protects Nickname and JoinedChannel
+    writeMu       sync.Mutex    // Protects writes to Conn (prevents frame corruption)
+}
+</code></pre>
+<p>Protected all <code>protocol.EncodeFrame()</code> calls with <code>writeMu</code>:</p>
+<ol>
+<li><p><strong><code>sendMessage()</code> in handlers.go:</strong></p>
+<pre><code class="language-go">sess.writeMu.Lock()
+err = protocol.EncodeFrame(sess.Conn, frame)
+sess.writeMu.Unlock()
+</code></pre>
+</li>
+<li><p><strong><code>BroadcastToChannel()</code> in session.go:</strong></p>
+<pre><code class="language-go">sess.writeMu.Lock()
+err := protocol.EncodeFrame(sess.Conn, frame)
+sess.writeMu.Unlock()
+</code></pre>
+</li>
+<li><p><strong><code>sendServerConfig()</code> in server.go:</strong></p>
+<pre><code class="language-go">sess.writeMu.Lock()
+err = protocol.EncodeFrame(sess.Conn, frame)
+sess.writeMu.Unlock()
+</code></pre>
+</li>
+</ol>
+<h2>Results</h2>
+<p><strong>Before fix:</strong></p>
+<ul>
+<li>Messages posted: 1379 (137.9/s)</li>
+<li>Messages failed: 15<ul>
+<li>Timeouts: 3</li>
+<li>Corrupted frames: Multiple</li>
+<li>Connection resets: 5-6</li>
+</ul>
+</li>
+<li>Success rate: 98.9%</li>
+</ul>
+<p><strong>After fix:</strong></p>
+<ul>
+<li>Messages posted: 1625 (162.5/s)</li>
+<li>Messages failed: 0<ul>
+<li>Timeouts: 0</li>
+<li>Corrupted frames: 0</li>
+<li>Connection resets: 0</li>
+</ul>
+</li>
+<li>Success rate: <strong>100.0%</strong></li>
+<li>Average response time: 10.41ms</li>
+<li>Efficiency: 97.5%</li>
+</ul>
+<h2>Further Steps</h2>
+<h3>Performance Optimizations</h3>
+<ol>
+<li><p><strong>Database performance:</strong></p>
+<ul>
+<li>126ms flush for 8 items (5 session updates + 3 message inserts) is slow</li>
+<li>Consider <code>PRAGMA synchronous = NORMAL</code> instead of <code>FULL</code> (already set, verify it&#39;s working)</li>
+<li>Profile database queries under load to identify bottlenecks</li>
+<li>Consider batch sizes and flush intervals in WriteBuffer</li>
+</ul>
+</li>
+<li><p><strong>Broadcast optimization:</strong></p>
+<ul>
+<li>Currently encoding the same message N times (once per recipient)</li>
+<li>Could encode once and reuse the frame bytes for all recipients</li>
+<li>Would reduce CPU and lock contention</li>
+</ul>
+</li>
+</ol>
+<h3>Reliability Improvements</h3>
+<ol>
+<li><p><strong>Add connection write deadlines:</strong></p>
+<ul>
+<li>Prevent slow clients from blocking broadcasts indefinitely</li>
+<li>Set reasonable write timeout (e.g., 5-10 seconds)</li>
+</ul>
+</li>
+<li><p><strong>Monitor for write errors:</strong></p>
+<ul>
+<li>Track failed broadcast writes</li>
+<li>Consider disconnecting clients that repeatedly fail writes</li>
+</ul>
+</li>
+<li><p><strong>Load test coverage:</strong></p>
+<ul>
+<li>Add automated load tests to CI (shorter duration, ~5s with 20 clients)</li>
+<li>Test different scenarios: burst traffic, sustained load, many channels</li>
+</ul>
+</li>
+</ol>
+<h3>Code Quality</h3>
+<ol>
+<li><p><strong>Document locking strategy:</strong></p>
+<ul>
+<li>Add comments explaining <code>mu</code> vs <code>writeMu</code> responsibilities</li>
+<li>Document lock ordering to prevent deadlocks</li>
+</ul>
+</li>
+<li><p><strong>Audit other shared resources:</strong></p>
+<ul>
+<li>Review all uses of <code>net.Conn</code> for similar race conditions</li>
+<li>Check if SSH connection handling has same issue</li>
+</ul>
+</li>
+<li><p><strong>Consider connection wrapper:</strong></p>
+<ul>
+<li>Create a <code>SafeConn</code> wrapper with built-in write synchronization</li>
+<li>Prevents future mistakes with unsynchronized writes</li>
+</ul>
+</li>
+</ol>
+<h2>Lessons Learned</h2>
+<ol>
+<li><strong>Race conditions are timing-dependent</strong> - They may not appear in light testing but emerge under load</li>
+<li><strong>Shared mutable state needs protection</strong> - Even read-only looking operations (frame encoding) can have side effects (network writes)</li>
+<li><strong>Detailed logging is essential</strong> - Microsecond-precision logs with per-client prefixes made the race condition visible</li>
+<li><strong>Load testing is critical</strong> - This bug would have been catastrophic in production but was caught before V1 release</li>
+</ol>
+<h2>Related Files</h2>
+<ul>
+<li><code>pkg/server/session.go</code> - Session struct and broadcast logic</li>
+<li><code>pkg/server/handlers.go</code> - sendMessage implementation</li>
+<li><code>pkg/server/server.go</code> - sendServerConfig implementation</li>
+<li><code>cmd/loadtest/main.go</code> - Load testing tool with detailed logging</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperChat Improvements Roadmap - SuperChat Documentation</title>
+    <link rel="icon" type="image/png" href="./favicon.png">
+    <link rel="stylesheet" href="./src/docs.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="./index.html" class="logo">
+                    <img src="./mascot.png" alt="SuperChat" class="mascot">
+                    <span>SuperChat</span>
+                </a>
+                <nav>
+                    <a href="./index.html">Home</a>
+                    <a href="./docs/index.html">Documentation</a>
+                    <a href="https://github.com/aeolun/superchat">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <nav class="docs-nav">
+                <h3>Getting Started</h3>
+                <ul>
+                    <li><a href="./docs/README.html">Overview</a></li>
+                </ul>
+
+                <h3>Operations</h3>
+                <ul>
+                    <li><a href="./docs/ops/DEPLOYMENT.html">Deployment</a></li>
+                    <li><a href="./docs/ops/CONFIGURATION.html">Configuration</a></li>
+                    <li><a href="./docs/ops/SECURITY.html">Security</a></li>
+                    <li><a href="./docs/ops/MONITORING.html">Monitoring</a></li>
+                    <li><a href="./docs/ops/BACKUP_AND_RECOVERY.html">Backup & Recovery</a></li>
+                </ul>
+
+                <h3>Architecture</h3>
+                <ul>
+                    <li><a href="./docs/PROTOCOL.html">Protocol Spec</a></li>
+                    <li><a href="./docs/DATA_MODEL.html">Data Model</a></li>
+                    <li><a href="./docs/MIGRATIONS.html">Migrations</a></li>
+                </ul>
+
+                <h3>Versions</h3>
+                <ul>
+                    <li><a href="./docs/versions/V1.html">V1 Specification</a></li>
+                    <li><a href="./docs/versions/V2.html">V2 Specification</a></li>
+                    <li><a href="./docs/versions/V3.html">V3 Specification</a></li>
+                </ul>
+
+                <h3>Development</h3>
+                <ul>
+                    <li><a href="./docs/IMPROVEMENTS_ROADMAP.html">Improvements Roadmap</a></li>
+                    <li><a href="./docs/DOCKER.html">Docker Guide</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <article class="markdown-body">
+                <h1>SuperChat Improvements Roadmap</h1>
+<p>This document tracks needed improvements for server operations documentation and user experience, based on comprehensive technical architecture and UX evaluations.</p>
+<h2>Priority 0: Critical Blockers (Ship-stoppers)</h2>
+<h3>UX - User Experience</h3>
+<h4>1. Server Discovery Problem ✅</h4>
+<ul>
+<li><strong>Problem</strong>: Users cannot find servers beyond superchat.win; if it&#39;s down, they&#39;re stuck</li>
+<li><strong>Status</strong>: COMPLETE</li>
+<li><strong>Fix</strong>:<ul>
+<li><input checked="" disabled="" type="checkbox"> Show server selector modal on first-ever launch (before connection attempt)</li>
+<li><input checked="" disabled="" type="checkbox"> Add explanatory text: &quot;Servers announce themselves to the directory as they come online&quot;</li>
+<li><input checked="" disabled="" type="checkbox"> Auto-fallback to server selector if default connection fails (via ConnectionFailedModal &quot;Switch Server&quot; option)</li>
+<li><input checked="" disabled="" type="checkbox"> Add &quot;[Ctrl+L] Switch Server&quot; to footer hints (automatically shown via global command registration)</li>
+<li><input checked="" disabled="" type="checkbox"> Document Ctrl+L shortcut in splash screen and channel list welcome</li>
+<li><input checked="" disabled="" type="checkbox"> Public server list endpoint: <code>/servers.json</code> HTTP endpoint on port 9090 (for external websites)</li>
+</ul>
+</li>
+</ul>
+<h4>2. Connection Errors Crash the App ✅</h4>
+<ul>
+<li><strong>Problem</strong>: Connection failure → Process exits, no recovery path</li>
+<li><strong>Status</strong>: COMPLETE</li>
+<li><strong>Fix</strong>:<ul>
+<li><input checked="" disabled="" type="checkbox"> Remove fatal errors on connection failure</li>
+<li><input checked="" disabled="" type="checkbox"> Create ConnectionFailedModal with options: [R] Retry [S] Switch Server [Q] Quit</li>
+<li><input checked="" disabled="" type="checkbox"> Show context-appropriate error messages (not just &quot;connection refused&quot;)</li>
+<li><input checked="" disabled="" type="checkbox"> Stay running and allow user to choose next action</li>
+</ul>
+</li>
+</ul>
+<h4>3. Enter Key Behavior ✅</h4>
+<ul>
+<li><strong>Status</strong>: WORKING AS INTENDED - Context-aware behavior already implemented</li>
+<li><strong>Current behavior:</strong><ul>
+<li><strong>Chat channels (type 0)</strong>: Enter sends message (like IRC/Slack)</li>
+<li><strong>Forum channels (type 1)</strong>: Enter adds newline, Ctrl+Enter sends (for long-form posts)</li>
+</ul>
+</li>
+<li><strong>Rationale</strong>: Different channel types have different UX needs. Chat = quick messages, Forum = thoughtful multi-paragraph posts.</li>
+<li><strong>Future consideration</strong>: Could add Cmd+Enter support for macOS users (in addition to Ctrl+Enter)</li>
+</ul>
+<hr>
+<h2>Priority 1: High Priority (Significant Friction)</h2>
+<h3>UX - User Experience</h3>
+<h4>4. Installation PATH Warning</h4>
+<ul>
+<li><strong>Problem</strong>: Users don&#39;t know how to fix PATH issue after install</li>
+<li><strong>Current</strong>: Warning shown but no actionable steps</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Show shell-specific commands to add to PATH:<pre><code class="language-bash">For Bash:
+  echo &#39;export PATH=&quot;$PATH:$HOME/.local/bin&quot;&#39; &gt;&gt; ~/.bashrc
+  source ~/.bashrc
+
+For Zsh:
+  echo &#39;export PATH=&quot;$PATH:$HOME/.local/bin&quot;&#39; &gt;&gt; ~/.zshrc
+  source ~/.zshrc
+</code></pre>
+</li>
+<li><input disabled="" type="checkbox"> Or offer to add automatically (prompt user for permission)</li>
+</ul>
+</li>
+</ul>
+<h4>5. Add Installation Verification</h4>
+<ul>
+<li><strong>Problem</strong>: Install completes with no verification step</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Update install.sh to show post-install verification:<pre><code>✓ Installation complete!
+
+Verify installation:
+  sc --version
+
+Get started:
+  sc                    # Connect to default server
+  sc --help            # View all options
+</code></pre>
+</li>
+</ul>
+</li>
+</ul>
+<h4>6. Server Selector on First Launch ✅</h4>
+<ul>
+<li><strong>Problem</strong>: Hard-coded dependency on superchat.win</li>
+<li><strong>Status</strong>: COMPLETE</li>
+<li><strong>Fix</strong>:<ul>
+<li><input checked="" disabled="" type="checkbox"> On first-ever launch, show modal: &quot;Welcome! Choose a server:&quot;</li>
+<li><input checked="" disabled="" type="checkbox"> List: superchat.win (default), [other public servers], &quot;Enter custom server&quot;</li>
+<li><input checked="" disabled="" type="checkbox"> Save choice as default</li>
+<li><input checked="" disabled="" type="checkbox"> Gives users agency and teaches that servers exist</li>
+<li><input checked="" disabled="" type="checkbox"> Welcoming tone on first launch (&quot;Welcome! Choose a server:&quot;)</li>
+<li><input checked="" disabled="" type="checkbox"> Normal tone on subsequent launches (&quot;Available Servers&quot;)</li>
+<li><input checked="" disabled="" type="checkbox"> Custom server input option (always available at end of list)</li>
+<li><input checked="" disabled="" type="checkbox"> Extended first-launch explanation about directory and custom servers</li>
+</ul>
+</li>
+<li><strong>Implementation</strong>:<ul>
+<li>First launch (no saved server) automatically uses directory mode, showing server selector</li>
+<li>Selected server is saved to <code>directory_selected_server</code> config and used for subsequent launches</li>
+<li>Custom server option allows entering unlisted servers (format: hostname:port)</li>
+<li>Modal adapts messaging based on whether it&#39;s first launch or manual switch (Ctrl+L)</li>
+</ul>
+</li>
+</ul>
+<h4>6a. WebSocket Fallback for Firewall-Restricted Networks ✅</h4>
+<ul>
+<li><strong>Problem</strong>: Some firewalls block binary TCP traffic but allow HTTP/WebSocket</li>
+<li><strong>Status</strong>: COMPLETE</li>
+<li><strong>Fix</strong>:<ul>
+<li><input checked="" disabled="" type="checkbox"> Server: WebSocket endpoint on HTTP port 6467 (<code>/ws</code>)</li>
+<li><input checked="" disabled="" type="checkbox"> Client: Automatic fallback (TCP → WebSocket on connection failure)</li>
+<li><input checked="" disabled="" type="checkbox"> Connection type indicator in client UI (shows [TCP], [SSH], or [WS])</li>
+<li><input checked="" disabled="" type="checkbox"> Server startup shows available connection methods</li>
+</ul>
+</li>
+<li><strong>Implementation</strong>:<ul>
+<li>WebSocket adapter implements <code>net.Conn</code> interface for complete code reuse</li>
+<li>Binary protocol transported over WebSocket binary messages</li>
+<li>Same session handling, same message loop, zero protocol changes</li>
+<li>Port consolidation: 6465 (Binary TCP), 6466 (SSH), 6467 (HTTP/WS), 9090 (Metrics)</li>
+<li>Automatic fallback: client tries primary method first, falls back to WebSocket if fails</li>
+<li>Explicit WebSocket: Use <code>ws://host:port</code> or <code>--server ws://host:port</code> to force WebSocket</li>
+<li>Status bar shows connection type: &quot;Connected: ~alice  [WS]&quot; or &quot;[TCP]&quot; or &quot;[SSH]&quot;</li>
+<li>Server selector shows protocol used: &quot;Loading servers from directory via WebSocket...&quot;</li>
+</ul>
+</li>
+</ul>
+<h4>7. Add Channel Symbol Legend</h4>
+<ul>
+<li><strong>Problem</strong>: <code>&gt;</code> and <code>#</code> prefixes unexplained</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Add to channel list welcome screen:<pre><code>Channel Types:
+&gt; Chat channels - Linear conversation (like IRC)
+# Forum channels - Threaded discussion (like Reddit)
+</code></pre>
+</li>
+</ul>
+</li>
+</ul>
+<h4>8. Improve Registration Prompts</h4>
+<ul>
+<li><strong>Problem</strong>: Registration mentioned in splash screen, easy to miss</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> After first successful post, show toast notification:<pre><code>Message posted as ~alice (anonymous)
+
+Tip: Register to secure your nickname and enable
+     message editing. Press Ctrl+R anytime.
+</code></pre>
+</li>
+<li><input disabled="" type="checkbox"> Show registration benefit in status bar: &quot;You: ~alice (anonymous)&quot;</li>
+</ul>
+</li>
+</ul>
+<h3>Operations - Documentation</h3>
+<h4>9. Create docs/ops/DEPLOYMENT.md</h4>
+<ul>
+<li><strong>Critical</strong>: Complete deployment guide</li>
+<li><input disabled="" type="checkbox"> Prerequisites (system requirements, ports, OS recommendations)</li>
+<li><input disabled="" type="checkbox"> Deployment methods:<ul>
+<li><input disabled="" type="checkbox"> Binary installation (recommended)</li>
+<li><input disabled="" type="checkbox"> Docker (expand DOCKER.md)</li>
+<li><input disabled="" type="checkbox"> Source build</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Initial setup (system user, directories, permissions)</li>
+<li><input disabled="" type="checkbox"> Process management (systemd service file)</li>
+<li><input disabled="" type="checkbox"> Verification steps</li>
+<li><input disabled="" type="checkbox"> Quick-start checklist</li>
+<li><strong>Deliverables</strong>:<ul>
+<li><input disabled="" type="checkbox"> Sample systemd service file</li>
+<li><input disabled="" type="checkbox"> Post-installation verification script</li>
+</ul>
+</li>
+</ul>
+<h4>10. Create docs/ops/CONFIGURATION.md</h4>
+<ul>
+<li><strong>Critical</strong>: Complete configuration reference</li>
+<li><input disabled="" type="checkbox"> Configuration file location and precedence</li>
+<li><input disabled="" type="checkbox"> Complete parameter reference:<ul>
+<li><input disabled="" type="checkbox"> <code>[server]</code> section (tcp_port, ssh_port, database_path)</li>
+<li><input disabled="" type="checkbox"> <code>[limits]</code> section (rate limits, connection limits, timeouts)</li>
+<li><input disabled="" type="checkbox"> <code>[retention]</code> section (message retention, cleanup intervals)</li>
+<li><input disabled="" type="checkbox"> <code>[channels]</code> section (seed channels, custom configs)</li>
+<li><input disabled="" type="checkbox"> <code>[discovery]</code> section (directory features)</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Performance tuning recommendations by scale</li>
+<li><input disabled="" type="checkbox"> Environment-specific configs (dev/staging/prod)</li>
+</ul>
+<h4>11. Create docs/ops/SECURITY.md</h4>
+<ul>
+<li><strong>Critical</strong>: Security hardening guide</li>
+<li><input disabled="" type="checkbox"> System security (non-root user, file permissions, SELinux/AppArmor)</li>
+<li><input disabled="" type="checkbox"> Network security:<ul>
+<li><input disabled="" type="checkbox"> Firewall rules (iptables/ufw examples)</li>
+<li><input disabled="" type="checkbox"> Allow: 6465 (TCP), 6466 (SSH)</li>
+<li><input disabled="" type="checkbox"> <strong>DENY: 9090 (metrics), 6060 (pprof)</strong> - never expose publicly</li>
+<li><input disabled="" type="checkbox"> Reverse proxy considerations</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Protocol security (no TLS on main port, SSH encryption)</li>
+<li><input disabled="" type="checkbox"> SSH security (V2 feature - host keys, public key auth only)</li>
+<li><input disabled="" type="checkbox"> Rate limiting configuration</li>
+<li><input disabled="" type="checkbox"> Database security (file permissions, password hashing)</li>
+<li><input disabled="" type="checkbox"> Monitoring for abuse</li>
+<li><input disabled="" type="checkbox"> Attack mitigation (DoS, max frame size, session timeouts)</li>
+</ul>
+<h4>12. Create docs/ops/MONITORING.md</h4>
+<ul>
+<li><strong>Critical</strong>: Monitoring and observability</li>
+<li><input disabled="" type="checkbox"> Log files:<ul>
+<li><input disabled="" type="checkbox"> server.log (all activity, truncated on restart)</li>
+<li><input disabled="" type="checkbox"> errors.log (errors only, append mode)</li>
+<li><input disabled="" type="checkbox"> debug.log (verbose, --debug flag only)</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Prometheus metrics (port 9090):<ul>
+<li><input disabled="" type="checkbox"> Document all available metrics</li>
+<li><input disabled="" type="checkbox"> Sample prometheus.yml configuration</li>
+<li><input disabled="" type="checkbox"> Alert rules for common issues</li>
+<li><input disabled="" type="checkbox"> Recommended recording rules</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Grafana setup:<ul>
+<li><input disabled="" type="checkbox"> Sample dashboard JSON</li>
+<li><input disabled="" type="checkbox"> Key panels (active users, message rate, error rate, latency)</li>
+<li><input disabled="" type="checkbox"> Alert configuration examples</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Performance profiling (port 6060):<ul>
+<li><input disabled="" type="checkbox"> CPU/memory/goroutine profiling commands</li>
+<li><input disabled="" type="checkbox"> <strong>Security warning</strong>: Never expose pprof publicly</li>
+<li><input disabled="" type="checkbox"> SSH tunneling for remote access</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Health checks (TCP, client test, database, metrics)</li>
+<li><input disabled="" type="checkbox"> Log aggregation (syslog, logrotate)</li>
+</ul>
+<h4>13. Create docs/ops/BACKUP_AND_RECOVERY.md</h4>
+<ul>
+<li><strong>Critical</strong>: Backup and disaster recovery</li>
+<li><input disabled="" type="checkbox"> What to backup (database, config, SSH host key, logs)</li>
+<li><input disabled="" type="checkbox"> Database backup strategies:<ul>
+<li><input disabled="" type="checkbox"> Automatic migration backups (already exists)</li>
+<li><input disabled="" type="checkbox"> Regular backups (hot/cold methods)</li>
+<li><input disabled="" type="checkbox"> WAL mode considerations</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Backup automation:<ul>
+<li><input disabled="" type="checkbox"> Sample cron job</li>
+<li><input disabled="" type="checkbox"> Backup rotation script</li>
+<li><input disabled="" type="checkbox"> Off-site backup recommendations</li>
+<li><input disabled="" type="checkbox"> Backup verification</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Recovery procedures:<ul>
+<li><input disabled="" type="checkbox"> Minor data loss (restore from backup)</li>
+<li><input disabled="" type="checkbox"> Database corruption (sqlite3 .recover)</li>
+<li><input disabled="" type="checkbox"> Migration failure (rollback)</li>
+<li><input disabled="" type="checkbox"> Complete server failure (new hardware setup)</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Testing recovery (quarterly drills, RTO documentation)</li>
+</ul>
+<hr>
+<h2>Priority 2: Medium Priority (Usability &amp; Day-to-Day Ops)</h2>
+<h3>UX - User Experience</h3>
+<h4>14. Better Nickname Validation</h4>
+<ul>
+<li><strong>Problem</strong>: Validation rules only shown after error</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Show rules proactively in prompt:<pre><code>Enter a nickname (3-20 characters)
+Allowed: letters, numbers, - and _
+</code></pre>
+</li>
+</ul>
+</li>
+</ul>
+<h4>15. Progressive Shortcut Disclosure</h4>
+<ul>
+<li><strong>Problem</strong>: 12+ shortcuts available immediately, overwhelming</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Show &quot;core 4&quot; in footer by default: [↑/↓] Navigate [Enter] Select [Esc] Back [h] Help</li>
+<li><input disabled="" type="checkbox"> After 1 minute: &quot;Tip: Press &#39;n&#39; to start a new thread&quot;</li>
+<li><input disabled="" type="checkbox"> After first post: &quot;Tip: Press &#39;r&#39; to reply to messages&quot;</li>
+<li><input disabled="" type="checkbox"> After first week: &quot;Tip: Press Ctrl+R to register&quot;</li>
+</ul>
+</li>
+</ul>
+<h4>16. Improve Config Error Messages</h4>
+<ul>
+<li><strong>Problem</strong>: Raw TOML parse errors shown to users</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Create ConfigErrorModal with options:<pre><code>Configuration file error:
+  File: ~/.config/superchat/config.toml
+  Problem: Invalid TOML syntax on line 12
+
+Options:
+[R] Reset to default config
+[E] Edit config file (opens $EDITOR)
+[Q] Quit
+</code></pre>
+</li>
+</ul>
+</li>
+</ul>
+<h4>17. Add Empty State Guidance</h4>
+<ul>
+<li><strong>Problem</strong>: Empty channel list shows &quot;(no channels)&quot;, no next steps</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Show guidance:<pre><code>This server has no channels yet.
+
+Options:
+• Create a channel (Ctrl+C) [if registered]
+• Switch to a different server (Ctrl+L)
+• Wait for admin to create channels
+</code></pre>
+</li>
+</ul>
+</li>
+</ul>
+<h4>18. Add Command Aliases</h4>
+<ul>
+<li><strong>Problem</strong>: Only one way to invoke actions</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Support IRC-style commands: <code>/help</code>, <code>/register</code>, <code>/quit</code></li>
+<li><input disabled="" type="checkbox"> Support vim-style: <code>:q</code>, <code>:help</code></li>
+<li><input disabled="" type="checkbox"> Different user populations have different mental models</li>
+</ul>
+</li>
+</ul>
+<h3>Operations - Documentation</h3>
+<h4>19. Create docs/ops/ADMINISTRATION.md</h4>
+<ul>
+<li><strong>Day-to-day</strong>: Administrative tasks</li>
+<li><input disabled="" type="checkbox"> User management (V2 feature - currently no admin tools)</li>
+<li><input disabled="" type="checkbox"> Channel management (currently no admin tools)</li>
+<li><input disabled="" type="checkbox"> Message moderation (soft delete, edit history, hard delete)</li>
+<li><input disabled="" type="checkbox"> SSH key management (V2 feature)</li>
+<li><input disabled="" type="checkbox"> Direct SQL administration (safe queries, backup-before-edit)</li>
+<li><input disabled="" type="checkbox"> Monitoring active sessions</li>
+<li><strong>Deliverables</strong>:<ul>
+<li><input disabled="" type="checkbox"> Admin CLI tool (see Priority 4)</li>
+<li><input disabled="" type="checkbox"> SQL query cookbook</li>
+</ul>
+</li>
+</ul>
+<h4>20. Create docs/ops/TROUBLESHOOTING.md</h4>
+<ul>
+<li><strong>Day-to-day</strong>: Common issues and solutions</li>
+<li><input disabled="" type="checkbox"> Server won&#39;t start (port in use, db locked, permissions, migration failure)</li>
+<li><input disabled="" type="checkbox"> Connection issues (firewall, port confusion, version mismatch, timeout)</li>
+<li><input disabled="" type="checkbox"> Performance issues (CPU, db bottleneck, broadcast latency, goroutine leaks)</li>
+<li><input disabled="" type="checkbox"> Database issues (corruption, WAL growth, disk space, rollback)</li>
+<li><input disabled="" type="checkbox"> SSH issues (V2 - host key changed, auth failures)</li>
+<li><input disabled="" type="checkbox"> Log analysis (common error patterns)</li>
+<li><input disabled="" type="checkbox"> Diagnostic commands (netstat, telnet, sqlite3, curl metrics)</li>
+<li><strong>Deliverables</strong>:<ul>
+<li><input disabled="" type="checkbox"> Diagnostic script that runs all health checks</li>
+<li><input disabled="" type="checkbox"> Log analyzer script</li>
+</ul>
+</li>
+</ul>
+<h4>21. Create docs/ops/UPGRADES.md</h4>
+<ul>
+<li><strong>Day-to-day</strong>: Version upgrades and migrations</li>
+<li><input disabled="" type="checkbox"> Upgrade procedure (pre-upgrade checklist, steps, rollback)</li>
+<li><input disabled="" type="checkbox"> Migration system (automatic on startup, backups, file structure)</li>
+<li><input disabled="" type="checkbox"> Version compatibility (protocol, database, V1→V2 notes)</li>
+<li><input disabled="" type="checkbox"> Zero-downtime upgrades (future - requires multi-server)</li>
+</ul>
+<hr>
+<h2>Priority 3: Advanced Topics (Nice-to-Have)</h2>
+<h3>UX - User Experience</h3>
+<h4>22. Add Accessibility Improvements</h4>
+<ul>
+<li><input disabled="" type="checkbox"> Screen reader support (test with Orca, NVDA)</li>
+<li><input disabled="" type="checkbox"> Add <code>--screen-reader</code> flag for plain text output</li>
+<li><input disabled="" type="checkbox"> Color scheme options for color-blind users</li>
+<li><input disabled="" type="checkbox"> High-contrast mode</li>
+<li><input disabled="" type="checkbox"> Font size configuration</li>
+</ul>
+<h4>23. Add Bandwidth Indicator</h4>
+<ul>
+<li><input disabled="" type="checkbox"> If <code>--throttle</code> enabled, show in status bar: &quot;⏱ Limited to X KB/s&quot;</li>
+</ul>
+<h4>24. Add Update Notifications</h4>
+<ul>
+<li><input disabled="" type="checkbox"> Show notification in footer when update available (not just welcome screen)</li>
+<li><input disabled="" type="checkbox"> &quot;Press U to update now&quot; shortcut</li>
+</ul>
+<h4>25. Add Session Statistics</h4>
+<ul>
+<li><input disabled="" type="checkbox"> Show in help or status:<pre><code>Connected for: 2h 34m
+Messages read: 45
+Messages posted: 12
+Data transferred: 2.3 MB
+</code></pre>
+</li>
+</ul>
+<h3>Operations - Documentation</h3>
+<h4>26. Create docs/ops/PERFORMANCE_TUNING.md</h4>
+<ul>
+<li><strong>Advanced</strong>: Optimization guide</li>
+<li><input disabled="" type="checkbox"> Baseline performance (10k connections, 75ms response, CPU-bound)</li>
+<li><input disabled="" type="checkbox"> System-level tuning (TCP settings, kernel limits, file descriptors)</li>
+<li><input disabled="" type="checkbox"> Application-level tuning (timeouts, retention, rate limits, connections)</li>
+<li><input disabled="" type="checkbox"> Database tuning (SQLite PRAGMA, WAL checkpoint, VACUUM)</li>
+<li><input disabled="" type="checkbox"> Memory optimization (MemDB, snapshot interval, GC tuning)</li>
+<li><input disabled="" type="checkbox"> Load testing (using built-in loadtest tool)</li>
+<li><input disabled="" type="checkbox"> Profiling in production (safe pprof usage)</li>
+</ul>
+<h4>27. Create docs/ops/SCALING.md</h4>
+<ul>
+<li><strong>Advanced</strong>: Scaling and high availability</li>
+<li><input disabled="" type="checkbox"> Current limitations (single-server, SQLite, no load balancing)</li>
+<li><input disabled="" type="checkbox"> Vertical scaling (CPU most important, capacity estimates)</li>
+<li><input disabled="" type="checkbox"> Single-server capacity (~10k connections tested)</li>
+<li><input disabled="" type="checkbox"> Multi-server architecture (future - not implemented yet)</li>
+<li><input disabled="" type="checkbox"> Geographic distribution (regional servers, discovery protocol)</li>
+<li><input disabled="" type="checkbox"> High availability (future - hot standby, replication, failover)</li>
+<li><input disabled="" type="checkbox"> Current best practices (single powerful server recommended)</li>
+</ul>
+<hr>
+<h2>Priority 4: Tooling and Automation (Critical Missing Tools)</h2>
+<h3>Operations - Tools to Create</h3>
+<h4>28. Create superchat-admin CLI Tool</h4>
+<ul>
+<li><strong>Critical</strong>: No way to admin without SQL</li>
+<li><input disabled="" type="checkbox"> Channel management:<ul>
+<li><input disabled="" type="checkbox"> <code>superchat-admin channel list</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin channel create &lt;name&gt; --description &quot;...&quot; --retention-hours 168</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin channel delete &lt;name&gt;</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin channel info &lt;name&gt;</code></li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> User management (V2):<ul>
+<li><input disabled="" type="checkbox"> <code>superchat-admin user list</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin user info &lt;nickname&gt;</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin user delete &lt;nickname&gt;</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin user reset-password &lt;nickname&gt;</code></li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Message moderation:<ul>
+<li><input disabled="" type="checkbox"> <code>superchat-admin message delete &lt;message-id&gt;</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin message list-deleted --channel &lt;name&gt; --since &lt;date&gt;</code></li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Server info:<ul>
+<li><input disabled="" type="checkbox"> <code>superchat-admin stats</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin sessions list</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin sessions kill &lt;session-id&gt;</code></li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Database maintenance:<ul>
+<li><input disabled="" type="checkbox"> <code>superchat-admin db backup</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin db vacuum</code></li>
+<li><input disabled="" type="checkbox"> <code>superchat-admin db integrity-check</code></li>
+</ul>
+</li>
+</ul>
+<h4>29. Create systemd Service File</h4>
+<ul>
+<li><strong>Critical</strong>: Required for production deployment</li>
+<li><input disabled="" type="checkbox"> Create <code>/etc/systemd/system/superchat.service</code> template</li>
+<li><input disabled="" type="checkbox"> Include:<ul>
+<li><input disabled="" type="checkbox"> User/Group (dedicated superchat user)</li>
+<li><input disabled="" type="checkbox"> WorkingDirectory (/var/lib/superchat)</li>
+<li><input disabled="" type="checkbox"> ExecStart with --config flag</li>
+<li><input disabled="" type="checkbox"> Restart policy (on-failure)</li>
+<li><input disabled="" type="checkbox"> Security hardening (NoNewPrivileges, PrivateTmp, ProtectSystem)</li>
+<li><input disabled="" type="checkbox"> Resource limits (LimitNOFILE=65536)</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Document in DEPLOYMENT.md</li>
+</ul>
+<h4>30. Create superchat-healthcheck Script</h4>
+<ul>
+<li><strong>Important</strong>: For monitoring systems</li>
+<li><input disabled="" type="checkbox"> Check TCP port 6465 listening</li>
+<li><input disabled="" type="checkbox"> Check SSH port 6466 listening (if enabled)</li>
+<li><input disabled="" type="checkbox"> Check database accessible and not corrupted</li>
+<li><input disabled="" type="checkbox"> Check metrics endpoint responding</li>
+<li><input disabled="" type="checkbox"> Check log file writable</li>
+<li><input disabled="" type="checkbox"> Exit 0 for healthy, 1 for unhealthy</li>
+<li><input disabled="" type="checkbox"> Output clear status message</li>
+</ul>
+<h4>31. Create superchat-diagnostics Script</h4>
+<ul>
+<li><strong>Important</strong>: Troubleshooting assistance</li>
+<li><input disabled="" type="checkbox"> Gather diagnostic info:<ul>
+<li><input disabled="" type="checkbox"> Server version and uptime</li>
+<li><input disabled="" type="checkbox"> Active connection count</li>
+<li><input disabled="" type="checkbox"> Database size and integrity</li>
+<li><input disabled="" type="checkbox"> Recent error log entries (last 100)</li>
+<li><input disabled="" type="checkbox"> Configuration summary (sanitized)</li>
+<li><input disabled="" type="checkbox"> System resource usage (CPU, RAM, disk)</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Output saved to timestamped file</li>
+<li><input disabled="" type="checkbox"> Safe to share for support (no secrets)</li>
+</ul>
+<h4>32. Create Backup Automation Script</h4>
+<ul>
+<li><strong>Critical</strong>: Data loss prevention</li>
+<li><input disabled="" type="checkbox"> Hot backup using sqlite3 <code>.backup</code> command</li>
+<li><input disabled="" type="checkbox"> Timestamp-based filenames</li>
+<li><input disabled="" type="checkbox"> Rotation (keep last N backups, configurable)</li>
+<li><input disabled="" type="checkbox"> Off-site sync (optional - rsync/S3)</li>
+<li><input disabled="" type="checkbox"> Logging</li>
+<li><input disabled="" type="checkbox"> Exit codes for cron monitoring</li>
+<li><input disabled="" type="checkbox"> Document in BACKUP_AND_RECOVERY.md</li>
+</ul>
+<h4>33. Create Prometheus Alert Rules</h4>
+<ul>
+<li><strong>Important</strong>: Proactive monitoring</li>
+<li><input disabled="" type="checkbox"> Create <code>prometheus/alerts.yml</code> template</li>
+<li><input disabled="" type="checkbox"> Alerts:<ul>
+<li><input disabled="" type="checkbox"> Server down (no metrics for 5 minutes)</li>
+<li><input disabled="" type="checkbox"> High error rate (&gt;10% of messages)</li>
+<li><input disabled="" type="checkbox"> Active sessions near limit</li>
+<li><input disabled="" type="checkbox"> Database size growing rapidly</li>
+<li><input disabled="" type="checkbox"> Broadcast latency &gt;1s</li>
+<li><input disabled="" type="checkbox"> Goroutine count increasing (leak detection)</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Document in MONITORING.md</li>
+</ul>
+<h4>34. Create Grafana Dashboard</h4>
+<ul>
+<li><strong>Important</strong>: Visualization</li>
+<li><input disabled="" type="checkbox"> Create <code>grafana/superchat-dashboard.json</code> template</li>
+<li><input disabled="" type="checkbox"> Panels:<ul>
+<li><input disabled="" type="checkbox"> Active sessions over time</li>
+<li><input disabled="" type="checkbox"> Message rate (received/sent)</li>
+<li><input disabled="" type="checkbox"> Error rate</li>
+<li><input disabled="" type="checkbox"> Broadcast latency histogram</li>
+<li><input disabled="" type="checkbox"> Subscriber distribution</li>
+<li><input disabled="" type="checkbox"> Connection/disconnection rate</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Document in MONITORING.md</li>
+</ul>
+<hr>
+<h2>Code Improvements (Infrastructure Gaps)</h2>
+<h3>Missing Infrastructure</h3>
+<h4>35. Add Health Check Endpoint ✅</h4>
+<ul>
+<li><strong>Problem</strong>: External monitoring must parse logs</li>
+<li><strong>Status</strong>: COMPLETE</li>
+<li><strong>Fix</strong>:<ul>
+<li><input checked="" disabled="" type="checkbox"> Add HTTP <code>/health</code> endpoint on metrics port (9090)</li>
+<li><input checked="" disabled="" type="checkbox"> Return 200 OK if healthy (returns JSON with status, uptime, sessions, db status)</li>
+<li><input checked="" disabled="" type="checkbox"> Include: database accessible, active sessions, uptime, directory enabled status</li>
+<li><input disabled="" type="checkbox"> Document in MONITORING.md (future)</li>
+</ul>
+</li>
+</ul>
+<h4>36. Add Graceful Shutdown Signal Handling</h4>
+<ul>
+<li><strong>Problem</strong>: Server relies on OS SIGTERM, no cleanup</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Add signal handler for SIGTERM/SIGINT</li>
+<li><input disabled="" type="checkbox"> Graceful shutdown timeout (30 seconds)</li>
+<li><input disabled="" type="checkbox"> Close active connections cleanly</li>
+<li><input disabled="" type="checkbox"> Flush MemDB to disk</li>
+<li><input disabled="" type="checkbox"> Log shutdown completion</li>
+</ul>
+</li>
+</ul>
+<h4>37. Add Log Rotation Support</h4>
+<ul>
+<li><strong>Problem</strong>: server.log grows unbounded (until restart)</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Add built-in log rotation (max size, max files)</li>
+<li><input disabled="" type="checkbox"> Or document external tool usage (logrotate)</li>
+<li><input disabled="" type="checkbox"> Document in DEPLOYMENT.md</li>
+</ul>
+</li>
+</ul>
+<h4>38. Add Structured Logging Option</h4>
+<ul>
+<li><strong>Problem</strong>: Log parsing difficult for automation</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Add <code>--log-format json</code> flag</li>
+<li><input disabled="" type="checkbox"> Output JSON logs with structured fields</li>
+<li><input disabled="" type="checkbox"> Keep human-readable as default</li>
+<li><input disabled="" type="checkbox"> Document in MONITORING.md</li>
+</ul>
+</li>
+</ul>
+<h4>39. Add Configuration Validation</h4>
+<ul>
+<li><strong>Problem</strong>: Invalid config discovered at runtime</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Validate configuration on startup</li>
+<li><input disabled="" type="checkbox"> Show clear errors with suggestions</li>
+<li><input disabled="" type="checkbox"> Add <code>--validate-config</code> flag to check without starting</li>
+<li><input disabled="" type="checkbox"> Document in CONFIGURATION.md</li>
+</ul>
+</li>
+</ul>
+<h4>40. Add Configuration Hot-Reload</h4>
+<ul>
+<li><strong>Problem</strong>: Config changes require restart</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Add SIGHUP handler to reload config</li>
+<li><input disabled="" type="checkbox"> Only reload safe parameters (not ports, not database path)</li>
+<li><input disabled="" type="checkbox"> Log reload success/failure</li>
+<li><input disabled="" type="checkbox"> Document in ADMINISTRATION.md</li>
+</ul>
+</li>
+</ul>
+<h4>41. Add Admin API</h4>
+<ul>
+<li><strong>Future</strong>: HTTP/gRPC API for management</li>
+<li><strong>Fix</strong>:<ul>
+<li><input disabled="" type="checkbox"> Design admin API (REST or gRPC)</li>
+<li><input disabled="" type="checkbox"> Authentication/authorization</li>
+<li><input disabled="" type="checkbox"> Endpoints for channel/user/message management</li>
+<li><input disabled="" type="checkbox"> Powers superchat-admin CLI tool</li>
+<li><input disabled="" type="checkbox"> Document in ADMINISTRATION.md</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2>Documentation Quality Standards</h2>
+<p>All documentation should follow these principles:</p>
+<ul>
+<li><input disabled="" type="checkbox"> Tested on real systems (no theoretical procedures)</li>
+<li><input disabled="" type="checkbox"> Copy-paste ready (exact commands that work)</li>
+<li><input disabled="" type="checkbox"> Explained, not just shown (why, not just how)</li>
+<li><input disabled="" type="checkbox"> Error-aware (what could go wrong and how to fix)</li>
+<li><input disabled="" type="checkbox"> Platform-specific (Ubuntu, Debian, CentOS, Arch examples)</li>
+<li><input disabled="" type="checkbox"> Version-aware (note what changed between versions)</li>
+<li><input disabled="" type="checkbox"> Indexed (table of contents, good headings)</li>
+<li><input disabled="" type="checkbox"> Searchable (common terms and error messages)</li>
+<li><input disabled="" type="checkbox"> Maintained (kept up-to-date with code)</li>
+<li><input disabled="" type="checkbox"> Validated (peer-reviewed by actual operators)</li>
+</ul>
+<hr>
+<h2>Implementation Timeline (Suggested)</h2>
+<h3>Week 1: Critical Path</h3>
+<ul>
+<li>Items 9-13 (P1 operations docs)</li>
+<li>Items 29, 32 (systemd service, backup script)</li>
+<li>Items 1-3 (P0 UX fixes)</li>
+</ul>
+<h3>Week 2: High Priority</h3>
+<ul>
+<li>Items 14-18 (P1 UX improvements)</li>
+<li>Items 19-21 (P2 operations docs)</li>
+<li>Items 28, 30, 31 (admin CLI, health check, diagnostics)</li>
+</ul>
+<h3>Week 3: Advanced Topics</h3>
+<ul>
+<li>Items 26-27 (P3 operations docs)</li>
+<li>Items 33-34 (Prometheus/Grafana)</li>
+<li>Items 35-39 (code improvements)</li>
+</ul>
+<h3>Week 4: Testing and Polish</h3>
+<ul>
+<li>Test all procedures on fresh systems</li>
+<li>Peer review all documentation</li>
+<li>Create quick-start guide</li>
+<li>Update README.md with links</li>
+<li>Optional: Video walkthrough</li>
+</ul>
+<hr>
+<h2>Success Metrics</h2>
+<p>After implementing this roadmap, we should be able to:</p>
+<h3>For Server Operators:</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Deploy a production server in &lt;30 minutes (Scenario A/B)</li>
+<li><input disabled="" type="checkbox"> Restore from backup in &lt;5 minutes</li>
+<li><input disabled="" type="checkbox"> Diagnose common issues in &lt;10 minutes using troubleshooting guide</li>
+<li><input disabled="" type="checkbox"> Perform routine maintenance without developer assistance</li>
+<li><input disabled="" type="checkbox"> Monitor server health with clear metrics and alerts</li>
+<li><input disabled="" type="checkbox"> Upgrade safely with confidence in rollback procedures</li>
+<li><input disabled="" type="checkbox"> Scale by understanding current limits and future options</li>
+</ul>
+<h3>For End Users:</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Install and connect in &lt;2 minutes</li>
+<li><input disabled="" type="checkbox"> Post first message within 5 minutes of installation</li>
+<li><input disabled="" type="checkbox"> Understand channel types and navigation</li>
+<li><input disabled="" type="checkbox"> Recover from errors without external help</li>
+<li><input disabled="" type="checkbox"> Discover and switch servers easily</li>
+<li><input disabled="" type="checkbox"> Understand registration benefits and process</li>
+</ul>
+<hr>
+<h2>Notes and Context</h2>
+<ul>
+<li><strong>Audience</strong>: Server operators docs target experienced sysadmins; user docs target terminal-comfortable users</li>
+<li><strong>Scope</strong>: V1 complete, V2 partially complete (user registration, user-created channels, message editing done; SSH auth, subchannels, chat channels pending)</li>
+<li><strong>Current Scale</strong>: Tested to 10k concurrent connections (CPU-bound)</li>
+<li><strong>Priority Rationale</strong>: P0/P1 items are blockers for production deployment or critical UX friction; P2/P3 are improvements for mature product</li>
+</ul>
+<hr>
+<h2>Related Documents</h2>
+<ul>
+<li><code>CLAUDE.md</code> - Project architecture and development guidelines</li>
+<li><code>docs/versions/V2.md</code> - V2 feature summary (COMPLETE)</li>
+<li><code>docs/versions/V3.md</code> - V3 planned features</li>
+<li><code>docs/PROTOCOL.md</code> - Binary protocol specification</li>
+<li><code>docs/DATA_MODEL.md</code> - Database schema</li>
+<li><code>docs/MIGRATIONS.md</code> - Database migration system</li>
+</ul>
+
+            </article>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 SuperChat. Built with Go and Bubble Tea.</p>
+        </div>
+    </footer>
+</body>
+</html>

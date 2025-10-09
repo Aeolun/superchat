@@ -18,7 +18,7 @@ export const msbFirstTestSuite = defineTestSuite({
     },
     types: {
       "ThreeBits": {
-        fields: [
+        sequence: [
           { name: "value", type: "bit", size: 3 }
         ]
       }
@@ -54,7 +54,7 @@ export const lsbFirstTestSuite = defineTestSuite({
     },
     types: {
       "ThreeBits": {
-        fields: [
+        sequence: [
           { name: "value", type: "bit", size: 3 }
         ]
       }
@@ -87,7 +87,7 @@ export const bitOrderComparisonTestSuite = defineTestSuite({
     },
     types: {
       "TwoBitFields": {
-        fields: [
+        sequence: [
           { name: "a", type: "bit", size: 2 },
           { name: "b", type: "bit", size: 3 },
           { name: "c", type: "bit", size: 3 },

@@ -12,7 +12,7 @@ export const uint8TestSuite = defineTestSuite({
   schema: {
     types: {
       "Uint8Value": {
-        fields: [
+        sequence: [
           { name: "value", type: "uint8" }
         ]
       }

@@ -16,7 +16,7 @@ export const bitfield8TestSuite = defineTestSuite({
     },
     types: {
       "Flags": {
-        fields: [
+        sequence: [
           {
             name: "flags",
             type: "bitfield",
@@ -119,7 +119,7 @@ export const h264NALHeaderTestSuite = defineTestSuite({
     },
     types: {
       "NALHeader": {
-        fields: [
+        sequence: [
           {
             name: "header",
             type: "bitfield",
@@ -181,7 +181,7 @@ export const bitfield16TestSuite = defineTestSuite({
     },
     types: {
       "ControlWord": {
-        fields: [
+        sequence: [
           {
             name: "control",
             type: "bitfield",
@@ -234,7 +234,7 @@ export const bitfieldLSBFirstTestSuite = defineTestSuite({
     },
     types: {
       "LSBFlags": {
-        fields: [
+        sequence: [
           {
             name: "flags",
             type: "bitfield",
