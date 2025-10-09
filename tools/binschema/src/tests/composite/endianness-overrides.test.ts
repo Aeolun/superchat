@@ -144,6 +144,125 @@ export const floatEndiannessOverrideTestSuite = defineTestSuite({
 });
 
 /**
+ * Test suite for endianness overrides in nested structs
+ *
+ * Tests that endianness overrides work correctly when structs are nested
+ */
+export const nestedStructEndiannessOverrideTestSuite = defineTestSuite({
+  name: "nested_struct_endianness_override",
+  description: "Endianness overrides in nested struct fields",
+
+  schema: {
+    config: {
+      endianness: "big_endian", // Global default
+    },
+    types: {
+      "Inner": {
+        fields: [
+          { name: "value", type: "uint32", endianness: "little_endian" }
+        ]
+      },
+      "Outer": {
+        fields: [
+          { name: "id", type: "uint16" }, // Uses big_endian (global)
+          { name: "inner", type: "Inner" },
+          { name: "checksum", type: "uint16" }, // Uses big_endian (global)
+        ]
+      }
+    }
+  },
+
+  test_type: "Outer",
+
+  test_cases: [
+    {
+      description: "Nested struct with little-endian field",
+      value: {
+        id: 0x1234,
+        inner: { value: 0x12345678 },
+        checksum: 0xABCD
+      },
+      bytes: [
+        0x12, 0x34,             // id (big endian)
+        0x78, 0x56, 0x34, 0x12, // inner.value (little endian!)
+        0xAB, 0xCD,             // checksum (big endian)
+      ],
+    },
+    {
+      description: "Multiple nested structs with different endianness",
+      value: {
+        id: 0xFFFF,
+        inner: { value: 0xDEADBEEF },
+        checksum: 0x0001
+      },
+      bytes: [
+        0xFF, 0xFF,             // id (big endian)
+        0xEF, 0xBE, 0xAD, 0xDE, // inner.value (little endian)
+        0x00, 0x01,             // checksum (big endian)
+      ],
+    },
+  ]
+});
+
+/**
+ * Test suite for deeply nested endianness overrides
+ *
+ * Tests that overrides propagate correctly through multiple nesting levels
+ */
+export const deeplyNestedEndiannessTestSuite = defineTestSuite({
+  name: "deeply_nested_endianness",
+  description: "Endianness overrides in deeply nested structs",
+
+  schema: {
+    config: {
+      endianness: "big_endian",
+    },
+    types: {
+      "Level3": {
+        fields: [
+          { name: "data", type: "uint32", endianness: "little_endian" }
+        ]
+      },
+      "Level2": {
+        fields: [
+          { name: "header", type: "uint16" }, // Big endian
+          { name: "level3", type: "Level3" }
+        ]
+      },
+      "Level1": {
+        fields: [
+          { name: "id", type: "uint8" },
+          { name: "level2", type: "Level2" },
+          { name: "footer", type: "uint16" } // Big endian
+        ]
+      }
+    }
+  },
+
+  test_type: "Level1",
+
+  test_cases: [
+    {
+      description: "3-level nesting with little-endian at level 3",
+      value: {
+        id: 42,
+        level2: {
+          header: 0x1234,
+          level3: { data: 0xDEADBEEF }
+        },
+        footer: 0xABCD
+      },
+      bytes: [
+        0x2A,                   // id
+        0x12, 0x34,             // level2.header (big endian)
+        0xEF, 0xBE, 0xAD, 0xDE, // level2.level3.data (little endian!)
+        0xAB, 0xCD,             // footer (big endian)
+      ],
+    },
+  ]
+});
+
+/**
  * Test suite demonstrating the chaos of real-world mixed-endian protocols
  *
  * Some protocols really do this (looking at you, legacy formats)

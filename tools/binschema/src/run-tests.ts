@@ -11,25 +11,31 @@ import { uint8TestSuite } from "./tests/primitives/uint8.test.js";
 import { uint16BigEndianTestSuite, uint16LittleEndianTestSuite } from "./tests/primitives/uint16.test.js";
 import { uint32BigEndianTestSuite, uint32LittleEndianTestSuite } from "./tests/primitives/uint32.test.js";
 import { uint64BigEndianTestSuite, uint64LittleEndianTestSuite } from "./tests/primitives/uint64.test.js";
-import { int8TestSuite, int16BigEndianTestSuite, int32BigEndianTestSuite, int64BigEndianTestSuite } from "./tests/primitives/signed-integers.test.js";
-import { float32BigEndianTestSuite, float32LittleEndianTestSuite, float64BigEndianTestSuite } from "./tests/primitives/floats.test.js";
+import { int8TestSuite, int16BigEndianTestSuite, int32BigEndianTestSuite, int64BigEndianTestSuite, int16LittleEndianTestSuite, int32LittleEndianTestSuite, int64LittleEndianTestSuite } from "./tests/primitives/signed-integers.test.js";
+import { float32BigEndianTestSuite, float32LittleEndianTestSuite, float64BigEndianTestSuite, float64LittleEndianTestSuite } from "./tests/primitives/floats.test.js";
+import { boundaryValuesTestSuite, powerOfTwoBoundariesTestSuite, bitPatternTestSuite, signedBoundariesTestSuite } from "./tests/primitives/boundary-values.test.js";
 
 // Bit-level
 import { singleBitTestSuite } from "./tests/bit-level/single-bit.test.js";
 import { threeBitsTestSuite } from "./tests/bit-level/three-bits.test.js";
-import { spanningBytesTestSuite } from "./tests/bit-level/spanning-bytes.test.js";
+import { spanningBytesTestSuite, spanningBytesLSBTestSuite } from "./tests/bit-level/spanning-bytes.test.js";
 import { msbFirstTestSuite, lsbFirstTestSuite, bitOrderComparisonTestSuite } from "./tests/bit-level/bit-ordering.test.js";
 import { h264NALHeaderTestSuite, bitfield8TestSuite, bitfield16TestSuite, bitfieldLSBFirstTestSuite } from "./tests/bit-level/bitfields.test.js";
+import { twelveBitsTestSuite, twentyBitsTestSuite, twentyFourBitsTestSuite, fortyBitsTestSuite, fortyEightBitsTestSuite, sixtyFourBitsTestSuite, unalignedTenBitsTestSuite } from "./tests/bit-level/multi-byte-bits.test.js";
+import { mixedSizeBitfieldsTestSuite, variableSizeBitfieldsTestSuite } from "./tests/bit-level/mixed-size-bitfields.test.js";
 
 // Composite
 import { simpleStructTestSuite, mixedFieldsStructTestSuite } from "./tests/composite/simple-struct.test.js";
 import { nestedStructTestSuite, deeplyNestedStructTestSuite } from "./tests/composite/nested-struct.test.js";
-import { optionalUint64TestSuite, optionalWithBitFlagTestSuite, multipleOptionalsTestSuite } from "./tests/composite/optional.test.js";
+import { optionalUint64TestSuite, optionalWithBitFlagTestSuite, multipleOptionalsTestSuite, optionalStructTestSuite, optionalArrayTestSuite } from "./tests/composite/optional.test.js";
 import { fixedArrayTestSuite, lengthPrefixedArrayTestSuite, lengthPrefixedUint16ArrayTestSuite, nullTerminatedArrayTestSuite } from "./tests/composite/arrays.test.js";
+import { nestedArrays2DTestSuite } from "./tests/composite/nested-arrays.test.js";
+import { emptyArraysAllTypesTestSuite, emptyUint16ArrayTestSuite, emptyUint32ArrayTestSuite, emptyUint64ArrayTestSuite, largeArrayLengthTestSuite } from "./tests/composite/arrays-edge-cases.test.js";
 import { fixedArrayOfStructsTestSuite, lengthPrefixedArrayOfStructsTestSuite, nestedArrayOfStructsTestSuite, arrayOfStructsWithOptionalsTestSuite } from "./tests/composite/array-of-structs.test.js";
-import { mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite } from "./tests/composite/endianness-overrides.test.js";
+import { mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite, nestedStructEndiannessOverrideTestSuite, deeplyNestedEndiannessTestSuite } from "./tests/composite/endianness-overrides.test.js";
 import { stringTestSuite, shortStringTestSuite, cStringTestSuite, multipleStringsTestSuite } from "./tests/composite/strings.test.js";
-import { conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite } from "./tests/composite/conditionals.test.js";
+import { conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite, conditionalEqualityTestSuite, conditionalComparisonTestSuite } from "./tests/composite/conditionals.test.js";
+import { nestedFieldConditionalTestSuite, deeplyNestedConditionalTestSuite } from "./tests/composite/nested-conditionals.test.js";
 
 async function main() {
   // Parse command line arguments
@@ -71,15 +77,19 @@ async function main() {
     },
     {
       name: "Primitives - Signed Integers",
-      suites: [int8TestSuite, int16BigEndianTestSuite, int32BigEndianTestSuite, int64BigEndianTestSuite],
+      suites: [int8TestSuite, int16BigEndianTestSuite, int16LittleEndianTestSuite, int32BigEndianTestSuite, int32LittleEndianTestSuite, int64BigEndianTestSuite, int64LittleEndianTestSuite],
     },
     {
       name: "Primitives - Floats",
-      suites: [float32BigEndianTestSuite, float32LittleEndianTestSuite, float64BigEndianTestSuite],
+      suites: [float32BigEndianTestSuite, float32LittleEndianTestSuite, float64BigEndianTestSuite, float64LittleEndianTestSuite],
+    },
+    {
+      name: "Primitives - Boundary Values",
+      suites: [boundaryValuesTestSuite, powerOfTwoBoundariesTestSuite, bitPatternTestSuite, signedBoundariesTestSuite],
     },
     {
       name: "Bit-level Operations",
-      suites: [singleBitTestSuite, threeBitsTestSuite, spanningBytesTestSuite, msbFirstTestSuite, lsbFirstTestSuite, bitOrderComparisonTestSuite],
+      suites: [singleBitTestSuite, threeBitsTestSuite, spanningBytesTestSuite, spanningBytesLSBTestSuite, twelveBitsTestSuite, twentyBitsTestSuite, twentyFourBitsTestSuite, fortyBitsTestSuite, fortyEightBitsTestSuite, sixtyFourBitsTestSuite, unalignedTenBitsTestSuite, msbFirstTestSuite, lsbFirstTestSuite, bitOrderComparisonTestSuite, mixedSizeBitfieldsTestSuite, variableSizeBitfieldsTestSuite],
     },
     {
       name: "Bitfields",
@@ -91,11 +101,11 @@ async function main() {
     },
     {
       name: "Composite - Optionals",
-      suites: [optionalUint64TestSuite, optionalWithBitFlagTestSuite, multipleOptionalsTestSuite],
+      suites: [optionalUint64TestSuite, optionalWithBitFlagTestSuite, multipleOptionalsTestSuite, optionalStructTestSuite, optionalArrayTestSuite],
     },
     {
       name: "Composite - Arrays",
-      suites: [fixedArrayTestSuite, lengthPrefixedArrayTestSuite, lengthPrefixedUint16ArrayTestSuite, nullTerminatedArrayTestSuite],
+      suites: [fixedArrayTestSuite, lengthPrefixedArrayTestSuite, lengthPrefixedUint16ArrayTestSuite, nullTerminatedArrayTestSuite, nestedArrays2DTestSuite, emptyArraysAllTypesTestSuite, emptyUint16ArrayTestSuite, emptyUint32ArrayTestSuite, emptyUint64ArrayTestSuite, largeArrayLengthTestSuite],
     },
     {
       name: "Composite - Arrays of Structs",
@@ -103,7 +113,7 @@ async function main() {
     },
     {
       name: "Composite - Endianness Overrides",
-      suites: [mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite],
+      suites: [mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite, nestedStructEndiannessOverrideTestSuite, deeplyNestedEndiannessTestSuite],
     },
     {
       name: "Composite - Strings",
@@ -111,7 +121,7 @@ async function main() {
     },
     {
       name: "Composite - Conditionals",
-      suites: [conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite],
+      suites: [conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite, conditionalEqualityTestSuite, conditionalComparisonTestSuite, nestedFieldConditionalTestSuite, deeplyNestedConditionalTestSuite],
     },
   ];
 

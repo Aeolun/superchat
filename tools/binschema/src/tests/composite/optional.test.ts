@@ -182,3 +182,147 @@ export const optionalWithBitFlagTestSuite = defineTestSuite({
     },
   ]
 });
+
+/**
+ * Test suite for optional struct
+ *
+ * Demonstrates that entire structs can be optional
+ */
+export const optionalStructTestSuite = defineTestSuite({
+  name: "optional_struct",
+  description: "Optional field containing a struct",
+
+  schema: {
+    types: {
+      "Point": {
+        fields: [
+          { name: "x", type: "uint16" },
+          { name: "y", type: "uint16" },
+        ]
+      },
+      "OptionalStruct<T>": {
+        fields: [
+          { name: "present", type: "uint8" },
+          { name: "value", type: "T", conditional: "present == 1" },
+        ]
+      },
+      "Message": {
+        fields: [
+          { name: "id", type: "uint8" },
+          { name: "location", type: "OptionalStruct<Point>" },
+        ]
+      }
+    }
+  },
+
+  test_type: "Message",
+
+  test_cases: [
+    {
+      description: "Location not present",
+      value: {
+        id: 42,
+        location: { present: 0 }
+      },
+      bytes: [
+        0x2A, // id = 42
+        0x00, // location.present = 0
+      ],
+    },
+    {
+      description: "Location present (100, 200)",
+      value: {
+        id: 42,
+        location: {
+          present: 1,
+          value: { x: 100, y: 200 }
+        }
+      },
+      bytes: [
+        0x2A, // id = 42
+        0x01, // location.present = 1
+        0x00, 0x64, // location.value.x = 100
+        0x00, 0xC8, // location.value.y = 200
+      ],
+    },
+  ]
+});
+
+/**
+ * Test suite for optional array
+ *
+ * Demonstrates that entire arrays can be optional
+ */
+export const optionalArrayTestSuite = defineTestSuite({
+  name: "optional_array",
+  description: "Optional field containing an array",
+
+  schema: {
+    types: {
+      "Uint8Array": {
+        fields: [
+          { name: "data", type: "array", kind: "length_prefixed", length_type: "uint8", items: { type: "uint8" } }
+        ]
+      },
+      "OptionalArray": {
+        fields: [
+          { name: "present", type: "uint8" },
+          { name: "value", type: "Uint8Array", conditional: "present == 1" },
+        ]
+      },
+      "Message": {
+        fields: [
+          { name: "id", type: "uint8" },
+          { name: "tags", type: "OptionalArray" },
+        ]
+      }
+    }
+  },
+
+  test_type: "Message",
+
+  test_cases: [
+    {
+      description: "Tags not present",
+      value: {
+        id: 42,
+        tags: { present: 0 }
+      },
+      bytes: [
+        0x2A, // id = 42
+        0x00, // tags.present = 0
+      ],
+    },
+    {
+      description: "Tags present with empty array",
+      value: {
+        id: 42,
+        tags: {
+          present: 1,
+          value: { data: [] }
+        }
+      },
+      bytes: [
+        0x2A, // id = 42
+        0x01, // tags.present = 1
+        0x00, // tags.value.data length = 0
+      ],
+    },
+    {
+      description: "Tags present with [1, 2, 3]",
+      value: {
+        id: 42,
+        tags: {
+          present: 1,
+          value: { data: [1, 2, 3] }
+        }
+      },
+      bytes: [
+        0x2A, // id = 42
+        0x01, // tags.present = 1
+        0x03, // tags.value.data length = 3
+        0x01, 0x02, 0x03, // array elements
+      ],
+    },
+  ]
+});

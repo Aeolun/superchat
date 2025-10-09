@@ -81,12 +81,12 @@ export const bitfield8TestSuite = defineTestSuite({
         flags: {
           compressed: 1,
           encrypted: 1,
-          priority: 2, // 0b10
+          priority: 2, // 0b10 (MSB first: writes as [1,0])
           reserved: 0,
         }
       },
-      bytes: [0xD0], // 11010000
-      bits: [1,1,0,1,0,0,0,0],
+      bytes: [0xE0], // 11100000
+      bits: [1,1,1,0,0,0,0,0],
     },
     {
       description: "All bits set",

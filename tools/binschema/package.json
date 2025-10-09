@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node dist/run-tests.js",
-    "test:filter": "npm run build && node dist/run-tests.js --filter",
+    "test": "bun run src/run-tests.ts",
+    "test:filter": "bun run src/run-tests.ts --filter",
     "watch": "tsc --watch"
   },
   "keywords": [

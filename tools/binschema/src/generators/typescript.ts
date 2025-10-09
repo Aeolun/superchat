@@ -12,6 +12,32 @@ export interface GeneratedCode {
 }
 
 /**
+ * TypeScript reserved keywords and built-in types that cannot be used as interface names
+ */
+const TS_RESERVED_TYPES = new Set([
+  "string", "number", "boolean", "object", "symbol", "bigint",
+  "undefined", "null", "any", "void", "never", "unknown",
+  "Array", "Promise", "Map", "Set", "Date", "RegExp", "Error",
+]);
+
+/**
+ * Sanitize a type name for TypeScript to avoid conflicts with built-in types
+ * Appends "_" to conflicting names (e.g., "string" → "string_")
+ */
+function sanitizeTypeName(typeName: string): string {
+  // Don't sanitize generic template parameters (e.g., "Optional<T>")
+  if (typeName.includes("<")) {
+    return typeName;
+  }
+
+  if (TS_RESERVED_TYPES.has(typeName)) {
+    return `${typeName}_`;
+  }
+
+  return typeName;
+}
+
+/**
  * Generate TypeScript code for all types in the schema
  */
 export function generateTypeScript(schema: BinarySchema): string {
@@ -21,14 +47,16 @@ export function generateTypeScript(schema: BinarySchema): string {
   // Import runtime library (relative to .generated/ → dist/runtime/)
   let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "../dist/runtime/bit-stream.js";\n\n`;
 
-  // Generate code for each type (skip generic types like Optional<T>)
+  // Generate code for each type (skip generic templates like Optional<T>)
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
-    // Skip generic type templates (contain < or T parameter)
-    if (typeName.includes('<') || typeName.includes('T')) {
+    // Skip only generic type templates (e.g., "Optional<T>", "Array<T>")
+    // Don't skip regular types that happen to contain 'T' (e.g., "ThreeBitValue", "Triangle")
+    if (typeName.includes('<')) {
       continue;
     }
 
-    code += generateTypeCode(typeName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder);
+    const sanitizedName = sanitizeTypeName(typeName);
+    code += generateTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder);
     code += "\n\n";
   }
 
@@ -141,8 +169,8 @@ function resolveTypeReference(typeRef: string, schema: BinarySchema): string {
     }
   }
 
-  // Simple type reference
-  return typeRef;
+  // Simple type reference - sanitize to avoid TypeScript keyword conflicts
+  return sanitizeTypeName(typeRef);
 }
 
 /**
@@ -150,6 +178,30 @@ function resolveTypeReference(typeRef: string, schema: BinarySchema): string {
  */
 function isFieldConditional(field: Field): boolean {
   return 'conditional' in field && field.conditional !== undefined;
+}
+
+/**
+ * Convert conditional expression to TypeScript code
+ * E.g., "flags & 0x01" -> "value.flags & 0x01"
+ * E.g., "header.flags & 0x01" -> "value.header.flags & 0x01"
+ * E.g., "settings.config.enabled == 1" -> "value.settings.config.enabled == 1"
+ * For nested paths, basePath might be "value.maybe_id", so "present == 1" -> "value.maybe_id.present == 1"
+ */
+function convertConditionalToTypeScript(condition: string, basePath: string = "value"): string {
+  // Replace field paths (including nested paths like "header.flags" or "settings.config.enabled")
+  // with basePath prefixed versions (e.g., "value.header.flags")
+  //
+  // Strategy: Match field paths (identifier sequences separated by dots) and prepend basePath
+  // Example: "header.flags & 0x01" matches "header.flags" as a field path
+
+  return condition.replace(/\b([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\b/g, (match) => {
+    // Don't replace operators, keywords, or hex literals
+    if (['true', 'false', 'null', 'undefined'].includes(match)) {
+      return match;
+    }
+    // Prepend basePath to the field path
+    return `${basePath}.${match}`;
+  });
 }
 
 /**
@@ -195,14 +247,7 @@ function generateEncodeField(
   const fieldName = field.name;
   const valuePath = `value.${fieldName}`;
 
-  // Handle conditional fields
-  if (isFieldConditional(field)) {
-    let code = `${indent}if (${valuePath} !== undefined) {\n`;
-    code += generateEncodeFieldCore(field, schema, globalEndianness, valuePath, indent + "  ");
-    code += `${indent}}\n`;
-    return code;
-  }
-
+  // generateEncodeFieldCore handles both conditional and non-conditional fields
   return generateEncodeFieldCore(field, schema, globalEndianness, valuePath, indent);
 }
 
@@ -220,9 +265,13 @@ function generateEncodeFieldCore(
 
   // Handle conditional fields
   if (isFieldConditional(field)) {
-    const conditional = 'conditional' in field ? field.conditional : '';
-    // Simple conditional evaluation (just check if field is present/defined)
-    let code = `${indent}if (${valuePath} !== undefined) {\n`;
+    const condition = field.conditional!;
+    // Extract parent path from valuePath (e.g., "value.maybe_id.present" -> "value.maybe_id")
+    const lastDotIndex = valuePath.lastIndexOf('.');
+    const basePath = lastDotIndex > 0 ? valuePath.substring(0, lastDotIndex) : "value";
+    const tsCondition = convertConditionalToTypeScript(condition, basePath);
+    // Encode field if condition is true AND value is defined
+    let code = `${indent}if (${tsCondition} && ${valuePath} !== undefined) {\n`;
     code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, valuePath, indent + "  ");
     code += `${indent}}\n`;
     return code;
@@ -324,22 +373,22 @@ function generateEncodeArray(
     }
   }
 
-  // Write array elements
-  code += `${indent}for (const item of ${valuePath}) {\n`;
-
   // Safety check for items field
-  if (!field.items || typeof field.items !== 'object') {
-    code += `${indent}  // TODO: Array items type not specified\n`;
-  } else {
-    code += generateEncodeFieldCoreImpl(
-      field.items as Field,
-      schema,
-      globalEndianness,
-      "item",
-      indent + "  "
-    );
+  if (!field.items || typeof field.items !== 'object' || !('type' in field.items)) {
+    return `${indent}// ERROR: Array field '${valuePath}' has undefined or invalid items\n`;
   }
 
+  // Write array elements
+  // Use unique variable name to avoid shadowing in nested arrays
+  const itemVar = valuePath.replace(/[.\[\]]/g, "_") + "_item";
+  code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
+  code += generateEncodeFieldCoreImpl(
+    field.items as Field,
+    schema,
+    globalEndianness,
+    itemVar,
+    indent + "  "
+  );
   code += `${indent}}\n`;
 
   // Write null terminator if null_terminated
@@ -419,6 +468,9 @@ function generateDecoder(
   globalBitOrder: string
 ): string {
   let code = `export class ${typeName}Decoder extends BitStreamDecoder {\n`;
+  code += `  constructor(bytes: Uint8Array | number[]) {\n`;
+  code += `    super(bytes, "${globalBitOrder}");\n`;
+  code += `  }\n\n`;
   code += `  decode(): ${typeName} {\n`;
   code += `    const value: any = {};\n\n`;
 
@@ -446,14 +498,7 @@ function generateDecodeField(
 
   const fieldName = field.name;
 
-  // Handle conditional fields
-  if (isFieldConditional(field)) {
-    // TODO: Evaluate condition
-    let code = `${indent}// Conditional: ${field.conditional}\n`;
-    code += `${indent}// TODO: Implement conditional logic\n`;
-    return code;
-  }
-
+  // generateDecodeFieldCore handles both conditional and non-conditional fields
   return generateDecodeFieldCore(field, schema, globalEndianness, fieldName, indent);
 }
 
@@ -469,43 +514,81 @@ function generateDecodeFieldCore(
 ): string {
   if (!('type' in field)) return "";
 
+  // Handle conditional fields
+  if (isFieldConditional(field)) {
+    const condition = field.conditional!;
+    const targetPath = getTargetPath(fieldName);
+    const lastDotIndex = targetPath.lastIndexOf('.');
+    const basePath = lastDotIndex > 0 ? targetPath.substring(0, lastDotIndex) : "value";
+    const tsCondition = convertConditionalToTypeScript(condition, basePath);
+    let code = `${indent}if (${tsCondition}) {\n`;
+    code += generateDecodeFieldCoreImpl(field, schema, globalEndianness, fieldName, indent + "  ");
+    code += `${indent}}\n`;
+    return code;
+  }
+
+  return generateDecodeFieldCoreImpl(field, schema, globalEndianness, fieldName, indent);
+}
+
+/**
+ * Generate core decoding logic implementation (without conditional wrapper)
+ */
+function generateDecodeFieldCoreImpl(
+  field: Field,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  fieldName: string,
+  indent: string
+): string {
+  if (!('type' in field)) return "";
+
   const endianness = 'endianness' in field && field.endianness
     ? field.endianness
     : globalEndianness;
 
+  // Determine target: array item variables (containing '_item') are used directly,
+  // otherwise they're accessed as properties of 'value'
+  // E.g., "shapes_item" or "shapes_item.vertices" should not be prefixed with "value."
+  const isArrayItem = fieldName.includes("_item");
+  const target = isArrayItem ? fieldName : `value.${fieldName}`;
+
   switch (field.type) {
     case "bit":
-      return `${indent}value.${fieldName} = Number(this.readBits(${field.size}));\n`;
+      // Keep as bigint for > 53 bits to preserve precision (MAX_SAFE_INTEGER = 2^53 - 1)
+      if (field.size > 53) {
+        return `${indent}${target} = this.readBits(${field.size});\n`;
+      }
+      return `${indent}${target} = Number(this.readBits(${field.size}));\n`;
 
     case "uint8":
-      return `${indent}value.${fieldName} = this.readUint8();\n`;
+      return `${indent}${target} = this.readUint8();\n`;
 
     case "uint16":
-      return `${indent}value.${fieldName} = this.readUint16("${endianness}");\n`;
+      return `${indent}${target} = this.readUint16("${endianness}");\n`;
 
     case "uint32":
-      return `${indent}value.${fieldName} = this.readUint32("${endianness}");\n`;
+      return `${indent}${target} = this.readUint32("${endianness}");\n`;
 
     case "uint64":
-      return `${indent}value.${fieldName} = this.readUint64("${endianness}");\n`;
+      return `${indent}${target} = this.readUint64("${endianness}");\n`;
 
     case "int8":
-      return `${indent}value.${fieldName} = this.readInt8();\n`;
+      return `${indent}${target} = this.readInt8();\n`;
 
     case "int16":
-      return `${indent}value.${fieldName} = this.readInt16("${endianness}");\n`;
+      return `${indent}${target} = this.readInt16("${endianness}");\n`;
 
     case "int32":
-      return `${indent}value.${fieldName} = this.readInt32("${endianness}");\n`;
+      return `${indent}${target} = this.readInt32("${endianness}");\n`;
 
     case "int64":
-      return `${indent}value.${fieldName} = this.readInt64("${endianness}");\n`;
+      return `${indent}${target} = this.readInt64("${endianness}");\n`;
 
     case "float32":
-      return `${indent}value.${fieldName} = this.readFloat32("${endianness}");\n`;
+      return `${indent}${target} = this.readFloat32("${endianness}");\n`;
 
     case "float64":
-      return `${indent}value.${fieldName} = this.readFloat64("${endianness}");\n`;
+      return `${indent}${target} = this.readFloat64("${endianness}");\n`;
 
     case "array":
       return generateDecodeArray(field, schema, globalEndianness, fieldName, indent);
@@ -529,7 +612,8 @@ function generateDecodeArray(
   fieldName: string,
   indent: string
 ): string {
-  let code = `${indent}value.${fieldName} = [];\n`;
+  const target = getTargetPath(fieldName);
+  let code = `${indent}${target} = [];\n`;
 
   // Read length if length_prefixed
   if (field.kind === "length_prefixed") {
@@ -549,8 +633,10 @@ function generateDecodeArray(
         lengthRead = `Number(this.readUint64("${globalEndianness}"))`;
         break;
     }
-    code += `${indent}const ${fieldName}_length = ${lengthRead};\n`;
-    code += `${indent}for (let i = 0; i < ${fieldName}_length; i++) {\n`;
+    // Sanitize fieldName for use in variable name (replace dots with underscores)
+    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
+    code += `${indent}const ${lengthVarName} = ${lengthRead};\n`;
+    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
   } else if (field.kind === "fixed") {
     code += `${indent}for (let i = 0; i < ${field.length}; i++) {\n`;
   } else if (field.kind === "null_terminated") {
@@ -558,25 +644,34 @@ function generateDecodeArray(
     code += `${indent}while (true) {\n`;
     code += `${indent}  const byte = this.readUint8();\n`;
     code += `${indent}  if (byte === 0) break;\n`;
-    code += `${indent}  value.${fieldName}.push(byte);\n`;
+    code += `${indent}  ${target}.push(byte);\n`;
+    code += `${indent}}\n`;
+    return code;
+  }
+
+  // Safety check for items field
+  if (!field.items || typeof field.items !== 'object' || !('type' in field.items)) {
+    code += `${indent}  // ERROR: Array items undefined\n`;
     code += `${indent}}\n`;
     return code;
   }
 
   // Read array item
+  // Use unique variable name to avoid shadowing in nested arrays
+  const itemVar = fieldName.replace(/[.\[\]]/g, "_") + "_item";
   const itemDecodeCode = generateDecodeFieldCore(
-    { ...field.items, name: "item" },
+    field.items as Field,
     schema,
     globalEndianness,
-    "item",
+    itemVar,
     indent + "  "
   );
 
   // For primitive types, directly push
-  if (itemDecodeCode.includes("item =")) {
-    code += `${indent}  let item: any;\n`;
+  if (itemDecodeCode.includes(`${itemVar} =`)) {
+    code += `${indent}  let ${itemVar}: any;\n`;
     code += itemDecodeCode;
-    code += `${indent}  value.${fieldName}.push(item);\n`;
+    code += `${indent}  ${target}.push(${itemVar});\n`;
   }
 
   code += `${indent}}\n`;
@@ -585,13 +680,27 @@ function generateDecodeArray(
 }
 
 /**
+ * Get the target path for a field (handles array item variables)
+ */
+function getTargetPath(fieldName: string): string {
+  // Array item variables contain '_item' and should not be prefixed with 'value.'
+  return fieldName.includes("_item") ? fieldName : `value.${fieldName}`;
+}
+
+/**
  * Generate decoding for bitfield
  */
 function generateDecodeBitfield(field: any, fieldName: string, indent: string): string {
-  let code = `${indent}value.${fieldName} = {};\n`;
+  const target = getTargetPath(fieldName);
+  let code = `${indent}${target} = {};\n`;
 
   for (const subField of field.fields) {
-    code += `${indent}value.${fieldName}.${subField.name} = Number(this.readBits(${subField.size}));\n`;
+    // Keep as bigint for > 53 bits to preserve precision
+    if (subField.size > 53) {
+      code += `${indent}${target}.${subField.name} = this.readBits(${subField.size});\n`;
+    } else {
+      code += `${indent}${target}.${subField.name} = Number(this.readBits(${subField.size}));\n`;
+    }
   }
 
   return code;
@@ -606,6 +715,8 @@ function generateDecodeTypeReference(
   fieldName: string,
   indent: string
 ): string {
+  const target = getTargetPath(fieldName);
+
   // Check if this is a generic type instantiation (e.g., Optional<uint64>)
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
   if (genericMatch) {
@@ -614,7 +725,7 @@ function generateDecodeTypeReference(
 
     if (templateDef) {
       // Inline expand the generic by replacing T with the type argument
-      let code = `${indent}value.${fieldName} = {};\n`;
+      let code = `${indent}${target} = {};\n`;
       for (const field of templateDef.fields) {
         // Replace T with the actual type
         const expandedField = JSON.parse(
@@ -639,7 +750,7 @@ function generateDecodeTypeReference(
     return `${indent}// TODO: Unknown type ${typeRef}\n`;
   }
 
-  let code = `${indent}value.${fieldName} = {};\n`;
+  let code = `${indent}${target} = {};\n`;
   for (const field of typeDef.fields) {
     const subFieldCode = generateDecodeFieldCore(
       field,
@@ -648,7 +759,7 @@ function generateDecodeTypeReference(
       `${fieldName}.${field.name}`,
       indent
     );
-    code += subFieldCode.replace(`value.${fieldName}.`, `value.${fieldName}.`);
+    code += subFieldCode;
   }
 
   return code;

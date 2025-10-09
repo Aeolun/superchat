@@ -66,3 +66,59 @@ export const spanningBytesTestSuite = defineTestSuite({
     },
   ]
 });
+
+/**
+ * Test suite for LSB-first byte spanning
+ *
+ * Wire format: 1-bit flag + 8-bit value with LSB-first bit order
+ * Tests that LSB-first works correctly across byte boundaries
+ */
+export const spanningBytesLSBTestSuite = defineTestSuite({
+  name: "spanning_bytes_lsb",
+  description: "LSB-first bit fields crossing byte boundaries",
+
+  schema: {
+    config: {
+      bit_order: "lsb_first",
+    },
+    types: {
+      "SpanningValueLSB": {
+        fields: [
+          { name: "flag", type: "bit", size: 1 },
+          { name: "value", type: "bit", size: 8 },
+        ]
+      }
+    }
+  },
+
+  test_type: "SpanningValueLSB",
+
+  test_cases: [
+    {
+      description: "flag=0, value=0x00",
+      value: { flag: 0, value: 0x00 },
+      bytes: [0x00, 0x00], // LSB first: 00000000 0_______
+    },
+    {
+      description: "flag=1, value=0x00",
+      value: { flag: 1, value: 0x00 },
+      bytes: [0x01, 0x00], // LSB first: flag takes bit 0 -> 00000001 0_______
+    },
+    {
+      description: "flag=0, value=0xFF",
+      value: { flag: 0, value: 0xFF },
+      bytes: [0xFE, 0x01], // LSB first: 0 + FF = 11111110 00000001
+    },
+    {
+      description: "flag=1, value=0x42 (0b01000010)",
+      value: { flag: 1, value: 0x42 },
+      bytes: [0x85, 0x00], // LSB: 1 + 0b01000010 = 10000101 0_______
+                            // Bit layout: 1(flag) 01000010(value LSB first)
+    },
+    {
+      description: "flag=1, value=0xAA (0b10101010)",
+      value: { flag: 1, value: 0xAA },
+      bytes: [0x55, 0x01], // LSB: 1 + 0b10101010 = 01010101 00000001
+    },
+  ]
+});

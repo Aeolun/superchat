@@ -232,3 +232,195 @@ export const int64BigEndianTestSuite = defineTestSuite({
     },
   ]
 });
+
+/**
+ * Test suite for int16 little endian (16-bit signed integer)
+ *
+ * Wire format: 2 bytes, two's complement, least significant byte first
+ * Range: -32768 to 32767
+ */
+export const int16LittleEndianTestSuite = defineTestSuite({
+  name: "int16_little_endian",
+  description: "16-bit signed integer (little endian)",
+
+  schema: {
+    config: {
+      endianness: "little_endian",
+    },
+    types: {
+      "Int16Value": {
+        fields: [
+          { name: "value", type: "int16" }
+        ]
+      }
+    }
+  },
+
+  test_type: "Int16Value",
+
+  test_cases: [
+    {
+      description: "Zero",
+      value: { value: 0 },
+      bytes: [0x00, 0x00],
+    },
+    {
+      description: "Positive value (1000)",
+      value: { value: 1000 },
+      bytes: [0xE8, 0x03], // Little endian: LSB first
+    },
+    {
+      description: "Negative value (-1)",
+      value: { value: -1 },
+      bytes: [0xFF, 0xFF],
+    },
+    {
+      description: "Negative value (-1000)",
+      value: { value: -1000 },
+      bytes: [0x18, 0xFC], // Two's complement, little endian
+    },
+    {
+      description: "Negative value (-32767)",
+      value: { value: -32767 },
+      bytes: [0x01, 0x80], // Edge case: -32767 = 0x8001 in two's complement
+    },
+    {
+      description: "Minimum value (-32768)",
+      value: { value: -32768 },
+      bytes: [0x00, 0x80],
+    },
+    {
+      description: "Maximum value (32767)",
+      value: { value: 32767 },
+      bytes: [0xFF, 0x7F],
+    },
+  ]
+});
+
+/**
+ * Test suite for int32 little endian (32-bit signed integer)
+ *
+ * Wire format: 4 bytes, two's complement, least significant byte first
+ * Range: -2147483648 to 2147483647
+ */
+export const int32LittleEndianTestSuite = defineTestSuite({
+  name: "int32_little_endian",
+  description: "32-bit signed integer (little endian)",
+
+  schema: {
+    config: {
+      endianness: "little_endian",
+    },
+    types: {
+      "Int32Value": {
+        fields: [
+          { name: "value", type: "int32" }
+        ]
+      }
+    }
+  },
+
+  test_type: "Int32Value",
+
+  test_cases: [
+    {
+      description: "Zero",
+      value: { value: 0 },
+      bytes: [0x00, 0x00, 0x00, 0x00],
+    },
+    {
+      description: "Positive value (1000000)",
+      value: { value: 1000000 },
+      bytes: [0x40, 0x42, 0x0F, 0x00], // Little endian
+    },
+    {
+      description: "Negative value (-1)",
+      value: { value: -1 },
+      bytes: [0xFF, 0xFF, 0xFF, 0xFF],
+    },
+    {
+      description: "Negative value (-1000000)",
+      value: { value: -1000000 },
+      bytes: [0xC0, 0xBD, 0xF0, 0xFF],
+    },
+    {
+      description: "Negative value (-2)",
+      value: { value: -2 },
+      bytes: [0xFE, 0xFF, 0xFF, 0xFF], // Small negative with sign extension
+    },
+    {
+      description: "Minimum value (-2147483648)",
+      value: { value: -2147483648 },
+      bytes: [0x00, 0x00, 0x00, 0x80],
+    },
+    {
+      description: "Maximum value (2147483647)",
+      value: { value: 2147483647 },
+      bytes: [0xFF, 0xFF, 0xFF, 0x7F],
+    },
+  ]
+});
+
+/**
+ * Test suite for int64 little endian (64-bit signed integer)
+ *
+ * Wire format: 8 bytes, two's complement, least significant byte first
+ * Range: -9223372036854775808 to 9223372036854775807
+ */
+export const int64LittleEndianTestSuite = defineTestSuite({
+  name: "int64_little_endian",
+  description: "64-bit signed integer (little endian)",
+
+  schema: {
+    config: {
+      endianness: "little_endian",
+    },
+    types: {
+      "Int64Value": {
+        fields: [
+          { name: "value", type: "int64" }
+        ]
+      }
+    }
+  },
+
+  test_type: "Int64Value",
+
+  test_cases: [
+    {
+      description: "Zero",
+      value: { value: 0n },
+      bytes: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+    },
+    {
+      description: "Positive value (1000000000000)",
+      value: { value: 1000000000000n },
+      bytes: [0x00, 0x10, 0xA5, 0xD4, 0xE8, 0x00, 0x00, 0x00], // Little endian
+    },
+    {
+      description: "Negative value (-1)",
+      value: { value: -1n },
+      bytes: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+    },
+    {
+      description: "Negative value (-1000000000000)",
+      value: { value: -1000000000000n },
+      bytes: [0x00, 0xF0, 0x5A, 0x2B, 0x17, 0xFF, 0xFF, 0xFF],
+    },
+    {
+      description: "Negative value (-3)",
+      value: { value: -3n },
+      bytes: [0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], // Small negative
+    },
+    {
+      description: "Minimum value (-9223372036854775808)",
+      value: { value: -9223372036854775808n },
+      bytes: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80],
+    },
+    {
+      description: "Maximum value (9223372036854775807)",
+      value: { value: 9223372036854775807n },
+      bytes: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F],
+    },
+  ]
+});

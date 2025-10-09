@@ -146,14 +146,155 @@ const ArrayKindSchema = z.enum([
 ]);
 export type ArrayKind = z.infer<typeof ArrayKindSchema>;
 
+// ============================================================================
+// Element Types (for array items - no 'name' field required)
+// ============================================================================
+
+/**
+ * Element type schemas are like field schemas but without the 'name' property.
+ * Used for array items where elements don't have individual names.
+ */
+
+const BitElementSchema = z.object({
+  type: z.literal("bit"),
+  size: z.number().int().min(1).max(64),
+  description: z.string().optional(),
+});
+
+const SignedIntElementSchema = z.object({
+  type: z.literal("int"),
+  size: z.number().int().min(1).max(64),
+  signed: z.literal(true),
+  description: z.string().optional(),
+});
+
+const Uint8ElementSchema = z.object({
+  type: z.literal("uint8"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Uint16ElementSchema = z.object({
+  type: z.literal("uint16"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Uint32ElementSchema = z.object({
+  type: z.literal("uint32"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Uint64ElementSchema = z.object({
+  type: z.literal("uint64"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Int8ElementSchema = z.object({
+  type: z.literal("int8"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Int16ElementSchema = z.object({
+  type: z.literal("int16"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Int32ElementSchema = z.object({
+  type: z.literal("int32"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Int64ElementSchema = z.object({
+  type: z.literal("int64"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Float32ElementSchema = z.object({
+  type: z.literal("float32"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+const Float64ElementSchema = z.object({
+  type: z.literal("float64"),
+  endianness: EndiannessSchema.optional(),
+  description: z.string().optional(),
+});
+
+/**
+ * Type reference without name (for array items)
+ */
+const TypeRefElementSchema = z.object({
+  type: z.string(),
+  description: z.string().optional(),
+});
+
+/**
+ * Array element schema (array without name - for nested arrays)
+ */
+const ArrayElementSchema = z.object({
+  type: z.literal("array"),
+  kind: ArrayKindSchema,
+  get items() {
+    return ElementTypeSchema; // Recursive reference
+  },
+  length: z.number().int().min(1).optional(),
+  length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(),
+  description: z.string().optional(),
+}).refine(
+  (data) => {
+    if (data.kind === "fixed") return data.length !== undefined;
+    if (data.kind === "length_prefixed") return data.length_type !== undefined;
+    return true;
+  },
+  {
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type'",
+  }
+);
+
+/**
+ * Element type union - all possible array element types
+ * Note: Uses getter for recursive array elements (Zod 4 pattern)
+ */
+const ElementTypeSchema: z.ZodType<any> = z.union([
+  // Discriminated union for typed elements (includes nested arrays)
+  z.discriminatedUnion("type", [
+    BitElementSchema,
+    SignedIntElementSchema,
+    Uint8ElementSchema,
+    Uint16ElementSchema,
+    Uint32ElementSchema,
+    Uint64ElementSchema,
+    Int8ElementSchema,
+    Int16ElementSchema,
+    Int32ElementSchema,
+    Int64ElementSchema,
+    Float32ElementSchema,
+    Float64ElementSchema,
+    ArrayElementSchema, // Support nested arrays
+  ]),
+  // Type reference for user-defined types
+  TypeRefElementSchema,
+]);
+
 /**
  * Array field (variable or fixed length)
+ * Note: Uses getter for recursive 'items' reference (Zod 4 pattern)
  */
 const ArrayFieldSchema = z.object({
   name: z.string(),
   type: z.literal("array"),
   kind: ArrayKindSchema,
-  items: z.lazy(() => FieldTypeRefSchema), // Recursive: array of any field type
+  get items() {
+    return ElementTypeSchema; // Recursive: array of element types (no name required)
+  },
   length: z.number().int().min(1).optional(), // For fixed arrays
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
   description: z.string().optional(),
@@ -187,6 +328,7 @@ const BitfieldFieldSchema = z.object({
 
 /**
  * Reference to another type (for composition)
+ * Note: This MUST be last in the FieldTypeRefSchema union to avoid matching built-in types
  */
 const TypeRefFieldSchema = z.object({
   name: z.string(),
@@ -205,25 +347,37 @@ const ConditionalFieldSchema = z.object({
 });
 
 /**
- * Field type reference (for recursive types)
+ * All possible field types as a discriminated union
+ *
+ * Order matters: most specific schemas first, then fallback to type reference.
+ * - Primitives and special types use discriminated union on 'type' field
+ * - Conditionals are detected by presence of 'conditional' property
+ * - Type references are the fallback for user-defined types
  */
 const FieldTypeRefSchema: z.ZodType<any> = z.union([
-  BitFieldSchema,
-  SignedIntFieldSchema,
-  Uint8FieldSchema,
-  Uint16FieldSchema,
-  Uint32FieldSchema,
-  Uint64FieldSchema,
-  Int8FieldSchema,
-  Int16FieldSchema,
-  Int32FieldSchema,
-  Int64FieldSchema,
-  Float32FieldSchema,
-  Float64FieldSchema,
-  ArrayFieldSchema,
-  BitfieldFieldSchema,
-  TypeRefFieldSchema,
+  // First: Check for conditional fields (has 'conditional' property - unique identifier)
   ConditionalFieldSchema,
+
+  // Second: Discriminated union on 'type' field for all built-in types
+  z.discriminatedUnion("type", [
+    BitFieldSchema,
+    SignedIntFieldSchema,
+    Uint8FieldSchema,
+    Uint16FieldSchema,
+    Uint32FieldSchema,
+    Uint64FieldSchema,
+    Int8FieldSchema,
+    Int16FieldSchema,
+    Int32FieldSchema,
+    Int64FieldSchema,
+    Float32FieldSchema,
+    Float64FieldSchema,
+    ArrayFieldSchema,
+    BitfieldFieldSchema,
+  ]),
+
+  // Third: Fallback to type reference for user-defined types
+  TypeRefFieldSchema,
 ]);
 
 /**

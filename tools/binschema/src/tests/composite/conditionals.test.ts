@@ -187,3 +187,148 @@ export const versionConditionalTestSuite = defineTestSuite({
     },
   ]
 });
+
+/**
+ * Test suite for conditional based on specific bits
+ *
+ * Demonstrates conditionals using bitwise operations for message type discrimination
+ */
+export const conditionalEqualityTestSuite = defineTestSuite({
+  name: "conditional_equality",
+  description: "Conditional fields based on type bits",
+
+  schema: {
+    types: {
+      "String": {
+        fields: [
+          { name: "data", type: "array", kind: "length_prefixed", length_type: "uint32", items: { type: "uint8" } }
+        ]
+      },
+      "TypedMessage": {
+        fields: [
+          { name: "type", type: "uint8" },
+          { name: "text", type: "String", conditional: "type & 0x01" },
+          { name: "number", type: "uint32", conditional: "type & 0x02" },
+          { name: "flag", type: "uint8", conditional: "type & 0x04" },
+        ]
+      }
+    }
+  },
+
+  test_type: "TypedMessage",
+
+  test_cases: [
+    {
+      description: "Type 0x01 (text message)",
+      value: {
+        type: 0x01,
+        text: { data: [72, 105] } // "Hi"
+      },
+      bytes: [
+        0x01, // type = 0x01
+        0x00, 0x00, 0x00, 0x02, // string length = 2
+        0x48, 0x69, // "Hi"
+      ],
+    },
+    {
+      description: "Type 0x02 (number message)",
+      value: {
+        type: 0x02,
+        number: 12345
+      },
+      bytes: [
+        0x02, // type = 0x02
+        0x00, 0x00, 0x30, 0x39, // number = 12345
+      ],
+    },
+    {
+      description: "Type 0x04 (flag message)",
+      value: {
+        type: 0x04,
+        flag: 0xFF
+      },
+      bytes: [
+        0x04, // type = 0x04
+        0xFF, // flag
+      ],
+    },
+    {
+      description: "Type 0x00 (no conditional fields)",
+      value: {
+        type: 0x00
+      },
+      bytes: [0x00], // Only type field
+    },
+    {
+      description: "Type 0x03 (text + number)",
+      value: {
+        type: 0x03,
+        text: { data: [72, 105] }, // "Hi"
+        number: 999
+      },
+      bytes: [
+        0x03, // type = 0x03 (bits 0 and 1 set)
+        0x00, 0x00, 0x00, 0x02, // string length = 2
+        0x48, 0x69, // "Hi"
+        0x00, 0x00, 0x03, 0xE7, // number = 999
+      ],
+    },
+  ]
+});
+
+/**
+ * Test suite for conditional based on comparison operators
+ *
+ * Demonstrates conditionals using >, <, >=, <= operators
+ */
+export const conditionalComparisonTestSuite = defineTestSuite({
+  name: "conditional_comparison",
+  description: "Conditional fields based on comparison operators",
+
+  schema: {
+    types: {
+      "RangeMessage": {
+        fields: [
+          { name: "level", type: "uint8" },
+          { name: "basic_info", type: "uint8", conditional: "level >= 1" },
+          { name: "extended_info", type: "uint16", conditional: "level >= 2" },
+          { name: "debug_data", type: "uint32", conditional: "level >= 3" },
+        ]
+      }
+    }
+  },
+
+  test_type: "RangeMessage",
+
+  test_cases: [
+    {
+      description: "Level 0 (no info)",
+      value: { level: 0 },
+      bytes: [0x00],
+    },
+    {
+      description: "Level 1 (basic info only)",
+      value: { level: 1, basic_info: 0x42 },
+      bytes: [0x01, 0x42],
+    },
+    {
+      description: "Level 2 (basic + extended)",
+      value: {
+        level: 2,
+        basic_info: 0x42,
+        extended_info: 0x1234
+      },
+      bytes: [0x02, 0x42, 0x12, 0x34],
+    },
+    {
+      description: "Level 3 (all fields)",
+      value: {
+        level: 3,
+        basic_info: 0x42,
+        extended_info: 0x1234,
+        debug_data: 0x12345678
+      },
+      bytes: [0x03, 0x42, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78],
+    },
+  ]
+});

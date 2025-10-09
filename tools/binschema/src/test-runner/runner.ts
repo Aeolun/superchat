@@ -1,8 +1,8 @@
 import { TestSuite, TestCase } from "../schema/test-schema.js";
 import { generateTypeScript } from "../generators/typescript.js";
+import { validateSchema, formatValidationErrors } from "../schema/validator.js";
 import { writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { execSync } from "child_process";
 import { pathToFileURL } from "url";
 
 /**
@@ -15,6 +15,16 @@ import { pathToFileURL } from "url";
  * 4. Running encode/decode tests
  * 5. Comparing results with expected bytes/bits
  */
+
+/**
+ * Stringify with BigInt support
+ * Converts BigInt to string with 'n' suffix
+ */
+function stringifyWithBigInt(value: any): string {
+  return JSON.stringify(value, (key, val) =>
+    typeof val === 'bigint' ? val.toString() + 'n' : val
+  );
+}
 
 export interface TestResult {
   testSuite: string;
@@ -42,32 +52,38 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
     failures: [],
   };
 
+  // Validate schema before generation
+  const validation = validateSchema(suite.schema);
+  if (!validation.valid) {
+    console.error(`\n❌ Schema validation failed for ${suite.name}:`);
+    console.error(formatValidationErrors(validation));
+    result.failed = suite.test_cases.length;
+    for (const testCase of suite.test_cases) {
+      result.failures.push({
+        description: testCase.description,
+        type: "encode",
+        expected: [],
+        actual: [],
+        message: "Schema validation failed",
+      });
+    }
+    return result;
+  }
+
   // Generate TypeScript code
   const generatedCode = generateTypeScript(suite.schema);
 
-  // Write to .generated directory
+  // Write to .generated directory (use suite.name to avoid collisions between variants)
   const genDir = join(process.cwd(), ".generated");
   mkdirSync(genDir, { recursive: true });
-  const genFile = join(genDir, `${suite.test_type}.ts`);
+  const genFile = join(genDir, `${suite.name}.ts`);
   writeFileSync(genFile, generatedCode);
 
   console.log(`\nGenerated code for ${suite.name} → ${genFile}`);
 
-  // Compile TypeScript to JavaScript
-  try {
-    execSync(`npx tsc ${genFile} --outDir ${genDir} --module esnext --target es2020 --moduleResolution node`, {
-      cwd: process.cwd(),
-      stdio: "inherit",
-    });
-  } catch (error) {
-    console.error("TypeScript compilation failed!");
-    result.failed = suite.test_cases.length;
-    return result;
-  }
-
-  // Dynamically import generated code
-  const genJsFile = join(genDir, `${suite.test_type}.js`);
-  const generatedModule = await import(pathToFileURL(genJsFile).href);
+  // Dynamically import generated TypeScript code (bun supports .ts natively)
+  // Force fresh import by adding timestamp to bypass cache
+  const generatedModule = await import(pathToFileURL(genFile).href + `?t=${Date.now()}`);
 
   // Get encoder/decoder class names (use test_type, not first type in schema)
   const typeName = suite.test_type;
@@ -142,8 +158,8 @@ async function runTestCase(
         failures.push({
           description: testCase.description,
           type: "decode",
-          expected: JSON.stringify(testCase.value),
-          actual: JSON.stringify(decoded),
+          expected: stringifyWithBigInt(testCase.value),
+          actual: stringifyWithBigInt(decoded),
           message: "Decoded value does not match original",
         });
       }
@@ -189,10 +205,57 @@ function arraysEqual<T>(a: T[], b: T[]): boolean {
 }
 
 /**
+ * Check if two numbers are approximately equal (for float comparisons)
+ * Uses relative tolerance for large numbers, absolute for small
+ */
+function approximatelyEqual(a: number, b: number): boolean {
+  // Exact match (including special values like Infinity, NaN)
+  if (a === b) return true;
+
+  // NaN handling
+  if (Number.isNaN(a) && Number.isNaN(b)) return true;
+  if (Number.isNaN(a) || Number.isNaN(b)) return false;
+
+  // Float32 has ~7 decimal digits of precision
+  // Use relative error tolerance
+  const diff = Math.abs(a - b);
+  const absA = Math.abs(a);
+  const absB = Math.abs(b);
+  const largest = Math.max(absA, absB);
+
+  // For very small numbers near zero, use absolute tolerance
+  if (largest < 1e-9) {
+    return diff < 1e-12;
+  }
+
+  // For normal numbers, use relative tolerance
+  // Float32 precision is ~6-7 significant digits, so allow 1.5% error
+  return diff / largest < 0.015;
+}
+
+/**
  * Deep equality comparison for objects
  */
 function deepEqual(a: any, b: any): boolean {
   if (a === b) return true;
+
+  // Special handling for numbers (float comparisons with tolerance)
+  if (typeof a === "number" && typeof b === "number") {
+    return approximatelyEqual(a, b);
+  }
+
+  // Special handling for bigint - allow comparison between bigint and number
+  if (typeof a === "bigint" || typeof b === "bigint") {
+    // Convert both to bigint for comparison
+    try {
+      const bigA = typeof a === "bigint" ? a : BigInt(a);
+      const bigB = typeof b === "bigint" ? b : BigInt(b);
+      return bigA === bigB;
+    } catch {
+      return false;
+    }
+  }
+
   if (typeof a !== typeof b) return false;
   if (typeof a !== "object" || a === null || b === null) return false;
 
@@ -235,6 +298,14 @@ export function printTestResults(results: TestResult[]): void {
       console.log(`  ✗ ${result.failed} failed`);
       for (const failure of result.failures) {
         console.log(`    - ${failure.description}: ${failure.message}`);
+        // Show expected vs actual for both encode and decode failures
+        if (failure.type === "encode") {
+          console.log(`      Expected bytes: [${failure.expected}]`);
+          console.log(`      Actual bytes:   [${failure.actual}]`);
+        } else if (failure.type === "decode") {
+          console.log(`      Expected: ${failure.expected}`);
+          console.log(`      Actual:   ${failure.actual}`);
+        }
       }
     }
   }

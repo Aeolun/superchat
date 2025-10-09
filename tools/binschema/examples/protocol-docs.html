@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SuperChat Protocol</title>
+  <style>
+    /* Protocol Documentation Styles */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+
+    .protocol-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 40px 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+
+    .protocol-header h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+    }
+
+    .protocol-version {
+      font-size: 1.2em;
+      opacity: 0.9;
+    }
+
+    .toc {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .toc h2 {
+      margin-bottom: 15px;
+      color: #667eea;
+    }
+
+    .toc ul {
+      list-style: none;
+    }
+
+    .toc li {
+      margin: 8px 0;
+    }
+
+    .toc a {
+      color: #667eea;
+      text-decoration: none;
+      padding: 5px 10px;
+      display: inline-block;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .toc a:hover {
+      background: #f0f0f0;
+    }
+
+    main {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .section {
+      margin-bottom: 50px;
+    }
+
+    .section h2 {
+      color: #667eea;
+      border-bottom: 2px solid #667eea;
+      padding-bottom: 10px;
+      margin-bottom: 20px;
+    }
+
+    .section h3 {
+      color: #764ba2;
+      margin: 30px 0 15px 0;
+    }
+
+    .wire-format {
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 15px;
+      margin: 20px 0;
+    }
+
+    .field {
+      background: white;
+      border-left: 4px solid #667eea;
+      padding: 12px;
+      margin: 8px 0;
+      border-radius: 4px;
+    }
+
+    .field.conditional {
+      border-left-color: #f59e0b;
+    }
+
+    .field-name {
+      font-weight: bold;
+      color: #667eea;
+      font-size: 1.1em;
+    }
+
+    .field-type {
+      font-family: 'Courier New', monospace;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    .field-size {
+      color: #999;
+      font-size: 0.9em;
+      margin-top: 2px;
+    }
+
+    .field-desc {
+      margin-top: 8px;
+      color: #555;
+    }
+
+    .field-condition {
+      margin-top: 6px;
+      padding: 4px 8px;
+      background: #fef3c7;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+      color: #92400e;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+    }
+
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+
+    th {
+      background: #667eea;
+      color: white;
+      font-weight: 600;
+    }
+
+    tr:hover {
+      background: #f9f9f9;
+    }
+
+    code {
+      background: #f0f0f0;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+
+    details {
+      margin: 15px 0;
+    }
+
+    summary {
+      cursor: pointer;
+      user-select: none;
+      padding: 10px;
+      background: #f9f9f9;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    summary:hover {
+      background: #f0f0f0;
+    }
+
+    summary h3, summary h4 {
+      display: inline;
+      margin: 0;
+    }
+
+    .message-details {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0;
+      margin: 15px 0;
+    }
+
+    .message-details summary {
+      background: #f5f5f5;
+    }
+
+    .message-details[open] summary {
+      border-bottom: 1px solid #ddd;
+    }
+
+    .message-details > :not(summary) {
+      padding: 15px;
+    }
+
+    .message-description {
+      font-size: 1.1em;
+      margin: 15px 0;
+    }
+
+    .message-notes {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 12px;
+      margin: 15px 0;
+      border-radius: 4px;
+    }
+
+    .example {
+      margin: 20px 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    .hex-dump {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+      line-height: 1.4;
+    }
+
+    .decoded {
+      background: #f9f9f9;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+
+    .error {
+      color: #dc2626;
+      background: #fee2e2;
+      padding: 10px;
+      border-radius: 4px;
+      border-left: 4px solid #dc2626;
+    }
+
+    footer {
+      text-align: center;
+      padding: 20px;
+      color: #999;
+      margin-top: 40px;
+    }
+  </style>
+</head>
+<body>
+  <header class="protocol-header">
+    <h1>SuperChat Protocol</h1>
+    <div class="protocol-version">Version 1.0</div>
+  </header>
+
+  <nav class="toc">
+    <h2>Table of Contents</h2>
+    <ul>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#frame-format">Frame Format</a></li>
+      <li><a href="#data-types">Data Types</a></li>
+      <li><a href="#messages">Messages</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <section id="overview" class="section">
+      <h2>Overview</h2>
+      <p>A lightweight binary protocol for real-time threaded chat communication between SuperChat clients and servers.</p>
+      <div class="notes">
+        <p>All multi-byte integers use big-endian byte order.</p>
+        <p>Strings are UTF-8 encoded with uint16 length prefix (max 65535 bytes).</p>
+        <p>Optional fields use a presence byte (1=present, 0=absent) followed by value if present.</p>
+        <p>Maximum frame size is 1 MB (1,048,576 bytes) to prevent DoS attacks.</p>
+        <p>Clients must send PING every 30 seconds to avoid session timeout (60s inactivity).</p>
+      </div>
+    </section>
+
+    <section id="frame-format" class="section">
+      <h2>Frame Format</h2>
+      <p>All messages use the following frame-based format:</p>
+
+      <div class="wire-format">
+        <div class="field">
+          <div class="field-name">length</div>
+          <div class="field-type">uint32</div>
+          <div class="field-size">4 bytes</div>
+          <div class="field-desc">Total size of Version + Type + Flags + Payload (excludes the length field itself)</div>
+        </div>
+        <div class="field">
+          <div class="field-name">version</div>
+          <div class="field-type">uint8</div>
+          <div class="field-size">1 byte</div>
+          <div class="field-desc">Protocol version (current: 1). Both client and server must validate on every message.</div>
+        </div>
+        <div class="field">
+          <div class="field-name">type</div>
+          <div class="field-type">uint8</div>
+          <div class="field-size">1 byte</div>
+          <div class="field-desc">Message type identifier (0x01-0xFF)</div>
+        </div>
+        <div class="field">
+          <div class="field-name">flags</div>
+          <div class="field-type">uint8</div>
+          <div class="field-size">1 byte</div>
+          <div class="field-desc">Bit flags: bit 0=compression (LZ4), bit 1=encryption, bits 2-7 reserved</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="data-types" class="section">
+      <h2>Data Types</h2>
+      <div class="type-list">
+        <details class="type-details">
+          <summary><h3>Primitive Types</h3></summary>
+          <table class="types-table">
+            <thead>
+              <tr><th>Type</th><th>Size</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>uint8</td><td>1 byte</td><td>Unsigned 8-bit integer</td></tr>
+              <tr><td>uint16</td><td>2 bytes</td><td>Unsigned 16-bit integer (big-endian)</td></tr>
+              <tr><td>uint32</td><td>4 bytes</td><td>Unsigned 32-bit integer (big-endian)</td></tr>
+              <tr><td>uint64</td><td>8 bytes</td><td>Unsigned 64-bit integer (big-endian)</td></tr>
+              <tr><td>int8</td><td>1 byte</td><td>Signed 8-bit integer</td></tr>
+              <tr><td>int16</td><td>2 bytes</td><td>Signed 16-bit integer (big-endian)</td></tr>
+              <tr><td>int32</td><td>4 bytes</td><td>Signed 32-bit integer (big-endian)</td></tr>
+              <tr><td>int64</td><td>8 bytes</td><td>Signed 64-bit integer (big-endian)</td></tr>
+              <tr><td>float32</td><td>4 bytes</td><td>32-bit floating point (IEEE 754)</td></tr>
+              <tr><td>float64</td><td>8 bytes</td><td>64-bit floating point (IEEE 754)</td></tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>String</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>data</td>
+                <td><code>uint8[]</code></td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>FrameHeader</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>length</td>
+                <td><code>uint32</code></td>
+                <td>Total size of Version + Type + Flags + Payload (excludes the length field itself)</td>
+              </tr>
+              <tr>
+                <td>version</td>
+                <td><code>uint8</code></td>
+                <td>Protocol version (current: 1). Both client and server must validate on every message.</td>
+              </tr>
+              <tr>
+                <td>type</td>
+                <td><code>uint8</code></td>
+                <td>Message type identifier (0x01-0xFF)</td>
+              </tr>
+              <tr>
+                <td>flags</td>
+                <td><code>uint8</code></td>
+                <td>Bit flags: bit 0=compression (LZ4), bit 1=encryption, bits 2-7 reserved</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>AuthRequest</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>nickname</td>
+                <td><code>String</code></td>
+                <td>User&#039;s nickname (3-32 characters)</td>
+              </tr>
+              <tr>
+                <td>password</td>
+                <td><code>String</code></td>
+                <td>User&#039;s password (8-128 characters, hashed with bcrypt)</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>AuthResponse</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>success</td>
+                <td><code>uint8</code></td>
+                <td>1 if authentication succeeded, 0 if failed</td>
+              </tr>
+              <tr>
+                <td>user_id</td>
+                <td><code>Optional&lt;uint64&gt;</code></td>
+                <td>The authenticated user&#039;s ID (only present if success=1)</td>
+              </tr>
+              <tr>
+                <td>nickname</td>
+                <td><code>Optional&lt;String&gt;</code></td>
+                <td>The authenticated user&#039;s registered nickname (only present if success=1)</td>
+              </tr>
+              <tr>
+                <td>message</td>
+                <td><code>String</code></td>
+                <td>Welcome message on success, error description on failure</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>SetNickname</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>nickname</td>
+                <td><code>String</code></td>
+                <td>Desired nickname (3-32 characters, alphanumeric + underscore)</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>NicknameResponse</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>success</td>
+                <td><code>uint8</code></td>
+                <td>1 if nickname was set successfully, 0 if rejected</td>
+              </tr>
+              <tr>
+                <td>nickname</td>
+                <td><code>String</code></td>
+                <td>The actual nickname that was set (may differ from request)</td>
+              </tr>
+              <tr>
+                <td>message</td>
+                <td><code>String</code></td>
+                <td>Confirmation message or error description</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>PostMessage</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>channel_id</td>
+                <td><code>uint64</code></td>
+                <td>Target channel ID</td>
+              </tr>
+              <tr>
+                <td>parent_id</td>
+                <td><code>Optional&lt;uint64&gt;</code></td>
+                <td>Parent message ID for threaded replies (null for top-level posts)</td>
+              </tr>
+              <tr>
+                <td>content</td>
+                <td><code>String</code></td>
+                <td>Message content (max 4000 characters)</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>MessagePosted</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>success</td>
+                <td><code>uint8</code></td>
+                <td>1 if message was posted successfully, 0 if failed</td>
+              </tr>
+              <tr>
+                <td>message_id</td>
+                <td><code>uint64</code></td>
+                <td>The ID of the newly created message</td>
+              </tr>
+              <tr>
+                <td>error</td>
+                <td><code>Optional&lt;String&gt;</code></td>
+                <td>Error description (only present if success=0)</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+        <details class="type-details">
+          <summary><h3>NewMessage</h3></summary>
+          <table class="fields-table">
+            <thead>
+              <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>message_id</td>
+                <td><code>uint64</code></td>
+                <td>Unique message ID</td>
+              </tr>
+              <tr>
+                <td>channel_id</td>
+                <td><code>uint64</code></td>
+                <td>Channel this message belongs to</td>
+              </tr>
+              <tr>
+                <td>parent_id</td>
+                <td><code>Optional&lt;uint64&gt;</code></td>
+                <td>Parent message ID (null for top-level messages)</td>
+              </tr>
+              <tr>
+                <td>author</td>
+                <td><code>String</code></td>
+                <td>Nickname of the message author</td>
+              </tr>
+              <tr>
+                <td>content</td>
+                <td><code>String</code></td>
+                <td>Message text content</td>
+              </tr>
+              <tr>
+                <td>created_at</td>
+                <td><code>int64</code></td>
+                <td>Unix timestamp in milliseconds (server time)</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+      </div>
+    </section>
+
+    <section id="messages" class="section">
+      <h2>Messages</h2>
+      <h3>Client → Server Messages</h3>
+            <table class="messages-table">
+        <thead>
+          <tr><th>Code</th><th>Name</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>0x01</code></td>
+            <td><a href="#msg-0x01">AUTH_REQUEST</a></td>
+            <td>Authenticate with password</td>
+          </tr>
+          <tr>
+            <td><code>0x02</code></td>
+            <td><a href="#msg-0x02">SET_NICKNAME</a></td>
+            <td>Set or change nickname</td>
+          </tr>
+          <tr>
+            <td><code>0x0A</code></td>
+            <td><a href="#msg-0x0A">POST_MESSAGE</a></td>
+            <td>Post a new message</td>
+          </tr>
+        </tbody>
+      </table>
+
+            <details class="message-details" id="msg-0x01">
+        <summary>
+          <h4><code>0x01</code> AUTH_REQUEST</h4>
+        </summary>
+
+        <p class="message-description">Authenticate with password</p>
+        <div class="message-notes">Used when connecting to use a registered nickname. Server responds with AUTH_RESPONSE.</div>
+        <div class="wire-format">
+          <div class="field">
+            <div class="field-name">nickname</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">User&#039;s nickname (3-32 characters)</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">password</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">User&#039;s password (8-128 characters, hashed with bcrypt)</div>
+            
+          </div>
+        </div>
+        <details class="example">
+          <summary>Wire Format Example</summary>
+          <p>User &#039;alice&#039; authenticating with password &#039;hunter2&#039;</p>
+          <pre class="hex-dump">00 05 61 6C 69 63 65 00 07 68 75 6E 74 65 72 32</pre>
+          <pre class="decoded">{
+  &quot;nickname&quot;: {
+    &quot;data&quot;: [
+      97,
+      108,
+      105,
+      99,
+      101
+    ]
+  },
+  &quot;password&quot;: {
+    &quot;data&quot;: [
+      104,
+      117,
+      110,
+      116,
+      101,
+      114,
+      50
+    ]
+  }
+}</pre>
+        </details>
+      </details>
+
+      <details class="message-details" id="msg-0x02">
+        <summary>
+          <h4><code>0x02</code> SET_NICKNAME</h4>
+        </summary>
+
+        <p class="message-description">Set or change nickname</p>
+        <div class="message-notes">Used for initial nickname setup or changing nickname. Anonymous users (no auth) can use any available nickname.</div>
+        <div class="wire-format">
+          <div class="field">
+            <div class="field-name">nickname</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Desired nickname (3-32 characters, alphanumeric + underscore)</div>
+            
+          </div>
+        </div>
+      </details>
+
+      <details class="message-details" id="msg-0x0A">
+        <summary>
+          <h4><code>0x0A</code> POST_MESSAGE</h4>
+        </summary>
+
+        <p class="message-description">Post a new message</p>
+        <div class="message-notes">Create a new message in a channel. Set parent_id to create a threaded reply, or omit for top-level post.</div>
+        <div class="wire-format">
+          <div class="field">
+            <div class="field-name">channel_id</div>
+            <div class="field-type">uint64</div>
+            <div class="field-size">8 bytes</div>
+            <div class="field-desc">Target channel ID</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">parent_id</div>
+            <div class="field-type">Optional&lt;uint64&gt;</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Parent message ID for threaded replies (null for top-level posts)</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">content</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Message content (max 4000 characters)</div>
+            
+          </div>
+        </div>
+      </details>
+
+
+      <h3>Server → Client Messages</h3>
+            <table class="messages-table">
+        <thead>
+          <tr><th>Code</th><th>Name</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>0x81</code></td>
+            <td><a href="#msg-0x81">AUTH_RESPONSE</a></td>
+            <td>Authentication result</td>
+          </tr>
+          <tr>
+            <td><code>0x82</code></td>
+            <td><a href="#msg-0x82">NICKNAME_RESPONSE</a></td>
+            <td>Nickname change result</td>
+          </tr>
+          <tr>
+            <td><code>0x8A</code></td>
+            <td><a href="#msg-0x8A">MESSAGE_POSTED</a></td>
+            <td>Message post confirmation</td>
+          </tr>
+          <tr>
+            <td><code>0x8D</code></td>
+            <td><a href="#msg-0x8D">NEW_MESSAGE</a></td>
+            <td>Real-time message notification</td>
+          </tr>
+        </tbody>
+      </table>
+
+            <details class="message-details" id="msg-0x81">
+        <summary>
+          <h4><code>0x81</code> AUTH_RESPONSE</h4>
+        </summary>
+
+        <p class="message-description">Authentication result</p>
+        <div class="message-notes">Contains user_id and nickname if successful, error message if failed.</div>
+        <div class="wire-format">
+          <div class="field">
+            <div class="field-name">success</div>
+            <div class="field-type">uint8</div>
+            <div class="field-size">1 byte</div>
+            <div class="field-desc">1 if authentication succeeded, 0 if failed</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">user_id</div>
+            <div class="field-type">Optional&lt;uint64&gt;</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">The authenticated user&#039;s ID (only present if success=1)</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">nickname</div>
+            <div class="field-type">Optional&lt;String&gt;</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">The authenticated user&#039;s registered nickname (only present if success=1)</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">message</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Welcome message on success, error description on failure</div>
+            
+          </div>
+        </div>
+      </details>
+
+      <details class="message-details" id="msg-0x82">
+        <summary>
+          <h4><code>0x82</code> NICKNAME_RESPONSE</h4>
+        </summary>
+
+        <p class="message-description">Nickname change result</p>
+        <div class="message-notes">Confirms whether nickname was accepted or provides error (nickname taken, invalid format, etc.)</div>
+        <div class="wire-format">
+          <div class="field">
+            <div class="field-name">success</div>
+            <div class="field-type">uint8</div>
+            <div class="field-size">1 byte</div>
+            <div class="field-desc">1 if nickname was set successfully, 0 if rejected</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">nickname</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">The actual nickname that was set (may differ from request)</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">message</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Confirmation message or error description</div>
+            
+          </div>
+        </div>
+      </details>
+
+      <details class="message-details" id="msg-0x8A">
+        <summary>
+          <h4><code>0x8A</code> MESSAGE_POSTED</h4>
+        </summary>
+
+        <p class="message-description">Message post confirmation</p>
+        <div class="message-notes">Sent in response to POST_MESSAGE. Contains the new message ID on success.</div>
+        <div class="wire-format">
+          <div class="field">
+            <div class="field-name">success</div>
+            <div class="field-type">uint8</div>
+            <div class="field-size">1 byte</div>
+            <div class="field-desc">1 if message was posted successfully, 0 if failed</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">message_id</div>
+            <div class="field-type">uint64</div>
+            <div class="field-size">8 bytes</div>
+            <div class="field-desc">The ID of the newly created message</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">error</div>
+            <div class="field-type">Optional&lt;String&gt;</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Error description (only present if success=0)</div>
+            
+          </div>
+        </div>
+      </details>
+
+      <details class="message-details" id="msg-0x8D">
+        <summary>
+          <h4><code>0x8D</code> NEW_MESSAGE</h4>
+        </summary>
+
+        <p class="message-description">Real-time message notification</p>
+        <div class="message-notes">Broadcasted to all users subscribed to a channel when a new message is posted. Clients should update their UI immediately.</div>
+        <div class="wire-format">
+          <div class="field">
+            <div class="field-name">message_id</div>
+            <div class="field-type">uint64</div>
+            <div class="field-size">8 bytes</div>
+            <div class="field-desc">Unique message ID</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">channel_id</div>
+            <div class="field-type">uint64</div>
+            <div class="field-size">8 bytes</div>
+            <div class="field-desc">Channel this message belongs to</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">parent_id</div>
+            <div class="field-type">Optional&lt;uint64&gt;</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Parent message ID (null for top-level messages)</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">author</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Nickname of the message author</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">content</div>
+            <div class="field-type">String</div>
+            <div class="field-size">variable</div>
+            <div class="field-desc">Message text content</div>
+            
+          </div>
+          <div class="field">
+            <div class="field-name">created_at</div>
+            <div class="field-type">int64</div>
+            <div class="field-size">8 bytes</div>
+            <div class="field-desc">Unix timestamp in milliseconds (server time)</div>
+            
+          </div>
+        </div>
+      </details>
+
+
+    </section>
+
+  </main>
+
+  <footer>
+    <p>Generated by BinSchema HTML Generator</p>
+  </footer>
+</body>
+</html>

@@ -15,6 +15,7 @@ export class BitStreamEncoder {
   private bytes: number[] = [];
   private currentByte: number = 0;
   private bitOffset: number = 0; // Bits used in currentByte (0-7)
+  private totalBitsWritten: number = 0; // Track total bits for finishBits()
   private bitOrder: BitOrder;
 
   constructor(bitOrder: BitOrder = "msb_first") {
@@ -25,6 +26,9 @@ export class BitStreamEncoder {
    * Write bits to stream
    * @param value - Value to write (will be masked to size)
    * @param size - Number of bits to write (1-64)
+   *
+   * Note: bitOrder controls byte-level bit packing (via writeBit),
+   * but multi-bit values are always written LSB-first (standard for bitfields)
    */
   writeBits(value: number | bigint, size: number): void {
     if (size < 1 || size > 64) {
@@ -38,10 +42,21 @@ export class BitStreamEncoder {
     const mask = (1n << BigInt(size)) - 1n;
     val = val & mask;
 
-    // Write bits one at a time (MSB first for now)
-    for (let i = size - 1; i >= 0; i--) {
-      const bit = Number((val >> BigInt(i)) & 1n);
-      this.writeBit(bit);
+    // Write bits according to bit order configuration
+    // msb_first: Write MSB of value first (video codecs, network protocols)
+    // lsb_first: Write LSB of value first (hardware bitfields)
+    if (this.bitOrder === "lsb_first") {
+      // LSB first: bit 0 of value goes to first bit position
+      for (let i = 0; i < size; i++) {
+        const bit = Number((val >> BigInt(i)) & 1n);
+        this.writeBit(bit);
+      }
+    } else {
+      // MSB first: bit (size-1) of value goes to first bit position
+      for (let i = size - 1; i >= 0; i--) {
+        const bit = Number((val >> BigInt(i)) & 1n);
+        this.writeBit(bit);
+      }
     }
   }
 
@@ -60,6 +75,7 @@ export class BitStreamEncoder {
     }
 
     this.bitOffset++;
+    this.totalBitsWritten++;
 
     // Byte is full, flush it
     if (this.bitOffset === 8) {
@@ -71,9 +87,19 @@ export class BitStreamEncoder {
 
   /**
    * Write uint8 (8 bits)
+   * Optimized to write directly when byte-aligned
    */
   writeUint8(value: number): void {
-    this.writeBits(value, 8);
+    if (this.bitOffset === 0) {
+      // Byte-aligned: write directly
+      this.bytes.push(value & 0xFF);
+    } else {
+      // Not byte-aligned: write LSB-first (standard for byte values)
+      for (let i = 0; i < 8; i++) {
+        const bit = (value >> i) & 1;
+        this.writeBit(bit);
+      }
+    }
   }
 
   /**
@@ -94,15 +120,15 @@ export class BitStreamEncoder {
    */
   writeUint32(value: number, endianness: Endianness): void {
     if (endianness === "big_endian") {
-      this.writeUint8((value >> 24) & 0xFF);
-      this.writeUint8((value >> 16) & 0xFF);
-      this.writeUint8((value >> 8) & 0xFF);
+      this.writeUint8((value >>> 24) & 0xFF);
+      this.writeUint8((value >>> 16) & 0xFF);
+      this.writeUint8((value >>> 8) & 0xFF);
       this.writeUint8(value & 0xFF);
     } else {
       this.writeUint8(value & 0xFF);
-      this.writeUint8((value >> 8) & 0xFF);
-      this.writeUint8((value >> 16) & 0xFF);
-      this.writeUint8((value >> 24) & 0xFF);
+      this.writeUint8((value >>> 8) & 0xFF);
+      this.writeUint8((value >>> 16) & 0xFF);
+      this.writeUint8((value >>> 24) & 0xFF);
     }
   }
 
@@ -206,14 +232,28 @@ export class BitStreamEncoder {
 
   /**
    * Get bits as array (for testing)
+   * Returns only the exact bits that were written, not padded to byte boundary
    */
   finishBits(): number[] {
     const bytes = this.finish();
     const bits: number[] = [];
 
-    for (const byte of bytes) {
-      for (let i = 7; i >= 0; i--) {
-        bits.push((byte >> i) & 1);
+    // Extract only the bits that were actually written
+    const bitOrder = this.bitOrder;
+    for (let byteIndex = 0; byteIndex < bytes.length; byteIndex++) {
+      const byte = bytes[byteIndex];
+      const bitsInThisByte = Math.min(8, this.totalBitsWritten - byteIndex * 8);
+
+      if (bitOrder === "msb_first") {
+        // MSB first: bits are filled left to right
+        for (let i = 7; i >= 8 - bitsInThisByte; i--) {
+          bits.push((byte >> i) & 1);
+        }
+      } else {
+        // LSB first: bits are filled right to left
+        for (let i = 0; i < bitsInThisByte; i++) {
+          bits.push((byte >> i) & 1);
+        }
       }
     }
 
@@ -245,9 +285,19 @@ export class BitStreamDecoder {
 
     let result = 0n;
 
-    for (let i = 0; i < size; i++) {
-      const bit = this.readBit();
-      result = (result << 1n) | BigInt(bit);
+    // Read bits according to bit order configuration
+    if (this.bitOrder === "lsb_first") {
+      // LSB first: bit 0 comes from first bit position
+      for (let i = 0; i < size; i++) {
+        const bit = this.readBit();
+        result = result | (BigInt(bit) << BigInt(i));
+      }
+    } else {
+      // MSB first: bit (size-1) comes from first bit position
+      for (let i = size - 1; i >= 0; i--) {
+        const bit = this.readBit();
+        result = result | (BigInt(bit) << BigInt(i));
+      }
     }
 
     return result;
@@ -286,7 +336,21 @@ export class BitStreamDecoder {
    * Read uint8
    */
   readUint8(): number {
-    return Number(this.readBits(8));
+    if (this.bitOffset === 0) {
+      // Byte-aligned: read directly
+      if (this.byteOffset >= this.bytes.length) {
+        throw new Error("Unexpected end of stream");
+      }
+      return this.bytes[this.byteOffset++];
+    } else {
+      // Not byte-aligned: read LSB-first (standard for byte values)
+      let result = 0;
+      for (let i = 0; i < 8; i++) {
+        const bit = this.readBit();
+        result = result | (bit << i);
+      }
+      return result;
+    }
   }
 
   /**
@@ -313,13 +377,13 @@ export class BitStreamDecoder {
       const b1 = this.readUint8();
       const b2 = this.readUint8();
       const b3 = this.readUint8();
-      return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+      return ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) >>> 0;
     } else {
       const b0 = this.readUint8();
       const b1 = this.readUint8();
       const b2 = this.readUint8();
       const b3 = this.readUint8();
-      return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+      return ((b3 << 24) | (b2 << 16) | (b1 << 8) | b0) >>> 0;
     }
   }
 
