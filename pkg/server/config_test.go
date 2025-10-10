@@ -181,3 +181,57 @@ func TestEnvVarCanDisableDirectoryMode(t *testing.T) {
 		t.Fatalf("expected DirectoryEnabled false from env var, got true")
 	}
 }
+
+func TestAdminUsersEnvVar(t *testing.T) {
+	// Save and restore env var
+	origAdminUsers := os.Getenv("SUPERCHAT_SERVER_ADMIN_USERS")
+	defer os.Setenv("SUPERCHAT_SERVER_ADMIN_USERS", origAdminUsers)
+
+	// Set up test environment variable
+	os.Setenv("SUPERCHAT_SERVER_ADMIN_USERS", "alice, bob,  charlie")
+
+	// Create empty config and apply env overrides
+	config := TOMLConfig{}
+	config = applyEnvOverrides(config)
+
+	// Verify admin users were parsed correctly
+	expected := []string{"alice", "bob", "charlie"}
+	if len(config.Server.AdminUsers) != len(expected) {
+		t.Errorf("Expected %d admin users, got %d", len(expected), len(config.Server.AdminUsers))
+	}
+
+	for i, expectedUser := range expected {
+		if config.Server.AdminUsers[i] != expectedUser {
+			t.Errorf("Admin user %d: expected '%s', got '%s'", i, expectedUser, config.Server.AdminUsers[i])
+		}
+	}
+
+	// Verify they make it through to ServerConfig
+	serverCfg := config.ToServerConfig()
+	if len(serverCfg.AdminUsers) != len(expected) {
+		t.Errorf("ServerConfig: Expected %d admin users, got %d", len(expected), len(serverCfg.AdminUsers))
+	}
+}
+
+func TestAdminUsersEnvVarWithWhitespace(t *testing.T) {
+	// Save and restore env var
+	origAdminUsers := os.Getenv("SUPERCHAT_SERVER_ADMIN_USERS")
+	defer os.Setenv("SUPERCHAT_SERVER_ADMIN_USERS", origAdminUsers)
+
+	// Test with various whitespace patterns
+	os.Setenv("SUPERCHAT_SERVER_ADMIN_USERS", "  alice  ,bob,   charlie   ,  dave")
+
+	config := TOMLConfig{}
+	config = applyEnvOverrides(config)
+
+	expected := []string{"alice", "bob", "charlie", "dave"}
+	if len(config.Server.AdminUsers) != len(expected) {
+		t.Errorf("Expected %d admin users, got %d", len(expected), len(config.Server.AdminUsers))
+	}
+
+	for i, expectedUser := range expected {
+		if config.Server.AdminUsers[i] != expectedUser {
+			t.Errorf("Admin user %d: expected '%s', got '%s'", i, expectedUser, config.Server.AdminUsers[i])
+		}
+	}
+}

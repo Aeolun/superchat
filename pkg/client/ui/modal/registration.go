@@ -143,8 +143,14 @@ func (m *RegistrationModal) Render(width, height int) string {
 	prompt := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("252")).
 		Align(lipgloss.Center).
+		Render("Choose a password:")
+
+	// Helper text for password requirements
+	helperText := lipgloss.NewStyle().
+		Foreground(mutedColor).
+		Align(lipgloss.Center).
 		MarginBottom(1).
-		Render("Choose a password (minimum 8 characters):")
+		Render("Minimum 8 characters")
 
 	inputFocusedStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -191,12 +197,13 @@ func (m *RegistrationModal) Render(width, height int) string {
 			Render(m.errorMessage)
 	}
 
-	// Requirements
-	requirements := lipgloss.NewStyle().
+	// Character count for password
+	charCountText := fmt.Sprintf("Characters: %d (min 8)", len(m.passwordInput))
+	charCount := lipgloss.NewStyle().
 		Foreground(mutedColor).
 		Align(lipgloss.Center).
 		MarginTop(1).
-		Render("Requirements: 8+ characters")
+		Render(charCountText)
 
 	// Status message
 	statusMsg := lipgloss.NewStyle().
@@ -210,10 +217,11 @@ func (m *RegistrationModal) Render(width, height int) string {
 		"",
 		title,
 		prompt,
+		helperText,
 		passwordField,
 		confirmField,
+		charCount,
 		errorMsg,
-		requirements,
 		statusMsg,
 		"",
 	)

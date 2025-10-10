@@ -136,10 +136,11 @@ type Model struct {
 	initStateMachine *InitStateMachine
 
 	// Error and status
-	errorMessage  string
-	statusMessage string
-	showHelp      bool
-	firstRun      bool
+	errorMessage           string
+	statusMessage          string
+	serverDisconnectReason string // Reason provided by server in DISCONNECT message
+	showHelp               bool
+	firstRun               bool
 
 	// Version tracking
 	currentVersion  string
@@ -264,6 +265,7 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.NewCommand().
 		Keys("q").
 		Name("Quit").
+		Aliases("Exit").
 		Help("Quit the application").
 		Global().
 		InModals(modal.ModalNone). // Only available when no modal is open
@@ -898,6 +900,59 @@ func (m *Model) registerCommands() {
 		}).
 		Priority(10).
 		Build())
+
+	// Command palette with / (IRC-style)
+	m.commands.Register(commands.NewCommand().
+		Keys("/").
+		Name("Command").
+		Help("Open command palette (IRC-style)").
+		Global().
+		InModals(modal.ModalNone). // Only available when no modal is open
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			model.showCommandPalette("/")
+			return model, nil
+		}).
+		Priority(930).
+		Build())
+
+	// Command palette with : (vim-style)
+	m.commands.Register(commands.NewCommand().
+		Keys(":").
+		Name("Command").
+		Help("Open command palette (vim-style)").
+		Global().
+		InModals(modal.ModalNone). // Only available when no modal is open
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			model.showCommandPalette(":")
+			return model, nil
+		}).
+		Priority(920).
+		Build())
+}
+
+// showCommandPalette displays the command palette modal
+func (m *Model) showCommandPalette(prefix string) {
+	// Get available command names for current context
+	availableCommands := m.commands.GetCommandNames(int(m.currentView), m.modalStack.TopType(), m)
+
+	commandPalette := modal.NewCommandPaletteModal(
+		prefix,
+		availableCommands,
+		func(commandName string) tea.Cmd {
+			// Return a message to execute the command in the main update loop
+			// This allows the model to be properly updated
+			return func() tea.Msg {
+				return ExecuteCommandMsg{CommandName: commandName}
+			}
+		},
+		func() tea.Cmd {
+			// Canceled
+			return nil
+		},
+	)
+	m.modalStack.Push(commandPalette)
 }
 
 // Modal helper methods
@@ -1204,6 +1259,11 @@ type ConnectionAttemptResultMsg struct {
 	Success bool
 	Method  string
 	Error   error
+}
+
+// ExecuteCommandMsg is sent when a command should be executed (from command palette)
+type ExecuteCommandMsg struct {
+	CommandName string
 }
 
 // Init initializes the model

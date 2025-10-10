@@ -15,6 +15,10 @@ type Command struct {
 	// Footer text is auto-generated from Keys and Name
 	Name string
 
+	// Aliases are alternate names for the command (for command palette)
+	// Example: Quit command might have alias "Exit"
+	Aliases []string
+
 	// Description for help modal
 	HelpText string
 
@@ -144,6 +148,12 @@ func (b *CommandBuilder) Keys(keys ...string) *CommandBuilder {
 // Name sets the command name (used for footer generation)
 func (b *CommandBuilder) Name(name string) *CommandBuilder {
 	b.cmd.Name = name
+	return b
+}
+
+// Aliases sets alternate names for the command (for command palette)
+func (b *CommandBuilder) Aliases(aliases ...string) *CommandBuilder {
+	b.cmd.Aliases = aliases
 	return b
 }
 

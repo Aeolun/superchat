@@ -24,6 +24,8 @@ const (
 	ModalConnectionMethod
 	ModalConnecting
 	ModalRegistrationWarning
+	ModalConfigError
+	ModalCommandPalette
 )
 
 // String returns the string representation of the modal type
@@ -61,6 +63,10 @@ func (m ModalType) String() string {
 		return "Connecting"
 	case ModalRegistrationWarning:
 		return "RegistrationWarning"
+	case ModalConfigError:
+		return "ConfigError"
+	case ModalCommandPalette:
+		return "CommandPalette"
 	default:
 		return "Unknown"
 	}

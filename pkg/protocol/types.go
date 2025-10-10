@@ -251,3 +251,34 @@ func ReadOptionalTimestamp(r io.Reader) (*time.Time, error) {
 	}
 	return &value, nil
 }
+
+// WriteOptionalInt64 writes an optional 64-bit signed integer
+// Format: [Present (bool)][Value (int64) if present]
+func WriteOptionalInt64(w io.Writer, v *int64) error {
+	if v == nil {
+		return WriteBool(w, false)
+	}
+
+	if err := WriteBool(w, true); err != nil {
+		return err
+	}
+	return WriteInt64(w, *v)
+}
+
+// ReadOptionalInt64 reads an optional 64-bit signed integer
+func ReadOptionalInt64(r io.Reader) (*int64, error) {
+	present, err := ReadBool(r)
+	if err != nil {
+		return nil, err
+	}
+
+	if !present {
+		return nil, nil
+	}
+
+	value, err := ReadInt64(r)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
+}

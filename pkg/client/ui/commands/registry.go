@@ -183,3 +183,59 @@ func (r *Registry) GenerateHelp(view int, activeModal modal.ModalType, model int
 
 	return help
 }
+
+// GetCommandByName finds a command by its name or alias (case-insensitive)
+// Returns nil if no available command matches the name
+func (r *Registry) GetCommandByName(name string, view int, activeModal modal.ModalType, model interface{}) *Command {
+	lowerName := strings.ToLower(name)
+
+	// Check all commands
+	for i := range r.commands {
+		cmd := &r.commands[i]
+		if !r.isCommandAvailable(cmd, view, activeModal, model) {
+			continue
+		}
+
+		// Check primary name
+		if strings.ToLower(cmd.Name) == lowerName {
+			return cmd
+		}
+
+		// Check aliases
+		for _, alias := range cmd.Aliases {
+			if strings.ToLower(alias) == lowerName {
+				return cmd
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetCommandNames returns all available command names and aliases for autocomplete
+// Names are sorted alphabetically and deduplicated
+func (r *Registry) GetCommandNames(view int, activeModal modal.ModalType, model interface{}) []string {
+	availableCommands := r.GetAvailableCommands(view, activeModal, model)
+
+	names := make(map[string]bool)
+	for _, cmd := range availableCommands {
+		// Add primary name
+		if cmd.Name != "" {
+			names[strings.ToLower(cmd.Name)] = true
+		}
+		// Add aliases
+		for _, alias := range cmd.Aliases {
+			if alias != "" {
+				names[strings.ToLower(alias)] = true
+			}
+		}
+	}
+
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+
+	sort.Strings(result)
+	return result
+}

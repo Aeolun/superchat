@@ -358,6 +358,36 @@ func formatBytes(bytes uint64) string {
 	return fmt.Sprintf("%.1f%cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
+// formatBandwidth converts bytes/sec to modem-equivalent display
+func formatBandwidth(bytesPerSec int) string {
+	// Convert bytes/sec to bits/sec (multiply by 8)
+	bitsPerSec := bytesPerSec * 8
+
+	// Common modem speeds in bits/sec
+	switch {
+	case bitsPerSec <= 14400:
+		return "14.4k"
+	case bitsPerSec <= 28800:
+		return "28.8k"
+	case bitsPerSec <= 33600:
+		return "33.6k"
+	case bitsPerSec <= 56000:
+		return "56k"
+	case bitsPerSec <= 128000:
+		return "128k"
+	case bitsPerSec <= 256000:
+		return "256k"
+	case bitsPerSec <= 512000:
+		return "512k"
+	case bitsPerSec <= 1024000:
+		return "1Mbps"
+	case bitsPerSec <= 10240000:
+		return fmt.Sprintf("%.1fMbps", float64(bitsPerSec)/1000000)
+	default:
+		return fmt.Sprintf("%.1fMbps", float64(bitsPerSec)/1000000)
+	}
+}
+
 // renderHeader renders the header
 func (m Model) renderHeader() string {
 	left := HeaderStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
@@ -383,6 +413,13 @@ func (m Model) renderHeader() string {
 		recv := formatBytes(m.conn.GetBytesReceived())
 		traffic := MutedTextStyle.Render(fmt.Sprintf("  ↑%s ↓%s", sent, recv))
 		status += traffic
+
+		// Add bandwidth throttle indicator if throttling is enabled
+		if m.throttle > 0 {
+			bandwidth := formatBandwidth(m.throttle)
+			throttle := MutedTextStyle.Render(fmt.Sprintf("  ⏱ %s", bandwidth))
+			status += throttle
+		}
 	}
 
 	right := StatusStyle.Render(status)

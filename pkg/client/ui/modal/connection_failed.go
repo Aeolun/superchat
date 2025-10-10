@@ -16,17 +16,32 @@ type ConnectionFailedTryMethodMsg struct{}
 
 // ConnectionFailedModal displays connection failure with recovery options
 type ConnectionFailedModal struct {
-	serverAddr   string
-	errorMessage string
-	cursor       int // 0 = Retry, 1 = Try Different Method, 2 = Switch Server, 3 = Quit
+	serverAddr         string
+	errorMessage       string
+	serverDisconnected bool   // True if server sent DISCONNECT message
+	disconnectReason   string // Reason from server DISCONNECT message
+	cursor             int    // 0 = Retry, 1 = Try Different Method, 2 = Switch Server, 3 = Quit
 }
 
 // NewConnectionFailedModal creates a new connection failed modal
 func NewConnectionFailedModal(serverAddr string, errorMessage string) *ConnectionFailedModal {
 	return &ConnectionFailedModal{
-		serverAddr:   serverAddr,
-		errorMessage: errorMessage,
-		cursor:       0,
+		serverAddr:         serverAddr,
+		errorMessage:       errorMessage,
+		serverDisconnected: false,
+		disconnectReason:   "",
+		cursor:             0,
+	}
+}
+
+// NewConnectionFailedModalWithReason creates a connection failed modal with server disconnect reason
+func NewConnectionFailedModalWithReason(serverAddr string, reason string) *ConnectionFailedModal {
+	return &ConnectionFailedModal{
+		serverAddr:         serverAddr,
+		errorMessage:       "",
+		serverDisconnected: true,
+		disconnectReason:   reason,
+		cursor:             0,
 	}
 }
 
@@ -130,14 +145,22 @@ func (m *ConnectionFailedModal) Render(width, height int) string {
 	// Build content
 	var content string
 
-	// Title
-	content += titleStyle.Render("⚠ Connection Failed") + "\n\n"
+	// Title (different for server disconnect vs connection error)
+	if m.serverDisconnected {
+		content += titleStyle.Render("Server Disconnected") + "\n\n"
+	} else {
+		content += titleStyle.Render("⚠ Connection Failed") + "\n\n"
+	}
 
 	// Server address
 	content += serverStyle.Render("Server: "+m.serverAddr) + "\n"
 
-	// Error message
-	content += errorStyle.Render("Error: "+m.errorMessage) + "\n\n"
+	// Error or disconnect reason
+	if m.serverDisconnected {
+		content += errorStyle.Render("Reason: "+m.disconnectReason) + "\n\n"
+	} else {
+		content += errorStyle.Render("Error: "+m.errorMessage) + "\n\n"
+	}
 
 	// Options
 	content += "What would you like to do?\n\n"

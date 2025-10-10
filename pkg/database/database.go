@@ -1465,3 +1465,369 @@ func (db *DB) CountDiscoveredServers() (uint32, error) {
 	}
 	return count, nil
 }
+
+// ===== Ban Methods (Admin System) =====
+
+// Ban represents a user or IP ban record
+type Ban struct {
+	ID          int64
+	BanType     string  // "user" or "ip"
+	UserID      *int64  // NULL for IP bans
+	Nickname    *string // Nickname at time of ban (for audit trail)
+	IPCIDR      *string // NULL for user bans, CIDR notation (e.g., "192.168.1.0/24" or "10.0.0.5/32")
+	Reason      string
+	Shadowban   bool
+	BannedAt    int64  // Unix timestamp in milliseconds
+	BannedUntil *int64 // NULL = permanent, Unix timestamp in milliseconds for timed bans
+	BannedBy    string // Admin nickname who created the ban
+}
+
+// CreateUserBan creates a new user ban and logs the admin action
+// Returns the ban ID and error
+func (db *DB) CreateUserBan(userID *int64, nickname *string, reason string, shadowban bool, durationSeconds *uint64, adminNickname, adminIP string) (int64, error) {
+	tx, err := db.writeConn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	now := nowMillis()
+	var bannedUntil *int64
+	if durationSeconds != nil {
+		until := now + int64(*durationSeconds)*1000
+		bannedUntil = &until
+	}
+
+	result, err := tx.Exec(`
+		INSERT INTO Ban (ban_type, user_id, nickname, reason, shadowban, banned_at, banned_until, banned_by)
+		VALUES ('user', ?, ?, ?, ?, ?, ?, ?)
+	`, userID, nickname, reason, shadowban, now, bannedUntil, adminNickname)
+
+	if err != nil {
+		return 0, err
+	}
+
+	banID, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	// Log admin action
+	targetIdentifier := ""
+	if nickname != nil {
+		targetIdentifier = *nickname
+	}
+	_, err = tx.Exec(`
+		INSERT INTO AdminAction (admin_nickname, action_type, target_type, target_id, target_identifier, details, performed_at, ip_address)
+		VALUES (?, 'ban_user', 'user', ?, ?, ?, ?, ?)
+	`, adminNickname, banID, targetIdentifier, reason, now, adminIP)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return banID, nil
+}
+
+// CreateIPBan creates a new IP ban (CIDR notation) and logs the admin action
+// Returns the ban ID and error
+func (db *DB) CreateIPBan(ipCIDR string, reason string, durationSeconds *uint64, adminNickname, adminIP string) (int64, error) {
+	tx, err := db.writeConn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	now := nowMillis()
+	var bannedUntil *int64
+	if durationSeconds != nil {
+		until := now + int64(*durationSeconds)*1000
+		bannedUntil = &until
+	}
+
+	result, err := tx.Exec(`
+		INSERT INTO Ban (ban_type, ip_cidr, reason, shadowban, banned_at, banned_until, banned_by)
+		VALUES ('ip', ?, ?, 0, ?, ?, ?)
+	`, ipCIDR, reason, now, bannedUntil, adminNickname)
+
+	if err != nil {
+		return 0, err
+	}
+
+	banID, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	// Log admin action
+	_, err = tx.Exec(`
+		INSERT INTO AdminAction (admin_nickname, action_type, target_type, target_id, target_identifier, details, performed_at, ip_address)
+		VALUES (?, 'ban_ip', 'ip', ?, ?, ?, ?, ?)
+	`, adminNickname, banID, ipCIDR, reason, now, adminIP)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return banID, nil
+}
+
+// DeleteUserBan removes active user bans and logs the admin action
+// Deletes bans matching userID (if provided) or nickname (fallback)
+// Returns number of bans deleted
+func (db *DB) DeleteUserBan(userID *int64, nickname *string, adminNickname, adminIP string) (int64, error) {
+	tx, err := db.writeConn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var result sql.Result
+	if userID != nil {
+		result, err = tx.Exec(`DELETE FROM Ban WHERE ban_type = 'user' AND user_id = ?`, *userID)
+	} else if nickname != nil {
+		result, err = tx.Exec(`DELETE FROM Ban WHERE ban_type = 'user' AND nickname = ?`, *nickname)
+	} else {
+		return 0, fmt.Errorf("must provide either userID or nickname")
+	}
+
+	if err != nil {
+		return 0, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	// Log admin action
+	targetIdentifier := ""
+	if nickname != nil {
+		targetIdentifier = *nickname
+	}
+	now := nowMillis()
+	_, err = tx.Exec(`
+		INSERT INTO AdminAction (admin_nickname, action_type, target_type, target_id, target_identifier, details, performed_at, ip_address)
+		VALUES (?, 'unban_user', 'user', NULL, ?, '', ?, ?)
+	`, adminNickname, targetIdentifier, now, adminIP)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return rowsAffected, nil
+}
+
+// DeleteIPBan removes an IP ban and logs the admin action
+// Returns number of bans deleted
+func (db *DB) DeleteIPBan(ipCIDR string, adminNickname, adminIP string) (int64, error) {
+	tx, err := db.writeConn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(`DELETE FROM Ban WHERE ban_type = 'ip' AND ip_cidr = ?`, ipCIDR)
+	if err != nil {
+		return 0, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	// Log admin action
+	now := nowMillis()
+	_, err = tx.Exec(`
+		INSERT INTO AdminAction (admin_nickname, action_type, target_type, target_id, target_identifier, details, performed_at, ip_address)
+		VALUES (?, 'unban_ip', 'ip', NULL, ?, '', ?, ?)
+	`, adminNickname, ipCIDR, now, adminIP)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return rowsAffected, nil
+}
+
+// GetActiveBanForUser checks if a user is currently banned (non-expired)
+// Returns the ban record if active, nil if no active ban, or error
+func (db *DB) GetActiveBanForUser(userID *int64, nickname *string) (*Ban, error) {
+	now := nowMillis()
+	ban := &Ban{}
+	var userIDVal, bannedUntilVal sql.NullInt64
+	var nicknameVal, ipCIDRVal sql.NullString
+
+	var err error
+	if userID != nil {
+		err = db.conn.QueryRow(`
+			SELECT id, ban_type, user_id, nickname, ip_cidr, reason, shadowban, banned_at, banned_until, banned_by
+			FROM Ban
+			WHERE ban_type = 'user'
+			  AND user_id = ?
+			  AND (banned_until IS NULL OR banned_until > ?)
+			LIMIT 1
+		`, *userID, now).Scan(
+			&ban.ID, &ban.BanType, &userIDVal, &nicknameVal, &ipCIDRVal,
+			&ban.Reason, &ban.Shadowban, &ban.BannedAt, &bannedUntilVal, &ban.BannedBy,
+		)
+	} else if nickname != nil {
+		err = db.conn.QueryRow(`
+			SELECT id, ban_type, user_id, nickname, ip_cidr, reason, shadowban, banned_at, banned_until, banned_by
+			FROM Ban
+			WHERE ban_type = 'user'
+			  AND nickname = ?
+			  AND (banned_until IS NULL OR banned_until > ?)
+			LIMIT 1
+		`, *nickname, now).Scan(
+			&ban.ID, &ban.BanType, &userIDVal, &nicknameVal, &ipCIDRVal,
+			&ban.Reason, &ban.Shadowban, &ban.BannedAt, &bannedUntilVal, &ban.BannedBy,
+		)
+	} else {
+		return nil, fmt.Errorf("must provide either userID or nickname")
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil // No active ban
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate optional fields
+	if userIDVal.Valid {
+		ban.UserID = &userIDVal.Int64
+	}
+	if nicknameVal.Valid {
+		ban.Nickname = &nicknameVal.String
+	}
+	if ipCIDRVal.Valid {
+		ban.IPCIDR = &ipCIDRVal.String
+	}
+	if bannedUntilVal.Valid {
+		ban.BannedUntil = &bannedUntilVal.Int64
+	}
+
+	return ban, nil
+}
+
+// GetActiveBanForIP checks if an IP address is currently banned
+// Checks for exact match and CIDR range matches
+// Returns the ban record if active, nil if no active ban, or error
+func (db *DB) GetActiveBanForIP(ipAddress string) (*Ban, error) {
+	now := nowMillis()
+	ban := &Ban{}
+	var userIDVal, bannedUntilVal sql.NullInt64
+	var nicknameVal, ipCIDRVal sql.NullString
+
+	// TODO: This simple implementation only checks exact match
+	// A full implementation would need CIDR range matching logic
+	// For now, we only support exact IP matches (with /32 suffix)
+	err := db.conn.QueryRow(`
+		SELECT id, ban_type, user_id, nickname, ip_cidr, reason, shadowban, banned_at, banned_until, banned_by
+		FROM Ban
+		WHERE ban_type = 'ip'
+		  AND ip_cidr = ?
+		  AND (banned_until IS NULL OR banned_until > ?)
+		LIMIT 1
+	`, ipAddress, now).Scan(
+		&ban.ID, &ban.BanType, &userIDVal, &nicknameVal, &ipCIDRVal,
+		&ban.Reason, &ban.Shadowban, &ban.BannedAt, &bannedUntilVal, &ban.BannedBy,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil // No active ban
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate optional fields
+	if userIDVal.Valid {
+		ban.UserID = &userIDVal.Int64
+	}
+	if nicknameVal.Valid {
+		ban.Nickname = &nicknameVal.String
+	}
+	if ipCIDRVal.Valid {
+		ban.IPCIDR = &ipCIDRVal.String
+	}
+	if bannedUntilVal.Valid {
+		ban.BannedUntil = &bannedUntilVal.Int64
+	}
+
+	return ban, nil
+}
+
+// ListBans returns all bans, optionally including expired bans
+func (db *DB) ListBans(includeExpired bool) ([]*Ban, error) {
+	query := `
+		SELECT id, ban_type, user_id, nickname, ip_cidr, reason, shadowban, banned_at, banned_until, banned_by
+		FROM Ban
+	`
+
+	args := []interface{}{}
+	if !includeExpired {
+		now := nowMillis()
+		query += ` WHERE (banned_until IS NULL OR banned_until > ?)`
+		args = append(args, now)
+	}
+
+	query += ` ORDER BY banned_at DESC`
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bans []*Ban
+	for rows.Next() {
+		ban := &Ban{}
+		var userIDVal, bannedUntilVal sql.NullInt64
+		var nicknameVal, ipCIDRVal sql.NullString
+
+		err := rows.Scan(
+			&ban.ID, &ban.BanType, &userIDVal, &nicknameVal, &ipCIDRVal,
+			&ban.Reason, &ban.Shadowban, &ban.BannedAt, &bannedUntilVal, &ban.BannedBy,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Populate optional fields
+		if userIDVal.Valid {
+			ban.UserID = &userIDVal.Int64
+		}
+		if nicknameVal.Valid {
+			ban.Nickname = &nicknameVal.String
+		}
+		if ipCIDRVal.Valid {
+			ban.IPCIDR = &ipCIDRVal.String
+		}
+		if bannedUntilVal.Valid {
+			ban.BannedUntil = &bannedUntilVal.Int64
+		}
+
+		bans = append(bans, ban)
+	}
+
+	return bans, rows.Err()
+}

@@ -92,6 +92,12 @@ func main() {
 	// Load configuration (creates default if not found)
 	config, err := client.LoadClientConfig(*configPath)
 	if err != nil {
+		// Try to handle config error with UI
+		if client.HandleConfigError(*configPath, err) {
+			// Error was handled, exit
+			os.Exit(1)
+		}
+		// Fallback to fatal error if not a ConfigError
 		log.Fatalf("Failed to load config: %v", err)
 	}
 

@@ -44,10 +44,10 @@ func RenderChannelList(
 	contentHeight := height - 4 // Subtract header(1) + blank(1) + footer(1) + blank(1)
 
 	// Build channel pane content
-	channelContent := buildChannelPaneContent(conn, channels, channelCursor, loadingChannels, spin)
+	channelContent := buildChannelPaneContent(conn, channels, channelCursor, loadingChannels, spin, authState)
 
 	// Build main pane content (instructions)
-	mainContent := buildChannelListInstructions(updateAvailable, currentVersion, latestVersion)
+	mainContent := buildChannelListInstructions(updateAvailable, currentVersion, latestVersion, len(channels) == 0, authState)
 
 	// Create horizontal layout for the content row
 	contentLayout := flexbox.NewHorizontal(width, contentHeight)
@@ -95,6 +95,7 @@ func buildChannelPaneContent(
 	channelCursor int,
 	loadingChannels bool,
 	spin spinner.Model,
+	authState int,
 ) string {
 	title := ui.ChannelTitleStyle.Render("Channels")
 
@@ -129,7 +130,14 @@ func buildChannelPaneContent(
 		}
 
 		if len(items) == 0 {
-			items = append(items, ui.MutedTextStyle.Render("  (no channels)"))
+			// Show helpful empty state message based on auth status
+			var emptyStateMsg string
+			if authState == 3 { // AuthStateAuthenticated (registered user)
+				emptyStateMsg = "  (no channels)\n\n  " + ui.MutedTextStyle.Render("Create a channel (c) or\n  switch servers (Ctrl+L)")
+			} else {
+				emptyStateMsg = "  (no channels)\n\n  " + ui.MutedTextStyle.Render("Register your nickname (Ctrl+R),\n  then create a channel (c)\n\n  Or switch servers (Ctrl+L)\n  to find active channels")
+			}
+			items = append(items, emptyStateMsg)
 		}
 	}
 
@@ -142,7 +150,7 @@ func buildChannelPaneContent(
 }
 
 // buildChannelListInstructions builds the welcome instructions for channel list view
-func buildChannelListInstructions(updateAvailable bool, currentVersion, latestVersion string) string {
+func buildChannelListInstructions(updateAvailable bool, currentVersion, latestVersion string, noChannels bool, authState int) string {
 	welcomeLines := []string{
 		"Welcome to SuperChat!",
 		"",
@@ -162,22 +170,52 @@ func buildChannelListInstructions(updateAvailable bool, currentVersion, latestVe
 		welcomeLines = append(welcomeLines, updateNotice, updateInstr, "", "")
 	}
 
-	welcomeLines = append(welcomeLines,
-		"Select a channel from the left to start browsing.",
-		"",
-		"Channel Types:",
-		"• > Chat channels - Linear conversation (like IRC/Slack)",
-		"• # Forum channels - Threaded discussion (like Reddit)",
-		"",
-		"Anonymous vs Registered:",
-		"• Anonymous: Post as ~username (no password)",
-		"• Registered: Post as username (press [Ctrl+R] to register)",
-		"",
-		"Useful shortcuts:",
-		"• [n] to create a new thread once in a channel",
-		"• [Ctrl+L] to switch servers",
-		"• [h] or [?] for help",
-	)
+	// Show empty state guidance if no channels exist
+	if noChannels {
+		warningStyle := lipgloss.NewStyle().
+			Foreground(ui.WarningColor).
+			Bold(true)
+
+		if authState == 3 { // AuthStateAuthenticated (registered user)
+			welcomeLines = append(welcomeLines,
+				warningStyle.Render("⚠ No channels on this server"),
+				"",
+				"You can:",
+				"• Create a new channel (press [c])",
+				"• Switch to a different server (press [Ctrl+L])",
+				"• Refresh the channel list (press [r])",
+			)
+		} else {
+			welcomeLines = append(welcomeLines,
+				warningStyle.Render("⚠ No channels on this server"),
+				"",
+				"To create channels:",
+				"• Register your nickname (press [Ctrl+R])",
+				"• Then create a channel (press [c])",
+				"",
+				"Or:",
+				"• Switch to a different server (press [Ctrl+L])",
+				"• Refresh the channel list (press [r])",
+			)
+		}
+	} else {
+		welcomeLines = append(welcomeLines,
+			"Select a channel from the left to start browsing.",
+			"",
+			"Channel Types:",
+			"• > Chat channels - Linear conversation (like IRC/Slack)",
+			"• # Forum channels - Threaded discussion (like Reddit)",
+			"",
+			"Anonymous vs Registered:",
+			"• Anonymous: Post as ~username (no password)",
+			"• Registered: Post as username (press [Ctrl+R] to register)",
+			"",
+			"Useful shortcuts:",
+			"• [n] to create a new thread once in a channel",
+			"• [Ctrl+L] to switch servers",
+			"• [h] or [?] for help",
+		)
+	}
 
 	return lipgloss.NewStyle().
 		PaddingLeft(2).

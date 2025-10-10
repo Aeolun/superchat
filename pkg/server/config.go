@@ -20,11 +20,12 @@ type TOMLConfig struct {
 }
 
 type ServerSection struct {
-	TCPPort      int    `toml:"tcp_port"`
-	SSHPort      int    `toml:"ssh_port"`
-	HTTPPort     int    `toml:"http_port"`
-	SSHHostKey   string `toml:"ssh_host_key"`
-	DatabasePath string `toml:"database_path"`
+	TCPPort      int      `toml:"tcp_port"`
+	SSHPort      int      `toml:"ssh_port"`
+	HTTPPort     int      `toml:"http_port"`
+	SSHHostKey   string   `toml:"ssh_host_key"`
+	DatabasePath string   `toml:"database_path"`
+	AdminUsers   []string `toml:"admin_users"`
 }
 
 type LimitsSection struct {
@@ -154,6 +155,15 @@ func applyEnvOverrides(config TOMLConfig) TOMLConfig {
 	}
 	if val := os.Getenv("SUPERCHAT_SERVER_DATABASE_PATH"); val != "" {
 		config.Server.DatabasePath = val
+	}
+	if val := os.Getenv("SUPERCHAT_SERVER_ADMIN_USERS"); val != "" {
+		// Parse comma-separated list of admin nicknames
+		adminUsers := strings.Split(val, ",")
+		// Trim whitespace from each nickname
+		for i, user := range adminUsers {
+			adminUsers[i] = strings.TrimSpace(user)
+		}
+		config.Server.AdminUsers = adminUsers
 	}
 
 	// Limits section
@@ -315,6 +325,11 @@ func (c *TOMLConfig) ToServerConfig() ServerConfig {
 
 	if c.Discovery.MaxUsers != 0 {
 		cfg.MaxUsers = uint32(c.Discovery.MaxUsers)
+	}
+
+	// Admin configuration
+	if len(c.Server.AdminUsers) > 0 {
+		cfg.AdminUsers = c.Server.AdminUsers
 	}
 
 	return cfg

@@ -105,7 +105,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// BUT: Don't show if there's already a connection-related modal active
 		activeModalType := m.modalStack.TopType()
 		if activeModalType != modal.ModalConnectionFailed && activeModalType != modal.ModalConnectionMethod {
-			m.modalStack.Push(modal.NewConnectionFailedModal(m.conn.GetAddress(), "Connection lost"))
+			// Check if we have a server disconnect reason (from DISCONNECT message)
+			if m.serverDisconnectReason != "" {
+				m.modalStack.Push(modal.NewConnectionFailedModalWithReason(m.conn.GetAddress(), m.serverDisconnectReason))
+				m.serverDisconnectReason = "" // Clear after use
+			} else {
+				m.modalStack.Push(modal.NewConnectionFailedModal(m.conn.GetAddress(), "Connection lost"))
+			}
 		}
 
 		// Continue listening for frames from current connection
@@ -232,6 +238,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConnectionAttemptResultMsg:
 		// Async connection attempt completed
 		return m.handleConnectionAttemptResult(msg)
+
+	case ExecuteCommandMsg:
+		// Execute command from command palette
+		cmd := m.commands.GetCommandByName(msg.CommandName, int(m.currentView), m.modalStack.TopType(), &m)
+		if cmd != nil {
+			updatedModel, teaCmd := cmd.Execute(&m)
+			if model, ok := updatedModel.(*Model); ok {
+				return *model, teaCmd
+			}
+		}
+		return m, nil
 
 	default:
 		// Always update spinner (it manages its own tick messages)
@@ -733,6 +750,8 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleSSHKeyLabelUpdated(frame)
 	case protocol.TypeSSHKeyDeleted:
 		return m.handleSSHKeyDeleted(frame)
+	case protocol.TypeDisconnect:
+		return m.handleDisconnect(frame)
 	}
 
 	// Continue listening
@@ -1383,6 +1402,30 @@ func (m Model) handleError(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 	m.errorMessage = fmt.Sprintf("Error %d: %s", msg.ErrorCode, msg.Message)
 
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+// handleDisconnect processes DISCONNECT messages from the server
+func (m Model) handleDisconnect(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.DisconnectMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode disconnect message: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	// Store the disconnect reason for display in modal
+	if msg.Reason != nil && *msg.Reason != "" {
+		m.serverDisconnectReason = *msg.Reason
+	} else {
+		m.serverDisconnectReason = "No reason provided"
+	}
+
+	// Disable auto-reconnect for server-initiated disconnects
+	// The user should explicitly choose to reconnect via the modal
+	m.conn.DisableAutoReconnect()
+
+	// The connection will be closed by the server shortly
+	// Continue listening for the actual disconnect event
 	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 

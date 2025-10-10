@@ -73,6 +73,9 @@ type ServerConfig struct {
 	ServerName     string // Display name in server list
 	ServerDesc     string // Description in server list
 	MaxUsers       uint32 // Max concurrent users (0 = unlimited)
+
+	// Admin configuration
+	AdminUsers []string // List of admin user nicknames
 }
 
 // DefaultConfig returns default server configuration
@@ -328,26 +331,85 @@ func (s *Server) GetChannels() ([]*database.Channel, error) {
 
 // Stop gracefully stops the server
 func (s *Server) Stop() error {
+	log.Println("Graceful shutdown initiated...")
+
+	// Signal shutdown to all goroutines
 	close(s.shutdown)
 
+	// Stop accepting new connections
 	if s.listener != nil {
 		s.listener.Close()
 		s.listener = nil
+		log.Println("TCP listener closed")
 	}
 
 	if s.sshListener != nil {
 		s.sshListener.Close()
 		s.sshListener = nil
+		log.Println("SSH listener closed")
 	}
 
-	// Close all sessions first to unblock handlers
+	// Notify all connected clients before closing connections
+	log.Println("Notifying connected clients of shutdown...")
+	s.notifyClientsOfShutdown()
+
+	// Close all sessions
+	log.Println("Closing all client sessions...")
 	s.sessions.CloseAll()
 
-	// Wait for goroutines to finish
+	// Wait for goroutines to finish (with timeout)
+	log.Println("Waiting for background goroutines to finish...")
 	s.wg.Wait()
 
 	// Close in-memory database (triggers final snapshot to SQLite)
-	return s.db.Close()
+	log.Println("Flushing in-memory database to disk...")
+	if err := s.db.Close(); err != nil {
+		log.Printf("Error during database close: %v", err)
+		return err
+	}
+
+	log.Println("Graceful shutdown complete")
+	return nil
+}
+
+// notifyClientsOfShutdown sends DISCONNECT message to all connected clients
+func (s *Server) notifyClientsOfShutdown() {
+	sessions := s.sessions.GetAllSessions()
+
+	if len(sessions) == 0 {
+		log.Println("No active sessions to notify")
+		return
+	}
+
+	log.Printf("Sending shutdown notification to %d active sessions...", len(sessions))
+
+	// Create DISCONNECT message frame with reason
+	reason := "Server shutting down for maintenance"
+	disconnectMsg := &protocol.DisconnectMessage{
+		Reason: &reason,
+	}
+	payload, err := disconnectMsg.Encode()
+	if err != nil {
+		log.Printf("Failed to encode disconnect message: %v", err)
+		return
+	}
+
+	frame := &protocol.Frame{
+		Version: protocol.ProtocolVersion,
+		Type:    protocol.TypeDisconnect,
+		Flags:   0,
+		Payload: payload,
+	}
+
+	// Send to all sessions concurrently (best effort)
+	sent := 0
+	for _, sess := range sessions {
+		if err := sess.Conn.EncodeFrame(frame); err == nil {
+			sent++
+		}
+	}
+
+	log.Printf("Shutdown notification sent to %d/%d sessions", sent, len(sessions))
 }
 
 // acceptLoop accepts incoming connections
@@ -535,6 +597,18 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleVerifyResponse(sess, frame)
 	case protocol.TypeHeartbeat:
 		return s.handleHeartbeat(sess, frame)
+	case protocol.TypeBanUser:
+		return s.handleBanUser(sess, frame)
+	case protocol.TypeBanIP:
+		return s.handleBanIP(sess, frame)
+	case protocol.TypeUnbanUser:
+		return s.handleUnbanUser(sess, frame)
+	case protocol.TypeUnbanIP:
+		return s.handleUnbanIP(sess, frame)
+	case protocol.TypeListBans:
+		return s.handleListBans(sess, frame)
+	case protocol.TypeDeleteUser:
+		return s.handleDeleteUser(sess, frame)
 	default:
 		// Unknown or unimplemented message type
 		return s.sendError(sess, 1001, "Unsupported message type")
@@ -597,6 +671,25 @@ func (s *Server) sendError(sess *Session, code uint16, message string) error {
 		s.metrics.RecordMessageSent(messageTypeToString(protocol.TypeError))
 	}
 	return sess.Conn.EncodeFrame(frame)
+}
+
+// isAdmin checks if a session belongs to an admin user
+// Returns false for anonymous users (nil UserID)
+// Returns true if session nickname matches any admin user in config
+func (s *Server) isAdmin(sess *Session) bool {
+	// Anonymous users can never be admin
+	if sess.UserID == nil {
+		return false
+	}
+
+	// Check if nickname is in admin list
+	for _, adminNick := range s.config.AdminUsers {
+		if sess.Nickname == adminNick {
+			return true
+		}
+	}
+
+	return false
 }
 
 // metricsLoggingLoop periodically logs key metrics

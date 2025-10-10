@@ -1,6 +1,8 @@
 package modal
 
 import (
+	"fmt"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -97,10 +99,20 @@ func (m *NicknameSetupModal) Render(width, height int) string {
 
 	// Build content
 	title := modalTitleStyle.Render("Set Your Nickname")
-	prompt := "Enter a nickname (3-20 characters, alphanumeric plus - and _):"
+	prompt := "Enter a nickname:"
 
 	// Input field with cursor and max width (52 chars to fit in 60-char modal with padding)
 	input := inputFocusedStyle.Width(52).Render(m.input + "█")
+
+	// Helper text with validation rules and character count
+	charCountText := fmt.Sprintf("Characters: %d/20", len(m.input))
+	helperText := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")).
+		Render(lipgloss.JoinVertical(
+			lipgloss.Left,
+			"Allowed: letters, numbers, - and _",
+			mutedTextStyle.Render(charCountText),
+		))
 
 	// Error message if any
 	var errorMsg string
@@ -115,6 +127,8 @@ func (m *NicknameSetupModal) Render(width, height int) string {
 		prompt,
 		"",
 		input,
+		"",
+		helperText,
 		errorMsg,
 		"",
 		mutedTextStyle.Render("[Enter] Confirm  [Esc] Quit"),

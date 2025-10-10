@@ -48,6 +48,14 @@ const (
 	TypeRegisterServer     = 0x56
 	TypeHeartbeat          = 0x57
 	TypeVerifyResponse     = 0x58
+
+	// Admin commands (Client → Server)
+	TypeBanUser    = 0x59
+	TypeBanIP      = 0x5A
+	TypeUnbanUser  = 0x5B
+	TypeUnbanIP    = 0x5C
+	TypeListBans   = 0x5D
+	TypeDeleteUser = 0x5E
 )
 
 // Message type constants (Server → Client)
@@ -80,6 +88,14 @@ const (
 	TypeRegisterAck        = 0x9C
 	TypeHeartbeatAck       = 0x9D
 	TypeVerifyRegistration = 0x9E
+
+	// Admin responses (Server → Client)
+	TypeUserBanned    = 0x9F
+	TypeIPBanned      = 0xA5
+	TypeUserUnbanned  = 0xA6
+	TypeIPUnbanned    = 0xA7
+	TypeBanList       = 0xA8
+	TypeUserDeleted   = 0xA9
 )
 
 // Error codes
@@ -1671,21 +1687,30 @@ func (m *NewMessageMessage) Decode(payload []byte) error {
 }
 
 // DisconnectMessage (0x11) - Graceful disconnect notification
+// Can be sent by either client or server to signal intentional disconnect
 type DisconnectMessage struct {
-	// Empty message - just signals intent to disconnect
+	Reason *string // Optional reason for disconnect
 }
 
 func (m *DisconnectMessage) EncodeTo(w io.Writer) error {
-	// No payload
-	return nil
+	return WriteOptionalString(w, m.Reason)
 }
 
 func (m *DisconnectMessage) Encode() ([]byte, error) {
-	return []byte{}, nil
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (m *DisconnectMessage) Decode(payload []byte) error {
-	// No payload to decode
+	buf := bytes.NewReader(payload)
+	reason, err := ReadOptionalString(buf)
+	if err != nil {
+		return err
+	}
+	m.Reason = reason
 	return nil
 }
 
@@ -2913,6 +2938,589 @@ func (m *SSHKeyDeletedResponse) Decode(payload []byte) error {
 	return nil
 }
 
+// ===== ADMIN COMMANDS =====
+
+// BanUserMessage (0x59) - Ban a user by user ID or nickname
+type BanUserMessage struct {
+	UserID          *uint64 // Optional: user ID to ban (takes precedence if provided)
+	Nickname        *string // Optional: nickname to ban (if user_id not provided)
+	Reason          string
+	Shadowban       bool
+	DurationSeconds *uint64 // NULL = permanent ban
+}
+
+func (m *BanUserMessage) EncodeTo(w io.Writer) error {
+	if err := WriteOptionalUint64(w, m.UserID); err != nil {
+		return err
+	}
+	if err := WriteOptionalString(w, m.Nickname); err != nil {
+		return err
+	}
+	if err := WriteString(w, m.Reason); err != nil {
+		return err
+	}
+	if err := WriteBool(w, m.Shadowban); err != nil {
+		return err
+	}
+	return WriteOptionalUint64(w, m.DurationSeconds)
+}
+
+func (m *BanUserMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *BanUserMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	userID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	nickname, err := ReadOptionalString(buf)
+	if err != nil {
+		return err
+	}
+	reason, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	shadowban, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	durationSeconds, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+
+	m.UserID = userID
+	m.Nickname = nickname
+	m.Reason = reason
+	m.Shadowban = shadowban
+	m.DurationSeconds = durationSeconds
+	return nil
+}
+
+// UserBannedMessage (0x9F) - Response to BAN_USER
+type UserBannedMessage struct {
+	Success bool
+	BanID   uint64 // Only present if Success=true
+	Message string
+}
+
+func (m *UserBannedMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if m.Success {
+		if err := WriteUint64(w, m.BanID); err != nil {
+			return err
+		}
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *UserBannedMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UserBannedMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	m.Success = success
+
+	if success {
+		banID, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		m.BanID = banID
+	}
+
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Message = message
+	return nil
+}
+
+// BanIPMessage (0x5A) - Ban an IP address or CIDR range
+type BanIPMessage struct {
+	IPCIDR          string  // IP address or CIDR range (e.g., "10.0.0.5/32", "192.168.1.0/24")
+	Reason          string
+	DurationSeconds *uint64 // NULL = permanent ban
+}
+
+func (m *BanIPMessage) EncodeTo(w io.Writer) error {
+	if err := WriteString(w, m.IPCIDR); err != nil {
+		return err
+	}
+	if err := WriteString(w, m.Reason); err != nil {
+		return err
+	}
+	return WriteOptionalUint64(w, m.DurationSeconds)
+}
+
+func (m *BanIPMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *BanIPMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	ipCIDR, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	reason, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	durationSeconds, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+
+	m.IPCIDR = ipCIDR
+	m.Reason = reason
+	m.DurationSeconds = durationSeconds
+	return nil
+}
+
+// IPBannedMessage (0xA5) - Response to BAN_IP
+type IPBannedMessage struct {
+	Success bool
+	BanID   uint64 // Only present if Success=true
+	Message string
+}
+
+func (m *IPBannedMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if m.Success {
+		if err := WriteUint64(w, m.BanID); err != nil {
+			return err
+		}
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *IPBannedMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *IPBannedMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	m.Success = success
+
+	if success {
+		banID, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		m.BanID = banID
+	}
+
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	m.Message = message
+	return nil
+}
+
+// UnbanUserMessage (0x5B) - Remove user ban
+type UnbanUserMessage struct {
+	UserID   *uint64 // Optional: user ID to unban
+	Nickname *string // Optional: nickname to unban
+}
+
+func (m *UnbanUserMessage) EncodeTo(w io.Writer) error {
+	if err := WriteOptionalUint64(w, m.UserID); err != nil {
+		return err
+	}
+	return WriteOptionalString(w, m.Nickname)
+}
+
+func (m *UnbanUserMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UnbanUserMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	userID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	nickname, err := ReadOptionalString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.UserID = userID
+	m.Nickname = nickname
+	return nil
+}
+
+// UserUnbannedMessage (0xA6) - Response to UNBAN_USER
+type UserUnbannedMessage struct {
+	Success bool
+	Message string
+}
+
+func (m *UserUnbannedMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *UserUnbannedMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UserUnbannedMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+	m.Message = message
+	return nil
+}
+
+// UnbanIPMessage (0x5C) - Remove IP ban
+type UnbanIPMessage struct {
+	IPCIDR string // IP address or CIDR range to unban
+}
+
+func (m *UnbanIPMessage) EncodeTo(w io.Writer) error {
+	return WriteString(w, m.IPCIDR)
+}
+
+func (m *UnbanIPMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UnbanIPMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	ipCIDR, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.IPCIDR = ipCIDR
+	return nil
+}
+
+// IPUnbannedMessage (0xA7) - Response to UNBAN_IP
+type IPUnbannedMessage struct {
+	Success bool
+	Message string
+}
+
+func (m *IPUnbannedMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *IPUnbannedMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *IPUnbannedMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+	m.Message = message
+	return nil
+}
+
+// ListBansMessage (0x5D) - Request list of all active bans
+type ListBansMessage struct {
+	IncludeExpired bool
+}
+
+func (m *ListBansMessage) EncodeTo(w io.Writer) error {
+	return WriteBool(w, m.IncludeExpired)
+}
+
+func (m *ListBansMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ListBansMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	includeExpired, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+
+	m.IncludeExpired = includeExpired
+	return nil
+}
+
+// BanEntry represents a single ban in the ban list
+type BanEntry struct {
+	ID          uint64
+	Type        string  // "user" or "ip"
+	UserID      *uint64 // NULL for IP bans
+	Nickname    *string // NULL for IP bans
+	IPCIDR      *string // NULL for user bans
+	Reason      string
+	Shadowban   bool
+	BannedAt    int64   // Unix milliseconds
+	BannedUntil *int64  // NULL = permanent, Unix milliseconds for timed bans
+	BannedBy    string  // Admin nickname
+}
+
+// BanListMessage (0xA8) - List of active bans
+type BanListMessage struct {
+	Bans []BanEntry
+}
+
+func (m *BanListMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint16(w, uint16(len(m.Bans))); err != nil {
+		return err
+	}
+
+	for _, ban := range m.Bans {
+		if err := WriteUint64(w, ban.ID); err != nil {
+			return err
+		}
+		if err := WriteString(w, ban.Type); err != nil {
+			return err
+		}
+		if err := WriteOptionalUint64(w, ban.UserID); err != nil {
+			return err
+		}
+		if err := WriteOptionalString(w, ban.Nickname); err != nil {
+			return err
+		}
+		if err := WriteOptionalString(w, ban.IPCIDR); err != nil {
+			return err
+		}
+		if err := WriteString(w, ban.Reason); err != nil {
+			return err
+		}
+		if err := WriteBool(w, ban.Shadowban); err != nil {
+			return err
+		}
+		if err := WriteInt64(w, ban.BannedAt); err != nil {
+			return err
+		}
+		if err := WriteOptionalInt64(w, ban.BannedUntil); err != nil {
+			return err
+		}
+		if err := WriteString(w, ban.BannedBy); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *BanListMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *BanListMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+
+	count, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Bans = make([]BanEntry, count)
+
+	for i := uint16(0); i < count; i++ {
+		id, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		banType, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		userID, err := ReadOptionalUint64(buf)
+		if err != nil {
+			return err
+		}
+		nickname, err := ReadOptionalString(buf)
+		if err != nil {
+			return err
+		}
+		ipCIDR, err := ReadOptionalString(buf)
+		if err != nil {
+			return err
+		}
+		reason, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		shadowban, err := ReadBool(buf)
+		if err != nil {
+			return err
+		}
+		bannedAt, err := ReadInt64(buf)
+		if err != nil {
+			return err
+		}
+		bannedUntil, err := ReadOptionalInt64(buf)
+		if err != nil {
+			return err
+		}
+		bannedBy, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+
+		m.Bans[i] = BanEntry{
+			ID:          id,
+			Type:        banType,
+			UserID:      userID,
+			Nickname:    nickname,
+			IPCIDR:      ipCIDR,
+			Reason:      reason,
+			Shadowban:   shadowban,
+			BannedAt:    bannedAt,
+			BannedUntil: bannedUntil,
+			BannedBy:    bannedBy,
+		}
+	}
+
+	return nil
+}
+
+// DeleteUserMessage (0x5E) - Permanently delete a user account
+type DeleteUserMessage struct {
+	UserID uint64
+}
+
+func (m *DeleteUserMessage) EncodeTo(w io.Writer) error {
+	return WriteUint64(w, m.UserID)
+}
+
+func (m *DeleteUserMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *DeleteUserMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	userID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+
+	m.UserID = userID
+	return nil
+}
+
+// UserDeletedMessage (0xA9) - Response to DELETE_USER
+type UserDeletedMessage struct {
+	Success bool
+	Message string
+}
+
+func (m *UserDeletedMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *UserDeletedMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UserDeletedMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+	m.Message = message
+	return nil
+}
+
 // Compile-time checks to ensure all message types implement the ProtocolMessage interface
 // This will cause a compile error if any message type is missing Encode(), EncodeTo(), or Decode()
 var (
@@ -2945,6 +3553,12 @@ var (
 	_ ProtocolMessage = (*ListSSHKeysRequest)(nil)
 	_ ProtocolMessage = (*UpdateSSHKeyLabelRequest)(nil)
 	_ ProtocolMessage = (*DeleteSSHKeyRequest)(nil)
+	_ ProtocolMessage = (*BanUserMessage)(nil)
+	_ ProtocolMessage = (*BanIPMessage)(nil)
+	_ ProtocolMessage = (*UnbanUserMessage)(nil)
+	_ ProtocolMessage = (*UnbanIPMessage)(nil)
+	_ ProtocolMessage = (*ListBansMessage)(nil)
+	_ ProtocolMessage = (*DeleteUserMessage)(nil)
 
 	// Server → Client messages
 	_ ProtocolMessage = (*AuthResponseMessage)(nil)
@@ -2972,4 +3586,10 @@ var (
 	_ ProtocolMessage = (*SSHKeyListResponse)(nil)
 	_ ProtocolMessage = (*SSHKeyLabelUpdatedResponse)(nil)
 	_ ProtocolMessage = (*SSHKeyDeletedResponse)(nil)
+	_ ProtocolMessage = (*UserBannedMessage)(nil)
+	_ ProtocolMessage = (*IPBannedMessage)(nil)
+	_ ProtocolMessage = (*UserUnbannedMessage)(nil)
+	_ ProtocolMessage = (*IPUnbannedMessage)(nil)
+	_ ProtocolMessage = (*BanListMessage)(nil)
+	_ ProtocolMessage = (*UserDeletedMessage)(nil)
 )

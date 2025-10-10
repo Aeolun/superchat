@@ -1993,3 +1993,325 @@ func (s *Server) verifyAndRegisterServer(msg *protocol.RegisterServerMessage, so
 	// Note: We don't send REGISTER_ACK here because the original connection is gone
 	// The server will need to send a HEARTBEAT to get the interval
 }
+
+// ===== Admin System Handlers =====
+
+// handleBanUser handles BAN_USER message (admin only)
+func (s *Server) handleBanUser(sess *Session, frame *protocol.Frame) error {
+	// Check admin permissions
+	if !s.isAdmin(sess) {
+		return s.sendMessage(sess, protocol.TypeUserBanned, &protocol.UserBannedMessage{
+			Success: false,
+			Message: "Permission denied: admin access required",
+		})
+	}
+
+	// Decode message
+	msg := &protocol.BanUserMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Validate: must provide either UserID or Nickname
+	if msg.UserID == nil && msg.Nickname == nil {
+		return s.sendMessage(sess, protocol.TypeUserBanned, &protocol.UserBannedMessage{
+			Success: false,
+			Message: "Must provide either UserID or Nickname",
+		})
+	}
+
+	// Get admin info for audit log
+	sess.mu.RLock()
+	adminNickname := sess.Nickname
+	sess.mu.RUnlock()
+	adminIP, _, _ := net.SplitHostPort(sess.RemoteAddr)
+
+	// Convert UserID if provided
+	var userID *int64
+	if msg.UserID != nil {
+		id := int64(*msg.UserID)
+		userID = &id
+	}
+
+	// Create ban in database
+	banID, err := s.db.CreateUserBan(userID, msg.Nickname, msg.Reason, msg.Shadowban, msg.DurationSeconds, adminNickname, adminIP)
+	if err != nil {
+		log.Printf("Failed to create user ban: %v", err)
+		return s.sendMessage(sess, protocol.TypeUserBanned, &protocol.UserBannedMessage{
+			Success: false,
+			Message: "Failed to create ban",
+		})
+	}
+
+	targetIdentifier := ""
+	if msg.Nickname != nil {
+		targetIdentifier = *msg.Nickname
+	} else if msg.UserID != nil {
+		targetIdentifier = fmt.Sprintf("user_id:%d", *msg.UserID)
+	}
+
+	log.Printf("Admin %s banned user %s (ban_id=%d, reason=%s, shadowban=%v)",
+		adminNickname, targetIdentifier, banID, msg.Reason, msg.Shadowban)
+
+	// Send success response
+	return s.sendMessage(sess, protocol.TypeUserBanned, &protocol.UserBannedMessage{
+		Success: true,
+		BanID:   uint64(banID),
+		Message: fmt.Sprintf("User %s banned successfully", targetIdentifier),
+	})
+}
+
+// handleBanIP handles BAN_IP message (admin only)
+func (s *Server) handleBanIP(sess *Session, frame *protocol.Frame) error {
+	// Check admin permissions
+	if !s.isAdmin(sess) {
+		return s.sendMessage(sess, protocol.TypeIPBanned, &protocol.IPBannedMessage{
+			Success: false,
+			Message: "Permission denied: admin access required",
+		})
+	}
+
+	// Decode message
+	msg := &protocol.BanIPMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Validate IPCIDR
+	if msg.IPCIDR == "" {
+		return s.sendMessage(sess, protocol.TypeIPBanned, &protocol.IPBannedMessage{
+			Success: false,
+			Message: "IP/CIDR address required",
+		})
+	}
+
+	// Get admin info for audit log
+	sess.mu.RLock()
+	adminNickname := sess.Nickname
+	sess.mu.RUnlock()
+	adminIP, _, _ := net.SplitHostPort(sess.RemoteAddr)
+
+	// Create ban in database
+	banID, err := s.db.CreateIPBan(msg.IPCIDR, msg.Reason, msg.DurationSeconds, adminNickname, adminIP)
+	if err != nil {
+		log.Printf("Failed to create IP ban: %v", err)
+		return s.sendMessage(sess, protocol.TypeIPBanned, &protocol.IPBannedMessage{
+			Success: false,
+			Message: "Failed to create ban",
+		})
+	}
+
+	log.Printf("Admin %s banned IP %s (ban_id=%d, reason=%s)", adminNickname, msg.IPCIDR, banID, msg.Reason)
+
+	// Send success response
+	return s.sendMessage(sess, protocol.TypeIPBanned, &protocol.IPBannedMessage{
+		Success: true,
+		BanID:   uint64(banID),
+		Message: fmt.Sprintf("IP %s banned successfully", msg.IPCIDR),
+	})
+}
+
+// handleUnbanUser handles UNBAN_USER message (admin only)
+func (s *Server) handleUnbanUser(sess *Session, frame *protocol.Frame) error {
+	// Check admin permissions
+	if !s.isAdmin(sess) {
+		return s.sendMessage(sess, protocol.TypeUserUnbanned, &protocol.UserUnbannedMessage{
+			Success: false,
+			Message: "Permission denied: admin access required",
+		})
+	}
+
+	// Decode message
+	msg := &protocol.UnbanUserMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Validate: must provide either UserID or Nickname
+	if msg.UserID == nil && msg.Nickname == nil {
+		return s.sendMessage(sess, protocol.TypeUserUnbanned, &protocol.UserUnbannedMessage{
+			Success: false,
+			Message: "Must provide either UserID or Nickname",
+		})
+	}
+
+	// Get admin info for audit log
+	sess.mu.RLock()
+	adminNickname := sess.Nickname
+	sess.mu.RUnlock()
+	adminIP, _, _ := net.SplitHostPort(sess.RemoteAddr)
+
+	// Convert UserID if provided
+	var userID *int64
+	if msg.UserID != nil {
+		id := int64(*msg.UserID)
+		userID = &id
+	}
+
+	// Delete ban from database
+	rowsAffected, err := s.db.DeleteUserBan(userID, msg.Nickname, adminNickname, adminIP)
+	if err != nil {
+		log.Printf("Failed to delete user ban: %v", err)
+		return s.sendMessage(sess, protocol.TypeUserUnbanned, &protocol.UserUnbannedMessage{
+			Success: false,
+			Message: "Failed to remove ban",
+		})
+	}
+
+	if rowsAffected == 0 {
+		return s.sendMessage(sess, protocol.TypeUserUnbanned, &protocol.UserUnbannedMessage{
+			Success: false,
+			Message: "No active ban found for this user",
+		})
+	}
+
+	targetIdentifier := ""
+	if msg.Nickname != nil {
+		targetIdentifier = *msg.Nickname
+	} else if msg.UserID != nil {
+		targetIdentifier = fmt.Sprintf("user_id:%d", *msg.UserID)
+	}
+
+	log.Printf("Admin %s unbanned user %s (%d bans removed)", adminNickname, targetIdentifier, rowsAffected)
+
+	// Send success response
+	return s.sendMessage(sess, protocol.TypeUserUnbanned, &protocol.UserUnbannedMessage{
+		Success: true,
+		Message: fmt.Sprintf("User %s unbanned successfully (%d bans removed)", targetIdentifier, rowsAffected),
+	})
+}
+
+// handleUnbanIP handles UNBAN_IP message (admin only)
+func (s *Server) handleUnbanIP(sess *Session, frame *protocol.Frame) error {
+	// Check admin permissions
+	if !s.isAdmin(sess) {
+		return s.sendMessage(sess, protocol.TypeIPUnbanned, &protocol.IPUnbannedMessage{
+			Success: false,
+			Message: "Permission denied: admin access required",
+		})
+	}
+
+	// Decode message
+	msg := &protocol.UnbanIPMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Validate IPCIDR
+	if msg.IPCIDR == "" {
+		return s.sendMessage(sess, protocol.TypeIPUnbanned, &protocol.IPUnbannedMessage{
+			Success: false,
+			Message: "IP/CIDR address required",
+		})
+	}
+
+	// Get admin info for audit log
+	sess.mu.RLock()
+	adminNickname := sess.Nickname
+	sess.mu.RUnlock()
+	adminIP, _, _ := net.SplitHostPort(sess.RemoteAddr)
+
+	// Delete ban from database
+	rowsAffected, err := s.db.DeleteIPBan(msg.IPCIDR, adminNickname, adminIP)
+	if err != nil {
+		log.Printf("Failed to delete IP ban: %v", err)
+		return s.sendMessage(sess, protocol.TypeIPUnbanned, &protocol.IPUnbannedMessage{
+			Success: false,
+			Message: "Failed to remove ban",
+		})
+	}
+
+	if rowsAffected == 0 {
+		return s.sendMessage(sess, protocol.TypeIPUnbanned, &protocol.IPUnbannedMessage{
+			Success: false,
+			Message: "No active ban found for this IP",
+		})
+	}
+
+	log.Printf("Admin %s unbanned IP %s (%d bans removed)", adminNickname, msg.IPCIDR, rowsAffected)
+
+	// Send success response
+	return s.sendMessage(sess, protocol.TypeIPUnbanned, &protocol.IPUnbannedMessage{
+		Success: true,
+		Message: fmt.Sprintf("IP %s unbanned successfully (%d bans removed)", msg.IPCIDR, rowsAffected),
+	})
+}
+
+// handleListBans handles LIST_BANS message (admin only)
+func (s *Server) handleListBans(sess *Session, frame *protocol.Frame) error {
+	// Check admin permissions
+	if !s.isAdmin(sess) {
+		return s.sendError(sess, protocol.ErrCodePermissionDenied, "Permission denied: admin access required")
+	}
+
+	// Decode message
+	msg := &protocol.ListBansMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Get bans from database
+	bans, err := s.db.ListBans(msg.IncludeExpired)
+	if err != nil {
+		log.Printf("Failed to list bans: %v", err)
+		return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to retrieve ban list")
+	}
+
+	// Convert to protocol format
+	banEntries := make([]protocol.BanEntry, len(bans))
+	for i, ban := range bans {
+		var userID *uint64
+		if ban.UserID != nil {
+			id := uint64(*ban.UserID)
+			userID = &id
+		}
+
+		banEntries[i] = protocol.BanEntry{
+			ID:          uint64(ban.ID),
+			Type:        ban.BanType,
+			UserID:      userID,
+			Nickname:    ban.Nickname,
+			IPCIDR:      ban.IPCIDR,
+			Reason:      ban.Reason,
+			Shadowban:   ban.Shadowban,
+			BannedAt:    ban.BannedAt,
+			BannedUntil: ban.BannedUntil,
+			BannedBy:    ban.BannedBy,
+		}
+	}
+
+	// Send response
+	resp := &protocol.BanListMessage{
+		Bans: banEntries,
+	}
+	return s.sendMessage(sess, protocol.TypeBanList, resp)
+}
+
+// handleDeleteUser handles DELETE_USER message (admin only)
+func (s *Server) handleDeleteUser(sess *Session, frame *protocol.Frame) error {
+	// Check admin permissions
+	if !s.isAdmin(sess) {
+		return s.sendMessage(sess, protocol.TypeUserDeleted, &protocol.UserDeletedMessage{
+			Success: false,
+			Message: "Permission denied: admin access required",
+		})
+	}
+
+	// Decode message
+	msg := &protocol.DeleteUserMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// TODO: Implement user deletion
+	// This would involve:
+	// 1. Deleting user from User table (CASCADE will delete SSH keys)
+	// 2. Updating all messages with author_user_id=userID to set author_user_id=NULL
+	// 3. Disconnecting all sessions for this user
+	// 4. Logging admin action
+
+	return s.sendMessage(sess, protocol.TypeUserDeleted, &protocol.UserDeletedMessage{
+		Success: false,
+		Message: "User deletion not yet implemented",
+	})
+}

@@ -170,6 +170,12 @@ All messages use a simple frame-based format:
 | 0x56 | REGISTER_SERVER | Register server with directory |
 | 0x57 | HEARTBEAT | Directory heartbeat (keep-alive) |
 | 0x58 | VERIFY_RESPONSE | Response to verification challenge |
+| 0x59 | BAN_USER | Ban a user (admin only) |
+| 0x5A | BAN_IP | Ban an IP address/CIDR (admin only) |
+| 0x5B | UNBAN_USER | Remove user ban (admin only) |
+| 0x5C | UNBAN_IP | Remove IP ban (admin only) |
+| 0x5D | LIST_BANS | Request list of all bans (admin only) |
+| 0x5E | DELETE_USER | Delete a user account (admin only) |
 
 ### Server → Client Messages
 
@@ -205,11 +211,17 @@ All messages use a simple frame-based format:
 | 0x9C | REGISTER_ACK | Server registration acknowledgment |
 | 0x9D | HEARTBEAT_ACK | Heartbeat acknowledgment |
 | 0x9E | VERIFY_REGISTRATION | Verification challenge for new servers |
+| 0x9F | USER_BANNED | User ban result (admin response) |
 | 0xA0 | SERVER_STATS | Server statistics (user counts, etc.) |
 | 0xA1 | KEY_REQUIRED | Server needs encryption key before proceeding |
 | 0xA2 | DM_READY | DM channel is ready to use |
 | 0xA3 | DM_PENDING | Waiting for other party to complete key setup |
 | 0xA4 | DM_REQUEST | Incoming DM request from another user |
+| 0xA5 | IP_BANNED | IP ban result (admin response) |
+| 0xA6 | USER_UNBANNED | User unban result (admin response) |
+| 0xA7 | IP_UNBANNED | IP unban result (admin response) |
+| 0xA8 | BAN_LIST | List of bans response (admin) |
+| 0xA9 | USER_DELETED | User deletion result (admin response) |
 
 ## Message Payloads
 
@@ -970,13 +982,7 @@ Response to CREATE_SUBCHANNEL request + broadcast to all connected clients.
 - `channel_id` indicates which channel this subchannel belongs to
 - If `success = false`, only sent to requesting client (not broadcast)
 
-### 0x11 - GET_SERVER_STATS (Client → Server)
-
-Request current server statistics.
-
-No payload (empty).
-
-### 0x12 - START_DM (Client → Server)
+### 0x19 - START_DM (Client → Server)
 
 Initiate a direct message conversation with another user.
 
@@ -1186,7 +1192,44 @@ Keepalive heartbeat to maintain session when idle.
 
 Echoes back the client's timestamp.
 
-### 0x92 - SERVER_STATS (Server → Client)
+### 0x11 - DISCONNECT (Client → Server, Server → Client)
+
+Graceful disconnect notification. Can be sent by either client or server to signal intentional disconnect.
+
+```
++--------------------+
+| reason (Optional String)|
++--------------------+
+```
+
+**Fields:**
+- `reason` (Optional): Human-readable explanation for disconnect
+  - If present: A disconnect reason is provided (e.g., "Server shutting down for maintenance", "Client closing connection")
+  - If absent (empty payload): Generic disconnect with no specific reason
+
+**Direction: Client → Server:**
+- Client sends DISCONNECT before closing connection gracefully
+- Allows server to clean up session immediately
+- No response expected from server
+
+**Direction: Server → Client:**
+- Server sends DISCONNECT before forcibly closing client connection
+- Common reasons:
+  - `"Server shutting down for maintenance"` - Graceful server shutdown
+  - `"Session timeout"` - No activity for 60+ seconds
+  - `"Protocol violation"` - Client sent malformed messages
+  - `"Kicked by operator"` - Admin action
+- Client should display reason to user and not attempt immediate reconnect
+- Connection will be closed by server shortly after sending this message
+
+**Notes:**
+- This is a **notification only** - no acknowledgment is required or expected
+- Used for clean shutdown and user feedback (vs. abrupt connection drop)
+- Helps distinguish intentional disconnects from network failures
+- Client should display server-provided reason before auto-reconnect
+- Empty reason (`reason` field absent) is valid for simple disconnects
+
+### 0xA0 - SERVER_STATS (Server → Client)
 
 Response to GET_SERVER_STATS request or sent periodically as a broadcast.
 
@@ -1344,6 +1387,290 @@ Confirmation that a subscription was successful.
 - Sent in response to SUBSCRIBE_THREAD or SUBSCRIBE_CHANNEL
 - Client can use this to confirm the subscription was registered
 - Not sent for unsubscribe operations
+
+## Admin Protocol Messages
+
+All admin messages require the user to be authenticated and listed in the server's `admin_users` configuration. Non-admin users attempting to use these messages will receive an ERROR response with code 3000 (Permission denied).
+
+### 0x59 - BAN_USER (Client → Server)
+
+Ban a user from the server (admin only).
+
+```
++-------------------+----------------------+-------------------+
+| user_id           | nickname             | reason (String)   |
+| (Optional u64)    | (Optional String)    |                   |
++-------------------+----------------------+-------------------+
+| shadowban (bool)  | duration_seconds     |
+|                   | (Optional u64)       |
++-------------------+----------------------+
+```
+
+**Fields:**
+- `user_id`: Optional user ID to ban (for registered users)
+- `nickname`: Optional nickname to ban (for anonymous or registered users)
+- `reason`: Human-readable reason for the ban (required)
+- `shadowban`: If true, user can post but messages only visible to them
+- `duration_seconds`: Ban duration in seconds (if absent = permanent ban)
+
+**Notes:**
+- At least one of `user_id` or `nickname` must be provided
+- Shadowbanned users can still see the channel and post, but their messages are filtered for other users
+- All admin actions are logged in the AdminAction table with admin's nickname and IP
+- Bans are checked on authentication and message posting
+
+### 0x9F - USER_BANNED (Server → Client)
+
+Response to BAN_USER request.
+
+```
++-------------------+-------------------+-------------------+
+| success (bool)    | ban_id (u64)      | message (String)  |
+|                   | (only if success) | (error if failed) |
++-------------------+-------------------+-------------------+
+```
+
+**Fields:**
+- `success`: Whether the ban was created successfully
+- `ban_id`: Database ID of the created ban (only if success)
+- `message`: Success message or error description
+
+**Response cases:**
+- Success: `success = true`, `ban_id = <id>`, `message = "User <nickname> banned successfully"`
+- Permission denied: `success = false`, `message = "Permission denied: admin access required"`
+- Invalid input: `success = false`, `message = "Must provide either UserID or Nickname"`
+- Database error: `success = false`, `message = "Failed to create ban"`
+
+### 0x5A - BAN_IP (Client → Server)
+
+Ban an IP address or CIDR range from the server (admin only).
+
+```
++-------------------+-------------------+----------------------+
+| ip_cidr (String)  | reason (String)   | duration_seconds     |
+|                   |                   | (Optional u64)       |
++-------------------+-------------------+----------------------+
+```
+
+**Fields:**
+- `ip_cidr`: IP address or CIDR range (e.g., "192.168.1.100" or "10.0.0.0/24")
+- `reason`: Human-readable reason for the ban (required)
+- `duration_seconds`: Ban duration in seconds (if absent = permanent ban)
+
+**Notes:**
+- Accepts both single IP addresses (e.g., "192.168.1.100") and CIDR ranges (e.g., "10.0.0.0/24")
+- IP bans prevent connection entirely (checked on TCP connect)
+- CIDR support allows banning entire subnets
+- All admin actions are logged in the AdminAction table
+
+### 0xA5 - IP_BANNED (Server → Client)
+
+Response to BAN_IP request.
+
+```
++-------------------+-------------------+-------------------+
+| success (bool)    | ban_id (u64)      | message (String)  |
+|                   | (only if success) | (error if failed) |
++-------------------+-------------------+-------------------+
+```
+
+**Fields:**
+- `success`: Whether the ban was created successfully
+- `ban_id`: Database ID of the created ban (only if success)
+- `message`: Success message or error description
+
+**Response cases:**
+- Success: `success = true`, `ban_id = <id>`, `message = "IP <address> banned successfully"`
+- Permission denied: `success = false`, `message = "Permission denied: admin access required"`
+- Invalid CIDR: `success = false`, `message = "Invalid IP or CIDR format"`
+- Database error: `success = false`, `message = "Failed to create ban"`
+
+### 0x5B - UNBAN_USER (Client → Server)
+
+Remove a user ban (admin only).
+
+```
++-------------------+----------------------+
+| user_id           | nickname             |
+| (Optional u64)    | (Optional String)    |
++-------------------+----------------------+
+```
+
+**Fields:**
+- `user_id`: Optional user ID to unban (for registered users)
+- `nickname`: Optional nickname to unban
+
+**Notes:**
+- At least one of `user_id` or `nickname` must be provided
+- Removes all active bans for the specified user
+- If user has multiple bans (shouldn't happen), removes all of them
+- All admin actions are logged in the AdminAction table
+
+### 0xA6 - USER_UNBANNED (Server → Client)
+
+Response to UNBAN_USER request.
+
+```
++-------------------+----------------------+-------------------+
+| success (bool)    | bans_removed (u64)   | message (String)  |
+|                   | (only if success)    | (error if failed) |
++-------------------+----------------------+-------------------+
+```
+
+**Fields:**
+- `success`: Whether the unban was successful
+- `bans_removed`: Number of bans removed (typically 1, only if success)
+- `message`: Success message or error description
+
+**Response cases:**
+- Success: `success = true`, `bans_removed = 1`, `message = "User <nickname> unbanned successfully"`
+- No ban found: `success = false`, `bans_removed = 0`, `message = "No active ban found for user"`
+- Permission denied: `success = false`, `message = "Permission denied: admin access required"`
+
+### 0x5C - UNBAN_IP (Client → Server)
+
+Remove an IP ban (admin only).
+
+```
++-------------------+
+| ip_cidr (String)  |
++-------------------+
+```
+
+**Fields:**
+- `ip_cidr`: IP address or CIDR range to unban (must match ban exactly)
+
+**Notes:**
+- Must match the exact IP/CIDR that was banned
+- For example, if "10.0.0.0/24" was banned, must unban "10.0.0.0/24" exactly
+- All admin actions are logged in the AdminAction table
+
+### 0xA7 - IP_UNBANNED (Server → Client)
+
+Response to UNBAN_IP request.
+
+```
++-------------------+----------------------+-------------------+
+| success (bool)    | bans_removed (u64)   | message (String)  |
+|                   | (only if success)    | (error if failed) |
++-------------------+----------------------+-------------------+
+```
+
+**Fields:**
+- `success`: Whether the unban was successful
+- `bans_removed`: Number of bans removed (typically 1, only if success)
+- `message`: Success message or error description
+
+**Response cases:**
+- Success: `success = true`, `bans_removed = 1`, `message = "IP <address> unbanned successfully"`
+- No ban found: `success = false`, `bans_removed = 0`, `message = "No active ban found for IP"`
+- Permission denied: `success = false`, `message = "Permission denied: admin access required"`
+
+### 0x5D - LIST_BANS (Client → Server)
+
+Request list of all bans (admin only).
+
+```
++----------------------+
+| include_expired(bool)|
++----------------------+
+```
+
+**Fields:**
+- `include_expired`: If true, include expired bans. If false, only active bans.
+
+**Notes:**
+- Returns all bans (user bans and IP bans)
+- Expired bans have `banned_until < current_time`
+- Permanent bans have `banned_until = NULL`
+
+### 0xA8 - BAN_LIST (Server → Client)
+
+Response with list of bans.
+
+```
++-------------------+----------------+
+| ban_count (u16)   | bans []        |
++-------------------+----------------+
+
+Each ban:
++-------------------+-------------------+----------------------+
+| ban_id (u64)      | ban_type (u8)     | user_id              |
+|                   |                   | (Optional u64)       |
++-------------------+-------------------+----------------------+
+| nickname          | ip_cidr           | reason (String)      |
+| (Optional String) | (Optional String) |                      |
++-------------------+-------------------+----------------------+
+| shadowban (bool)  | banned_at (Timestamp)                   |
++-------------------+-----------------------------------------+
+| banned_until      | banned_by (String)                      |
+| (Optional i64)    |                                         |
++-------------------+-----------------------------------------+
+```
+
+**Ban Types:**
+- 0x00 = User ban
+- 0x01 = IP ban
+
+**Fields (per ban):**
+- `ban_id`: Database ID of the ban
+- `ban_type`: 0x00 for user ban, 0x01 for IP ban
+- `user_id`: Only present for user bans (NULL for IP bans)
+- `nickname`: Nickname at time of ban (only for user bans)
+- `ip_cidr`: IP or CIDR (only for IP bans)
+- `reason`: Admin-provided reason for the ban
+- `shadowban`: True if this is a shadowban (only for user bans)
+- `banned_at`: When the ban was created (timestamp in milliseconds)
+- `banned_until`: When the ban expires (optional int64 timestamp in milliseconds, NULL = permanent)
+- `banned_by`: Nickname of the admin who created the ban
+
+**Notes:**
+- User bans have `user_id` and `nickname` populated, `ip_cidr` is NULL
+- IP bans have `ip_cidr` populated, `user_id` and `nickname` are NULL
+- Shadowban field is always present but only meaningful for user bans
+- Banned_until uses optional int64 (signed) to represent timestamp in milliseconds
+
+### 0x5E - DELETE_USER (Client → Server)
+
+Delete a user account permanently (admin only).
+
+```
++-------------------+----------------------+
+| user_id (u64)     | reason (String)      |
++-------------------+----------------------+
+```
+
+**Fields:**
+- `user_id`: User ID to delete
+- `reason`: Admin-provided reason for deletion
+
+**Notes:**
+- **STUB IMPLEMENTATION**: Currently returns success=false with "Not implemented" message
+- Planned behavior: Permanently delete user account and associated data
+- All admin actions are logged in the AdminAction table
+
+### 0xA9 - USER_DELETED (Server → Client)
+
+Response to DELETE_USER request.
+
+```
++-------------------+-------------------+
+| success (bool)    | message (String)  |
++-------------------+-------------------+
+```
+
+**Fields:**
+- `success`: Whether the deletion was successful
+- `message`: Success message or error description
+
+**Response cases:**
+- Not implemented: `success = false`, `message = "Not implemented"`
+- Permission denied: `success = false`, `message = "Permission denied: admin access required"`
+- (Future) Success: `success = true`, `message = "User <nickname> deleted successfully"`
+
+**Notes:**
+- Currently a stub implementation that always returns failure
+- Future implementation will cascade delete user data (messages, sessions, keys, etc.)
 
 ### 0x91 - ERROR (Server → Client)
 

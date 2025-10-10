@@ -1073,3 +1073,33 @@ func (m *MemDB) UpdateSSHKeyLastUsed(fingerprint string) error {
 func (m *MemDB) UpdateSSHKeyLabel(keyID, userID int64, label string) error {
 	return m.sqliteDB.UpdateSSHKeyLabel(keyID, userID, label)
 }
+
+// ===== Ban Methods (Admin System) =====
+
+func (m *MemDB) CreateUserBan(userID *int64, nickname *string, reason string, shadowban bool, durationSeconds *uint64, adminNickname, adminIP string) (int64, error) {
+	return m.sqliteDB.CreateUserBan(userID, nickname, reason, shadowban, durationSeconds, adminNickname, adminIP)
+}
+
+func (m *MemDB) CreateIPBan(ipCIDR string, reason string, durationSeconds *uint64, adminNickname, adminIP string) (int64, error) {
+	return m.sqliteDB.CreateIPBan(ipCIDR, reason, durationSeconds, adminNickname, adminIP)
+}
+
+func (m *MemDB) DeleteUserBan(userID *int64, nickname *string, adminNickname, adminIP string) (int64, error) {
+	return m.sqliteDB.DeleteUserBan(userID, nickname, adminNickname, adminIP)
+}
+
+func (m *MemDB) DeleteIPBan(ipCIDR string, adminNickname, adminIP string) (int64, error) {
+	return m.sqliteDB.DeleteIPBan(ipCIDR, adminNickname, adminIP)
+}
+
+func (m *MemDB) GetActiveBanForUser(userID *int64, nickname *string) (*Ban, error) {
+	return m.sqliteDB.GetActiveBanForUser(userID, nickname)
+}
+
+func (m *MemDB) GetActiveBanForIP(ipAddress string) (*Ban, error) {
+	return m.sqliteDB.GetActiveBanForIP(ipAddress)
+}
+
+func (m *MemDB) ListBans(includeExpired bool) ([]*Ban, error) {
+	return m.sqliteDB.ListBans(includeExpired)
+}
