@@ -42,6 +42,45 @@ function getTypeFields(typeDef: TypeDef): Field[] {
 }
 
 /**
+ * Get available fields for field references in a type
+ *
+ * For protocol schemas: If the type is a message payload type, includes header fields
+ * For binary schemas: Only includes parent fields
+ *
+ * @param typeName - Name of the type being validated
+ * @param parentFields - Fields from the current type
+ * @param schema - The schema being validated
+ * @returns Array of fields that can be referenced by field_referenced arrays and discriminated unions
+ */
+function getAvailableFieldsForReference(
+  typeName: string,
+  parentFields: Field[],
+  schema: BinarySchema
+): Field[] {
+  // If no protocol, return only parent fields
+  if (!schema.protocol) {
+    return parentFields;
+  }
+
+  // Check if this type is used as a message payload type
+  const isPayloadType = schema.protocol.messages.some(msg => msg.payload_type === typeName);
+  if (!isPayloadType) {
+    return parentFields;
+  }
+
+  // Get header fields
+  const headerType = schema.types[schema.protocol.header];
+  if (!headerType) {
+    return parentFields; // Header type not found (will be caught by other validation)
+  }
+
+  const headerFields = getTypeFields(headerType);
+
+  // Return header fields + parent fields (header fields come first, so they're "earlier")
+  return [...headerFields, ...parentFields];
+}
+
+/**
  * Validate a binary schema for consistency
  */
 export function validateSchema(schema: BinarySchema): ValidationResult {
@@ -119,7 +158,7 @@ function validateTypeDef(
   // Validate each field
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
-    validateField(field, `types.${typeName}.${fieldsKey}[${i}]`, schema, errors, fields);
+    validateField(field, `types.${typeName}.${fieldsKey}[${i}]`, schema, errors, typeName, fields);
   }
 }
 
@@ -431,6 +470,7 @@ function validateField(
   path: string,
   schema: BinarySchema,
   errors: ValidationError[],
+  typeName?: string, // Type name being validated (for protocol context)
   parentFields?: Field[] // For field-based discriminator validation
 ): void {
   if (!("type" in field)) {
@@ -460,10 +500,11 @@ function validateField(
             path: `${path} (${field.name || "array"})`,
             message: "field_referenced array missing 'length_field' property",
           });
-        } else if (parentFields) {
-          // Validate that length_field references an earlier field
+        } else if (parentFields && typeName) {
+          // Get available fields for reference (includes header fields if protocol payload type)
+          const availableFields = getAvailableFieldsForReference(typeName, parentFields, schema);
           const lengthFieldRef = (field as any).length_field;
-          const fieldIndex = parentFields.findIndex((f: any) => f.name === field.name);
+          const fieldIndex = availableFields.findIndex((f: any) => f.name === field.name);
 
           // Check for bitfield sub-field reference (e.g., "flags.opcode")
           const dotIndex = lengthFieldRef.indexOf('.');
@@ -471,12 +512,13 @@ function validateField(
             const fieldName = lengthFieldRef.substring(0, dotIndex);
             const subFieldName = lengthFieldRef.substring(dotIndex + 1);
 
-            const referencedFieldIndex = parentFields.findIndex((f: any) => f.name === fieldName);
+            const referencedFieldIndex = availableFields.findIndex((f: any) => f.name === fieldName);
 
             if (referencedFieldIndex === -1) {
+              const fieldNames = availableFields.map((f: any) => f.name).join(', ');
               errors.push({
                 path: `${path} (${field.name})`,
-                message: `length_field '${fieldName}' not found in parent struct`,
+                message: `length_field '${fieldName}' not found in type '${typeName}'${schema.protocol ? ` or protocol header '${schema.protocol.header}'` : ''} (available fields: ${fieldNames})`,
               });
             } else if (referencedFieldIndex >= fieldIndex) {
               errors.push({
@@ -485,7 +527,7 @@ function validateField(
               });
             } else {
               // Verify the field is a bitfield and the sub-field exists
-              const referencedField = parentFields[referencedFieldIndex] as any;
+              const referencedField = availableFields[referencedFieldIndex] as any;
               if (referencedField.type !== 'bitfield') {
                 errors.push({
                   path: `${path} (${field.name})`,
@@ -499,22 +541,23 @@ function validateField(
               } else {
                 const bitfieldSubField = referencedField.fields.find((bf: any) => bf.name === subFieldName);
                 if (!bitfieldSubField) {
-                  const availableFields = referencedField.fields.map((bf: any) => bf.name).join(', ');
+                  const availableBitfields = referencedField.fields.map((bf: any) => bf.name).join(', ');
                   errors.push({
                     path: `${path} (${field.name})`,
-                    message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableFields})`,
+                    message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableBitfields})`,
                   });
                 }
               }
             }
           } else {
             // Regular field reference (no dot notation)
-            const referencedFieldIndex = parentFields.findIndex((f: any) => f.name === lengthFieldRef);
+            const referencedFieldIndex = availableFields.findIndex((f: any) => f.name === lengthFieldRef);
 
             if (referencedFieldIndex === -1) {
+              const fieldNames = availableFields.map((f: any) => f.name).join(', ');
               errors.push({
                 path: `${path} (${field.name})`,
-                message: `length_field '${lengthFieldRef}' not found in parent struct`,
+                message: `length_field '${lengthFieldRef}' not found in type '${typeName}'${schema.protocol ? ` or protocol header '${schema.protocol.header}'` : ''} (available fields: ${fieldNames})`,
               });
             } else if (referencedFieldIndex >= fieldIndex) {
               errors.push({

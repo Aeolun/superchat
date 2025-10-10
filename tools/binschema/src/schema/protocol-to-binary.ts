@@ -10,7 +10,6 @@
  * 4. Generating 'when' conditions from message codes
  */
 
-import { ProtocolSchema, validateProtocolSchemaWithTypes } from "./protocol-schema";
 import { BinarySchema } from "./binary-schema";
 
 export interface ProtocolTransformOptions {
@@ -21,17 +20,20 @@ export interface ProtocolTransformOptions {
 /**
  * Transform a protocol schema into a binary schema with discriminated unions
  *
- * @param protocolSchema - The protocol schema to transform
- * @param binarySchema - The binary schema containing type definitions
+ * @param schema - The schema (must have a protocol field)
  * @param options - Optional transformation options
  * @returns Binary schema with the combined frame type added
  */
 export function transformProtocolToBinary(
-  protocolSchema: ProtocolSchema,
-  binarySchema: BinarySchema,
+  schema: BinarySchema,
   options?: ProtocolTransformOptions
 ): BinarySchema {
-  const protocol = protocolSchema.protocol;
+  // Verify schema has protocol definition
+  if (!schema.protocol) {
+    throw new Error("Schema must have a protocol definition to transform");
+  }
+
+  const protocol = schema.protocol;
   const combinedTypeName = options?.combinedTypeName || "Frame";
 
   // 1. Validate protocol has at least one message
@@ -39,14 +41,7 @@ export function transformProtocolToBinary(
     throw new Error("Protocol must have at least one message");
   }
 
-  // 2. Validate protocol schema against binary schema (discriminator_field, types exist, etc.)
-  const validationResult = validateProtocolSchemaWithTypes(protocolSchema, binarySchema);
-  if (!validationResult.valid) {
-    // Throw first error for simplicity (tests expect specific error messages)
-    throw new Error(validationResult.errors[0].message);
-  }
-
-  // 3. Check for duplicate message codes
+  // 2. Check for duplicate message codes
   const messageCodes = new Set<string>();
   for (const msg of protocol.messages) {
     if (messageCodes.has(msg.code)) {
@@ -55,41 +50,47 @@ export function transformProtocolToBinary(
     messageCodes.add(msg.code);
   }
 
-  // 4. Validate message codes are valid hex
+  // 3. Validate message codes are valid hex
   for (const msg of protocol.messages) {
     if (!/^0x[0-9A-Fa-f]+$/.test(msg.code)) {
       throw new Error(`Message code '${msg.code}' for message '${msg.name}' is not valid hex (must start with 0x)`);
     }
   }
 
-  // 5. Check that combined type name doesn't already exist
-  if (binarySchema.types[combinedTypeName]) {
-    throw new Error(`Combined type name '${combinedTypeName}' already exists in binary schema`);
+  // 4. Check that combined type name doesn't already exist
+  if (schema.types[combinedTypeName]) {
+    throw new Error(`Combined type name '${combinedTypeName}' already exists in schema`);
   }
 
-  // 6. Get header fields (if header_format exists)
-  let headerFields: any[] = [];
-  if (protocol.header_format) {
-    const headerType = binarySchema.types[protocol.header_format];
-    headerFields = getFieldsFromType(headerType);
+  // 5. Verify header type exists
+  if (!schema.types[protocol.header]) {
+    throw new Error(`Header type '${protocol.header}' not found in schema types`);
+  }
 
-    // Check that header doesn't have reserved 'payload' field name
-    const hasPayloadField = headerFields.some((f: any) => f.name === "payload");
-    if (hasPayloadField) {
-      throw new Error(`Header type '${protocol.header_format}' cannot have a field named 'payload' (reserved for generated union)`);
-    }
+  // 6. Get header fields
+  const headerType = schema.types[protocol.header];
+  const headerFields = getFieldsFromType(headerType);
+
+  // Check that header doesn't have reserved 'payload' field name
+  const hasPayloadField = headerFields.some((f: any) => f.name === "payload");
+  if (hasPayloadField) {
+    throw new Error(`Header type '${protocol.header}' cannot have a field named 'payload' (reserved for generated union)`);
   }
 
   // 7. Check for field name collisions between header and payloads
   const headerFieldNames = new Set(headerFields.map((f: any) => f.name));
   for (const msg of protocol.messages) {
-    const payloadType = binarySchema.types[msg.payload_type];
+    if (!schema.types[msg.payload_type]) {
+      throw new Error(`Payload type '${msg.payload_type}' for message '${msg.name}' not found in schema types`);
+    }
+
+    const payloadType = schema.types[msg.payload_type];
     const payloadFields = getFieldsFromType(payloadType);
 
     for (const payloadField of payloadFields) {
       if (headerFieldNames.has(payloadField.name)) {
         throw new Error(
-          `Field name collision: '${payloadField.name}' exists in both header type '${protocol.header_format}' and payload type '${msg.payload_type}'`
+          `Field name collision: '${payloadField.name}' exists in both header type '${protocol.header}' and payload type '${msg.payload_type}'`
         );
       }
     }
@@ -99,7 +100,7 @@ export function transformProtocolToBinary(
   const combinedFields: any[] = [...headerFields];
 
   // 9. Add payload field (discriminated union or direct reference)
-  if (protocol.messages.length === 1 && !protocol.discriminator_field) {
+  if (protocol.messages.length === 1 && !protocol.discriminator) {
     // Single message without discriminator: direct type reference
     combinedFields.push({
       name: "payload",
@@ -116,7 +117,7 @@ export function transformProtocolToBinary(
       name: "payload",
       type: "discriminated_union",
       discriminator: {
-        field: protocol.discriminator_field!
+        field: protocol.discriminator!
       },
       variants
     });
@@ -128,11 +129,11 @@ export function transformProtocolToBinary(
     description: `Auto-generated combined frame type for ${protocol.name}`
   };
 
-  // 11. Return binary schema with combined type added
+  // 11. Return schema with combined type added
   return {
-    ...binarySchema,
+    ...schema,
     types: {
-      ...binarySchema.types,
+      ...schema.types,
       [combinedTypeName]: combinedType
     }
   };

@@ -567,6 +567,71 @@ export const TypeDefSchema = z.union([
 export type TypeDef = z.infer<typeof TypeDefSchema>;
 
 // ============================================================================
+// Protocol Definition (Optional - for protocol schemas with headers)
+// ============================================================================
+
+/**
+ * Protocol message group (for documentation)
+ */
+const MessageGroupSchema = z.object({
+  name: z.string(), // Group name (e.g., "Authentication", "Messaging")
+  messages: z.array(z.string()), // Message codes in this group
+  description: z.string().optional(),
+});
+export type MessageGroup = z.infer<typeof MessageGroupSchema>;
+
+/**
+ * Protocol constant definition
+ */
+const ProtocolConstantSchema = z.object({
+  value: z.union([z.number(), z.string()]), // Constant value
+  description: z.string(), // Description
+  type: z.string().optional(), // Optional: Associated type
+});
+export type ProtocolConstant = z.infer<typeof ProtocolConstantSchema>;
+
+/**
+ * Protocol message definition
+ */
+const ProtocolMessageSchema = z.object({
+  code: z.string(), // Message type code (e.g., "0x00", "0x01")
+  name: z.string(), // Human-readable name (e.g., "Query", "Response")
+  direction: z.enum(["client_to_server", "server_to_client", "bidirectional"]).optional(), // Message direction
+  payload_type: z.string(), // Type name from schema.types
+  description: z.string().optional(), // Short description
+  notes: z.union([z.string(), z.array(z.string())]).optional(), // Longer notes about usage
+  example: z.object({
+    description: z.string(),
+    bytes: z.array(z.number()),
+    decoded: z.any().optional(), // The decoded value
+  }).optional(), // Wire format example
+  since: z.string().optional(), // Protocol version when added
+  deprecated: z.string().optional(), // Protocol version when deprecated
+});
+export type ProtocolMessage = z.infer<typeof ProtocolMessageSchema>;
+
+/**
+ * Protocol definition (optional field for schemas representing protocols with headers)
+ */
+const ProtocolDefinitionSchema = z.object({
+  name: z.string(), // Protocol name (e.g., "DNS", "SuperChat")
+  version: z.string(), // Protocol version (e.g., "1.0", "2.1")
+  description: z.string().optional(), // Overview/description
+  header: z.string(), // Type name of the header (e.g., "DnsHeader")
+  header_size_field: z.string().optional(), // Name of header field containing payload size
+  header_example: z.object({
+    decoded: z.any(), // Decoded header values
+  }).optional(), // Example header values for docs
+  discriminator: z.string(), // Field in header that determines message type (supports dot notation for bitfields)
+  field_descriptions: z.record(z.string(), z.string()).optional(), // Type.field -> description
+  messages: z.array(ProtocolMessageSchema).min(1),
+  message_groups: z.array(MessageGroupSchema).optional(), // Group messages into categories
+  constants: z.record(z.string(), ProtocolConstantSchema).optional(), // Protocol constants/enums
+  notes: z.array(z.string()).optional(), // General protocol notes
+});
+export type ProtocolDefinition = z.infer<typeof ProtocolDefinitionSchema>;
+
+// ============================================================================
 // Complete Binary Schema
 // ============================================================================
 
@@ -677,10 +742,19 @@ function validateTerminalVariants(schema: any): { valid: boolean; error?: string
 
 /**
  * Complete binary schema definition
+ *
+ * A schema can be either:
+ * 1. Types-only schema: Just type definitions for standalone encoding/decoding
+ * 2. Protocol schema: Type definitions + protocol header and message definitions
+ *
+ * The optional 'protocol' field determines the mode:
+ * - Without 'protocol': Validate field references within each type only
+ * - With 'protocol': Allow field references to header fields from payload types
  */
 export const BinarySchemaSchema = z.object({
   config: ConfigSchema,
   types: z.record(z.string(), TypeDefSchema), // Map of type name → definition
+  protocol: ProtocolDefinitionSchema.optional(), // Optional: protocol header and messages
 }).refine(
   (schema) => {
     // Validate all user-defined type names start with uppercase letter
@@ -705,6 +779,11 @@ export const BinarySchemaSchema = z.object({
   }
 );
 export type BinarySchema = z.infer<typeof BinarySchemaSchema>;
+
+/**
+ * Alias for BinarySchema - supports both types-only and protocol schemas
+ */
+export type Schema = BinarySchema;
 
 /**
  * Helper function to define a schema with type checking
