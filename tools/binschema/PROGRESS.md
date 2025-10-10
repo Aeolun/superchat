@@ -221,9 +221,24 @@ BinSchema is a bit-level binary serialization schema and code generator. It gene
 
 ## 📋 TODO
 
+### Critical - Schema Migration Tasks
+
+1. **Merge Remaining Protocol Schemas**
+   - [ ] Merge IoT protocol schema files into single unified schema
+   - [ ] Merge any other protocol schemas (follow dns.schema.json pattern)
+   - [ ] Update all protocol tests to use merged schemas
+   - **Note:** Protocol schemas now use unified format with `protocol` field
+
 ### Immediate Next Steps (To Reach 80%+ Pass Rate)
 
-1. **Fix Decoder Conditional Logic**
+1. **Implement Field-Referenced Array Decoder Support** ⭐ **HIGH PRIORITY**
+   - [ ] Update TypeScript generator to handle field-referenced arrays
+   - [ ] Decoder needs to access earlier fields in same sequence for array lengths
+   - [ ] Support cross-field references (e.g., payload arrays referencing header counts)
+   - **Estimated Impact:** +2 tests passing (DNS protocol tests)
+   - **Blocker:** DNS protocol tests currently fail because decoder can't find header field values
+
+2. **Fix Decoder Conditional Logic**
    - [ ] Add conditional wrapper in `generateDecodeFieldCore()`
    - [ ] Evaluate condition expressions (start with simple `present == 1`)
    - [ ] Handle undefined fields correctly in decoder
