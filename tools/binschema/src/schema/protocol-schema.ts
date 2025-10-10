@@ -192,11 +192,48 @@ export function validateProtocolSchemaWithTypes(
 
       // Validate discriminator_field exists in header
       if (protocol.discriminator_field) {
-        if (!headerFieldNames.includes(protocol.discriminator_field)) {
-          errors.push({
-            path: "protocol.discriminator_field",
-            message: `Discriminator field '${protocol.discriminator_field}' not found in header type '${protocol.header_format}' (available fields: ${headerFieldNames.join(", ")})`
-          });
+        // Check for bitfield sub-field reference (e.g., "flags.opcode")
+        const dotIndex = protocol.discriminator_field.indexOf('.');
+        if (dotIndex > 0) {
+          const fieldName = protocol.discriminator_field.substring(0, dotIndex);
+          const subFieldName = protocol.discriminator_field.substring(dotIndex + 1);
+
+          if (!headerFieldNames.includes(fieldName)) {
+            errors.push({
+              path: "protocol.discriminator_field",
+              message: `Discriminator field '${fieldName}' not found in header type '${protocol.header_format}' (available fields: ${headerFieldNames.join(", ")})`
+            });
+          } else {
+            const field = headerFields.find((f: any) => f.name === fieldName);
+            if (field.type !== 'bitfield') {
+              errors.push({
+                path: "protocol.discriminator_field",
+                message: `Discriminator field '${fieldName}' is not a bitfield (cannot reference sub-field '${subFieldName}')`
+              });
+            } else if (!field.fields || !Array.isArray(field.fields)) {
+              errors.push({
+                path: "protocol.discriminator_field",
+                message: `Bitfield '${fieldName}' has no fields array`
+              });
+            } else {
+              const bitfieldSubField = field.fields.find((bf: any) => bf.name === subFieldName);
+              if (!bitfieldSubField) {
+                const availableFields = field.fields.map((bf: any) => bf.name).join(', ');
+                errors.push({
+                  path: "protocol.discriminator_field",
+                  message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableFields})`
+                });
+              }
+            }
+          }
+        } else {
+          // Regular field reference (no dot notation)
+          if (!headerFieldNames.includes(protocol.discriminator_field)) {
+            errors.push({
+              path: "protocol.discriminator_field",
+              message: `Discriminator field '${protocol.discriminator_field}' not found in header type '${protocol.header_format}' (available fields: ${headerFieldNames.join(", ")})`
+            });
+          }
         }
       }
     }

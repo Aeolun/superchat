@@ -30,6 +30,13 @@ import { nestedStructTestSuite, deeplyNestedStructTestSuite } from "./tests/comp
 import { optionalUint64TestSuite, optionalWithBitFlagTestSuite, multipleOptionalsTestSuite, optionalStructTestSuite, optionalArrayTestSuite } from "./tests/composite/optional.test.js";
 import { fixedArrayTestSuite, lengthPrefixedArrayTestSuite, lengthPrefixedUint16ArrayTestSuite, nullTerminatedArrayTestSuite } from "./tests/composite/arrays.test.js";
 import { nestedArrays2DTestSuite } from "./tests/composite/nested-arrays.test.js";
+import {
+  simpleFieldReferencedArrayTestSuite,
+  fieldReferencedUint16ArrayTestSuite,
+  multipleFieldReferencedArraysTestSuite,
+  bitfieldSubFieldReferencedArrayTestSuite,
+  fieldReferencedStructArrayTestSuite
+} from "./tests/composite/field-referenced-arrays.test.js";
 import { emptyArraysAllTypesTestSuite, emptyUint16ArrayTestSuite, emptyUint32ArrayTestSuite, emptyUint64ArrayTestSuite, largeArrayLengthTestSuite } from "./tests/composite/arrays-edge-cases.test.js";
 import { fixedArrayOfStructsTestSuite, lengthPrefixedArrayOfStructsTestSuite, nestedArrayOfStructsTestSuite, arrayOfStructsWithOptionalsTestSuite } from "./tests/composite/array-of-structs.test.js";
 import { mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite, nestedStructEndiannessOverrideTestSuite, deeplyNestedEndiannessTestSuite } from "./tests/composite/endianness-overrides.test.js";
@@ -45,6 +52,36 @@ import {
 } from "./tests/composite/first-class-strings.test.js";
 import { conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite, conditionalEqualityTestSuite, conditionalComparisonTestSuite } from "./tests/composite/conditionals.test.js";
 import { nestedFieldConditionalTestSuite, deeplyNestedConditionalTestSuite } from "./tests/composite/nested-conditionals.test.js";
+
+// Protocols
+import {
+  dnsLabelEmptyTestSuite,
+  dnsLabelSingleCharTestSuite,
+  dnsLabelTypicalTestSuite,
+  dnsLabelWithHyphensTestSuite,
+  dnsLabelMaxLengthTestSuite,
+  dnsLabelMixedCaseTestSuite
+} from "./tests/protocols/dns-labels.test.js";
+import {
+  dnsDomainSingleLabelTestSuite,
+  dnsDomainMultiLabelTestSuite,
+  dnsDomainRootTestSuite,
+  dnsDomainSpecialTestSuite
+} from "./tests/protocols/dns-domain-name.test.js";
+import {
+  dnsCompressionFullDomainTestSuite,
+  dnsCompressionPointerTestSuite,
+  dnsCompressionMixedTestSuite,
+  dnsCompressionEdgeCasesTestSuite
+} from "./tests/protocols/dns-compression.test.js";
+import {
+  dnsProtocolQueryTestSuite,
+  dnsProtocolResponseTestSuite
+} from "./tests/protocols/dns-protocol.test.js";
+import {
+  dnsCompleteQueryTestSuite,
+  dnsCompleteResponseTestSuite
+} from "./tests/protocols/dns-complete.test.js";
 
 async function main() {
   // Parse command line arguments
@@ -117,6 +154,10 @@ async function main() {
       suites: [fixedArrayTestSuite, lengthPrefixedArrayTestSuite, lengthPrefixedUint16ArrayTestSuite, nullTerminatedArrayTestSuite, nestedArrays2DTestSuite, emptyArraysAllTypesTestSuite, emptyUint16ArrayTestSuite, emptyUint32ArrayTestSuite, emptyUint64ArrayTestSuite, largeArrayLengthTestSuite],
     },
     {
+      name: "Composite - Field-Referenced Arrays",
+      suites: [simpleFieldReferencedArrayTestSuite, fieldReferencedUint16ArrayTestSuite, multipleFieldReferencedArraysTestSuite, bitfieldSubFieldReferencedArrayTestSuite, fieldReferencedStructArrayTestSuite],
+    },
+    {
       name: "Composite - Arrays of Structs",
       suites: [fixedArrayOfStructsTestSuite, lengthPrefixedArrayOfStructsTestSuite, nestedArrayOfStructsTestSuite, arrayOfStructsWithOptionalsTestSuite],
     },
@@ -143,6 +184,49 @@ async function main() {
     {
       name: "Composite - Conditionals",
       suites: [conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite, conditionalEqualityTestSuite, conditionalComparisonTestSuite, nestedFieldConditionalTestSuite, deeplyNestedConditionalTestSuite],
+    },
+    {
+      name: "Protocols - DNS Labels",
+      suites: [
+        dnsLabelEmptyTestSuite,
+        dnsLabelSingleCharTestSuite,
+        dnsLabelTypicalTestSuite,
+        dnsLabelWithHyphensTestSuite,
+        dnsLabelMaxLengthTestSuite,
+        dnsLabelMixedCaseTestSuite
+      ],
+    },
+    {
+      name: "Protocols - DNS Domain Names",
+      suites: [
+        dnsDomainSingleLabelTestSuite,
+        dnsDomainMultiLabelTestSuite,
+        dnsDomainRootTestSuite,
+        dnsDomainSpecialTestSuite
+      ],
+    },
+    {
+      name: "Protocols - DNS Compression",
+      suites: [
+        dnsCompressionFullDomainTestSuite,
+        dnsCompressionPointerTestSuite,
+        dnsCompressionMixedTestSuite,
+        dnsCompressionEdgeCasesTestSuite
+      ],
+    },
+    {
+      name: "Protocols - DNS Protocol (Full Frame)",
+      suites: [
+        dnsProtocolQueryTestSuite,
+        dnsProtocolResponseTestSuite
+      ],
+    },
+    {
+      name: "Protocols - DNS Complete (RFC 1035)",
+      suites: [
+        dnsCompleteQueryTestSuite,
+        dnsCompleteResponseTestSuite
+      ],
     },
   ];
 

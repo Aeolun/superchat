@@ -1117,10 +1117,13 @@ function generateTypeAliasEncoder(
   globalBitOrder: string
 ): string {
   let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
+  code += `  private compressionDict: Map<string, number> = new Map();\n\n`;
   code += `  constructor() {\n`;
   code += `    super("${globalBitOrder}");\n`;
   code += `  }\n\n`;
   code += `  encode(value: ${typeName}): Uint8Array {\n`;
+  code += `    // Reset compression dictionary for each encode\n`;
+  code += `    this.compressionDict.clear();\n\n`;
 
   // Generate encoding logic for the aliased type
   // Create a pseudo-field with no name to use existing encoding logic
@@ -1156,7 +1159,7 @@ function generateTypeAliasDecoder(
     switch (aliasedType.type) {
       case "array":
         // Use existing array decoding logic
-        code += `    let value: any;\n`;
+        code += `    let value: any = {};\n`;
         code += generateDecodeFieldCoreImpl(
           { ...aliasedType, name: 'result' },
           schema,
@@ -1168,7 +1171,7 @@ function generateTypeAliasDecoder(
         break;
       default:
         // For primitives and type references, decode and return directly
-        code += `    let value: any;\n`;
+        code += `    let value: any = {};\n`;
         code += generateDecodeFieldCoreImpl(
           { ...aliasedType, name: 'result' },
           schema,
@@ -1327,12 +1330,15 @@ function generateEncoder(
 ): string {
   const fields = getTypeFields(typeDef);
   let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
+  code += `  private compressionDict: Map<string, number> = new Map();\n\n`;
   code += `  constructor() {\n`;
   code += `    super("${globalBitOrder}");\n`;
   code += `  }\n\n`;
 
   // Generate encode method
   code += `  encode(value: ${typeName}): Uint8Array {\n`;
+  code += `    // Reset compression dictionary for each encode\n`;
+  code += `    this.compressionDict.clear();\n\n`;
 
   for (const field of fields) {
     code += generateEncodeField(field, schema, globalEndianness, "    ");
@@ -1483,7 +1489,25 @@ function generateEncodeDiscriminatedUnion(
 
     code += `${indent}${ifKeyword} (${valuePath}.type === '${variant.type}') {\n`;
 
-    // Encode the variant value by calling the type's encoder
+    // Track non-pointer variants in compression dictionary
+    const variantTypeDef = schema.types[variant.type];
+    const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+
+    if (!isPointer) {
+      // Check if variant is a primitive type (string, number, etc.) - only track primitives for compression
+      const variantTypeDef = schema.types[variant.type];
+      const isPrimitive = variantTypeDef && isTypeAlias(variantTypeDef) &&
+                         (variantTypeDef as any).type === "string";
+
+      if (isPrimitive) {
+        // Non-pointer primitive variant: Record offset before encoding
+        code += `${indent}  const valueKey = JSON.stringify(${valuePath}.value);\n`;
+        code += `${indent}  const currentOffset = this.byteOffset;\n`;
+        code += `${indent}  this.compressionDict.set(valueKey, currentOffset);\n`;
+      }
+    }
+
+    // Encode the variant value (pointers handle their own compression via generateEncodePointer)
     code += generateEncodeTypeReference(variant.type, schema, `${valuePath}.value`, indent + "  ");
 
     code += `${indent}}`;
@@ -1501,7 +1525,11 @@ function generateEncodeDiscriminatedUnion(
 }
 
 /**
- * Generate encoding for pointer
+ * Generate encoding for pointer with compression support
+ *
+ * Pointers use compression by default:
+ * - If value exists in compressionDict → encode as pointer bytes (0xC000 | offset)
+ * - If not found → record current offset, encode target value, add to dictionary
  */
 function generateEncodePointer(
   field: any,
@@ -1510,9 +1538,42 @@ function generateEncodePointer(
   valuePath: string,
   indent: string
 ): string {
-  // Pointer encoding: just encode the target value directly
-  // The pointer itself is transparent at the encoding level
-  return generateEncodeTypeReference(field.target_type, schema, valuePath, indent);
+  const storage = field.storage || "uint16"; // uint8, uint16, uint32
+  const offsetMask = field.offset_mask || "0x3FFF"; // Default mask for 14-bit offset
+  const targetType = field.target_type;
+  const endianness = field.endianness || globalEndianness;
+
+  let code = "";
+
+  // Serialize value for dictionary key (use JSON.stringify for structural equality)
+  code += `${indent}const valueKey = JSON.stringify(${valuePath});\n`;
+  code += `${indent}const existingOffset = this.compressionDict.get(valueKey);\n\n`;
+
+  // If found in dictionary, encode as pointer
+  code += `${indent}if (existingOffset !== undefined) {\n`;
+  code += `${indent}  // Encode pointer: set top bits (0xC0 for uint16) and mask offset\n`;
+
+  if (storage === "uint8") {
+    code += `${indent}  const pointerValue = 0xC0 | (existingOffset & ${offsetMask});\n`;
+    code += `${indent}  this.writeUint8(pointerValue);\n`;
+  } else if (storage === "uint16") {
+    code += `${indent}  const pointerValue = 0xC000 | (existingOffset & ${offsetMask});\n`;
+    code += `${indent}  this.writeUint16(pointerValue, "${endianness}");\n`;
+  } else if (storage === "uint32") {
+    code += `${indent}  const pointerValue = 0xC0000000 | (existingOffset & ${offsetMask});\n`;
+    code += `${indent}  this.writeUint32(pointerValue, "${endianness}");\n`;
+  }
+
+  code += `${indent}} else {\n`;
+
+  // Otherwise, record offset and encode target value
+  code += `${indent}  // First occurrence - record offset and encode target value\n`;
+  code += `${indent}  const currentOffset = this.byteOffset;\n`;
+  code += `${indent}  this.compressionDict.set(valueKey, currentOffset);\n`;
+  code += generateEncodeTypeReference(targetType, schema, valuePath, indent + "  ");
+  code += `${indent}}\n`;
+
+  return code;
 }
 
 /**
@@ -1545,6 +1606,7 @@ function generateEncodeArray(
         break;
     }
   }
+  // Note: field_referenced arrays don't write their own length - the length field was already written earlier
 
   // Safety check for items field
   if (!field.items || typeof field.items !== 'object' || !('type' in field.items)) {
@@ -1562,9 +1624,19 @@ function generateEncodeArray(
     itemVar,
     indent + "  "
   );
+
+  // Check if this is a terminal variant (for null_terminated arrays with discriminated unions)
+  if (field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants)) {
+    code += `${indent}  // Check if item is a terminal variant\n`;
+    const conditions = field.terminal_variants.map((v: string) => `${itemVar}.type === '${v}'`).join(' || ');
+    code += `${indent}  if (${conditions}) {\n`;
+    code += `${indent}    return this.finish();\n`;
+    code += `${indent}  }\n`;
+  }
+
   code += `${indent}}\n`;
 
-  // Write null terminator if null_terminated
+  // Write null terminator if null_terminated (only if no terminal variant was encountered)
   if (field.kind === "null_terminated") {
     code += `${indent}this.writeUint8(0);\n`;
   }
@@ -1893,7 +1965,21 @@ function generateDecodeDiscriminatedUnion(
         const ifKeyword = i === 0 ? "if" : "else if";
 
         code += `${indent}${ifKeyword} (${condition}) {\n`;
-        code += `${indent}  const value = decode${variant.type}(this);\n`;
+        // Check if variant type is a pointer - pointers need full bytes to seek backwards
+        const variantTypeDef = schema.types[variant.type];
+        const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+        if (isPointer) {
+          // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes);\n`;
+          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
+          code += `${indent}  const value = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
+        } else {
+          // Non-pointer variant: pass sliced bytes (standard pattern)
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset));\n`;
+          code += `${indent}  const value = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
+        }
         code += `${indent}  ${target} = { type: '${variant.type}', value };\n`;
         code += `${indent}}`;
         if (i < variants.length - 1) {
@@ -1902,7 +1988,21 @@ function generateDecodeDiscriminatedUnion(
       } else {
         // Fallback variant (no 'when' condition)
         code += ` else {\n`;
-        code += `${indent}  const value = decode${variant.type}(this);\n`;
+        // Check if variant type is a pointer - pointers need full bytes to seek backwards
+        const variantTypeDef = schema.types[variant.type];
+        const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+        if (isPointer) {
+          // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes);\n`;
+          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
+          code += `${indent}  const value = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
+        } else {
+          // Non-pointer variant: pass sliced bytes (standard pattern)
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset));\n`;
+          code += `${indent}  const value = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
+        }
         code += `${indent}  ${target} = { type: '${variant.type}', value };\n`;
         code += `${indent}}\n`;
         return code;
@@ -1918,17 +2018,37 @@ function generateDecodeDiscriminatedUnion(
     // Field-based discriminator (SuperChat pattern)
     const discriminatorField = discriminator.field;
 
+    // Determine the base object for discriminator field reference
+    // If target contains a dot (e.g., "answers_item.rdata"), extract base object name
+    // Otherwise use "value" for top-level fields
+    const baseObject = target.includes(".") ? target.split(".")[0] : "value";
+    const discriminatorRef = `${baseObject}.${discriminatorField}`;
+
     // Generate if-else chain for each variant using previously read field
     for (let i = 0; i < variants.length; i++) {
       const variant = variants[i];
 
       if (variant.when) {
         // Convert condition to TypeScript (replace 'value' with field reference)
-        const condition = variant.when.replace(/\bvalue\b/g, discriminatorField);
+        const condition = variant.when.replace(/\bvalue\b/g, discriminatorRef);
         const ifKeyword = i === 0 ? "if" : "else if";
 
         code += `${indent}${ifKeyword} (${condition}) {\n`;
-        code += `${indent}  const payload = decode${variant.type}(this);\n`;
+        // Check if variant type is a pointer - pointers need full bytes to seek backwards
+        const variantTypeDef = schema.types[variant.type];
+        const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+        if (isPointer) {
+          // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes);\n`;
+          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
+          code += `${indent}  const payload = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
+        } else {
+          // Non-pointer variant: pass sliced bytes (standard pattern)
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset));\n`;
+          code += `${indent}  const payload = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
+        }
         code += `${indent}  ${target} = { type: '${variant.type}', value: payload };\n`;
         code += `${indent}}`;
         if (i < variants.length - 1) {
@@ -1937,7 +2057,21 @@ function generateDecodeDiscriminatedUnion(
       } else {
         // Fallback variant
         code += ` else {\n`;
-        code += `${indent}  const payload = decode${variant.type}(this);\n`;
+        // Check if variant type is a pointer - pointers need full bytes to seek backwards
+        const variantTypeDef = schema.types[variant.type];
+        const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+        if (isPointer) {
+          // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes);\n`;
+          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
+          code += `${indent}  const payload = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
+        } else {
+          // Non-pointer variant: pass sliced bytes (standard pattern)
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset));\n`;
+          code += `${indent}  const payload = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
+        }
         code += `${indent}  ${target} = { type: '${variant.type}', value: payload };\n`;
         code += `${indent}}\n`;
         return code;
@@ -1946,7 +2080,7 @@ function generateDecodeDiscriminatedUnion(
 
     // No fallback - throw error for unknown discriminator
     code += ` else {\n`;
-    code += `${indent}  throw new Error(\`Unknown discriminator value: \${${discriminatorField}}\`);\n`;
+    code += `${indent}  throw new Error(\`Unknown discriminator value: \${${discriminatorRef}}\`);\n`;
     code += `${indent}}\n`;
   }
 
@@ -1969,7 +2103,7 @@ function generateDecodePointer(
   const offsetFrom = field.offset_from; // "message_start" or "current_position"
   const targetType = field.target_type;
   const endianness = field.endianness || globalEndianness;
-  const endiannessArg = storage !== "uint8" ? `, '${endianness}'` : "";
+  const endiannessArg = storage !== "uint8" ? `'${endianness}'` : "";
 
   let code = "";
 
@@ -1979,7 +2113,11 @@ function generateDecodePointer(
   code += `${indent}}\n\n`;
 
   // Read pointer storage value
-  code += `${indent}const pointerValue = this.read${capitalize(storage)}(${endiannessArg});\n`;
+  if (storage === "uint8") {
+    code += `${indent}const pointerValue = this.read${capitalize(storage)}();\n`;
+  } else {
+    code += `${indent}const pointerValue = this.read${capitalize(storage)}(${endiannessArg});\n`;
+  }
 
   // Extract offset using mask
   code += `${indent}const offset = pointerValue & ${offsetMask};\n\n`;
@@ -2001,8 +2139,9 @@ function generateDecodePointer(
     code += `${indent}this.seek(offset);\n`;
   }
 
-  // Decode target type
-  code += `${indent}${target} = decode${targetType}(this);\n\n`;
+  // Decode target type inline (we're already positioned at the target)
+  // Pass fieldName (not target path) since generateDecodeTypeReference will add "value." prefix
+  code += generateDecodeTypeReference(targetType, schema, fieldName, indent);
 
   // Restore position
   code += `${indent}this.popPosition();\n\n`;
@@ -2065,20 +2204,47 @@ function generateDecodeArray(
     code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
   } else if (field.kind === "fixed") {
     code += `${indent}for (let i = 0; i < ${field.length}; i++) {\n`;
+  } else if (field.kind === "field_referenced") {
+    // Length comes from a previously-decoded field
+    const lengthField = field.length_field;
+    // Support dot notation for bitfield sub-fields (e.g., "flags.count")
+    const lengthRef = `value.${lengthField}`;
+    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
+    code += `${indent}const ${lengthVarName} = ${lengthRef};\n`;
+    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
   } else if (field.kind === "null_terminated") {
-    // Read until null byte
-    code += `${indent}while (true) {\n`;
-    code += `${indent}  const byte = this.readUint8();\n`;
-    code += `${indent}  if (byte === 0) break;\n`;
-    code += `${indent}  ${target}.push(byte);\n`;
-    code += `${indent}}\n`;
-    return code;
+    // For null-terminated arrays, we need to peek ahead to check for null terminator
+    // If item type is uint8, we can optimize by reading bytes directly
+    const itemType = field.items?.type;
+
+    if (itemType === "uint8") {
+      // Optimized path for byte arrays
+      code += `${indent}while (true) {\n`;
+      code += `${indent}  const byte = this.readUint8();\n`;
+      code += `${indent}  if (byte === 0) break;\n`;
+      code += `${indent}  ${target}.push(byte);\n`;
+      code += `${indent}}\n`;
+      return code;
+    } else {
+      // For complex types, peek at the first byte to check for null terminator
+      // This assumes the first byte of the item can distinguish null terminator
+      code += `${indent}while (true) {\n`;
+      code += `${indent}  const firstByte = this.readUint8();\n`;
+      code += `${indent}  if (firstByte === 0) break;\n`;
+      code += `${indent}  // Rewind one byte since we peeked ahead\n`;
+      code += `${indent}  this.byteOffset--;\n`;
+      // Fall through to normal item decoding below
+    }
   }
 
   // Safety check for items field
   if (!field.items || typeof field.items !== 'object' || !('type' in field.items)) {
     code += `${indent}  // ERROR: Array items undefined\n`;
-    code += `${indent}}\n`;
+    if (field.kind === "null_terminated") {
+      code += `${indent}}\n`;
+    } else {
+      code += `${indent}}\n`;
+    }
     return code;
   }
 
@@ -2098,6 +2264,15 @@ function generateDecodeArray(
     code += `${indent}  let ${itemVar}: any;\n`;
     code += itemDecodeCode;
     code += `${indent}  ${target}.push(${itemVar});\n`;
+
+    // Check if this is a terminal variant (for null_terminated arrays with discriminated unions)
+    if (field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants)) {
+      code += `${indent}  // Check if item is a terminal variant\n`;
+      const conditions = field.terminal_variants.map((v: string) => `${itemVar}.type === '${v}'`).join(' || ');
+      code += `${indent}  if (${conditions}) {\n`;
+      code += `${indent}    break;\n`;
+      code += `${indent}  }\n`;
+    }
   }
 
   code += `${indent}}\n`;

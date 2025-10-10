@@ -193,18 +193,64 @@ function validateDiscriminatedUnion(
   // Validate field-based discriminator
   if (hasField && parentFields) {
     const fieldIndex = parentFields.findIndex((f: any) => f.name === field.name);
-    const referencedFieldIndex = parentFields.findIndex((f: any) => f.name === disc.field);
 
-    if (referencedFieldIndex === -1) {
-      errors.push({
-        path: `${path} (${field.name})`,
-        message: `Discriminator field '${disc.field}' not found in parent struct`
-      });
-    } else if (referencedFieldIndex >= fieldIndex) {
-      errors.push({
-        path: `${path} (${field.name})`,
-        message: `Discriminator field '${disc.field}' comes after this union (forward reference not allowed)`
-      });
+    // Check if this is a bitfield sub-field reference (e.g., "flags.opcode")
+    const dotIndex = disc.field.indexOf('.');
+    if (dotIndex > 0) {
+      const fieldName = disc.field.substring(0, dotIndex);
+      const subFieldName = disc.field.substring(dotIndex + 1);
+
+      const referencedFieldIndex = parentFields.findIndex((f: any) => f.name === fieldName);
+
+      if (referencedFieldIndex === -1) {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `Discriminator field '${fieldName}' not found in parent struct`
+        });
+      } else if (referencedFieldIndex >= fieldIndex) {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `Discriminator field '${fieldName}' comes after this union (forward reference not allowed)`
+        });
+      } else {
+        // Verify the field is a bitfield and the sub-field exists
+        const referencedField = parentFields[referencedFieldIndex] as any;
+        if (referencedField.type !== 'bitfield') {
+          errors.push({
+            path: `${path} (${field.name})`,
+            message: `Discriminator field '${fieldName}' is not a bitfield (cannot reference sub-field '${subFieldName}')`
+          });
+        } else if (!referencedField.fields || !Array.isArray(referencedField.fields)) {
+          errors.push({
+            path: `${path} (${field.name})`,
+            message: `Bitfield '${fieldName}' has no fields array`
+          });
+        } else {
+          const bitfieldSubField = referencedField.fields.find((bf: any) => bf.name === subFieldName);
+          if (!bitfieldSubField) {
+            const availableFields = referencedField.fields.map((bf: any) => bf.name).join(', ');
+            errors.push({
+              path: `${path} (${field.name})`,
+              message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableFields})`
+            });
+          }
+        }
+      }
+    } else {
+      // Regular field reference (no dot notation)
+      const referencedFieldIndex = parentFields.findIndex((f: any) => f.name === disc.field);
+
+      if (referencedFieldIndex === -1) {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `Discriminator field '${disc.field}' not found in parent struct`
+        });
+      } else if (referencedFieldIndex >= fieldIndex) {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `Discriminator field '${disc.field}' comes after this union (forward reference not allowed)`
+        });
+      }
     }
   }
 
@@ -404,9 +450,82 @@ function validateField(
     } else if (!("kind" in field)) {
       errors.push({
         path: `${path} (${field.name || "array"})`,
-        message: "Array field missing 'kind' property (fixed|length_prefixed|null_terminated)",
+        message: "Array field missing 'kind' property (fixed|length_prefixed|null_terminated|field_referenced)",
       });
     } else {
+      // Validate field_referenced arrays
+      if ((field as any).kind === "field_referenced") {
+        if (!("length_field" in field) || !(field as any).length_field) {
+          errors.push({
+            path: `${path} (${field.name || "array"})`,
+            message: "field_referenced array missing 'length_field' property",
+          });
+        } else if (parentFields) {
+          // Validate that length_field references an earlier field
+          const lengthFieldRef = (field as any).length_field;
+          const fieldIndex = parentFields.findIndex((f: any) => f.name === field.name);
+
+          // Check for bitfield sub-field reference (e.g., "flags.opcode")
+          const dotIndex = lengthFieldRef.indexOf('.');
+          if (dotIndex > 0) {
+            const fieldName = lengthFieldRef.substring(0, dotIndex);
+            const subFieldName = lengthFieldRef.substring(dotIndex + 1);
+
+            const referencedFieldIndex = parentFields.findIndex((f: any) => f.name === fieldName);
+
+            if (referencedFieldIndex === -1) {
+              errors.push({
+                path: `${path} (${field.name})`,
+                message: `length_field '${fieldName}' not found in parent struct`,
+              });
+            } else if (referencedFieldIndex >= fieldIndex) {
+              errors.push({
+                path: `${path} (${field.name})`,
+                message: `length_field '${fieldName}' comes after this array (forward reference not allowed)`,
+              });
+            } else {
+              // Verify the field is a bitfield and the sub-field exists
+              const referencedField = parentFields[referencedFieldIndex] as any;
+              if (referencedField.type !== 'bitfield') {
+                errors.push({
+                  path: `${path} (${field.name})`,
+                  message: `length_field '${fieldName}' is not a bitfield (cannot reference sub-field '${subFieldName}')`,
+                });
+              } else if (!referencedField.fields || !Array.isArray(referencedField.fields)) {
+                errors.push({
+                  path: `${path} (${field.name})`,
+                  message: `Bitfield '${fieldName}' has no fields array`,
+                });
+              } else {
+                const bitfieldSubField = referencedField.fields.find((bf: any) => bf.name === subFieldName);
+                if (!bitfieldSubField) {
+                  const availableFields = referencedField.fields.map((bf: any) => bf.name).join(', ');
+                  errors.push({
+                    path: `${path} (${field.name})`,
+                    message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableFields})`,
+                  });
+                }
+              }
+            }
+          } else {
+            // Regular field reference (no dot notation)
+            const referencedFieldIndex = parentFields.findIndex((f: any) => f.name === lengthFieldRef);
+
+            if (referencedFieldIndex === -1) {
+              errors.push({
+                path: `${path} (${field.name})`,
+                message: `length_field '${lengthFieldRef}' not found in parent struct`,
+              });
+            } else if (referencedFieldIndex >= fieldIndex) {
+              errors.push({
+                path: `${path} (${field.name})`,
+                message: `length_field '${lengthFieldRef}' comes after this array (forward reference not allowed)`,
+              });
+            }
+          }
+        }
+      }
+
       // Recursively validate items (as element type, which doesn't require 'name')
       validateElementType(field.items as any, `${path}.items`, schema, errors);
     }

@@ -15,8 +15,8 @@ export const stringTestSuite = defineTestSuite({
       endianness: "big_endian",
     },
     types: {
-      // Define "string" as a custom type (not built-in)
-      "string": {
+      // Define "String" as a custom type for length-prefixed UTF-8 bytes
+      "String": {
         sequence: [
           {
             name: "data",
@@ -29,7 +29,7 @@ export const stringTestSuite = defineTestSuite({
       },
       "StringValue": {
         sequence: [
-          { name: "text", type: "string" }
+          { name: "text", type: "String" }
         ]
       }
     }

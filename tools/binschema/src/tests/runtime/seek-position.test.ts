@@ -20,20 +20,23 @@ function testPositionGetter() {
 
   // Read 1 byte
   decoder.readUint8();
-  if (decoder.position !== 1) {
-    throw new Error(`After readUint8: got ${decoder.position}, expected 1`);
+  const pos1: number = decoder.position;
+  if (pos1 !== 1) {
+    throw new Error(`After readUint8: got ${pos1}, expected 1`);
   }
 
   // Read 2 bytes (uint16)
   decoder.readUint16("big_endian");
-  if (decoder.position !== 3) {
-    throw new Error(`After readUint16: got ${decoder.position}, expected 3`);
+  const pos3: number = decoder.position;
+  if (pos3 !== 3) {
+    throw new Error(`After readUint16: got ${pos3}, expected 3`);
   }
 
   // Read 1 more byte
   decoder.readUint8();
-  if (decoder.position !== 4) {
-    throw new Error(`After second readUint8: got ${decoder.position}, expected 4`);
+  const pos4: number = decoder.position;
+  if (pos4 !== 4) {
+    throw new Error(`After second readUint8: got ${pos4}, expected 4`);
   }
 
   console.log("✓ Position getter tracks byte offset correctly");
@@ -61,8 +64,9 @@ function testSeekToValidOffset() {
 
   // Seek backwards
   decoder.seek(1);
-  if (decoder.position !== 1) {
-    throw new Error(`After seek(1): position is ${decoder.position}, expected 1`);
+  const pos1Back: number = decoder.position;
+  if (pos1Back !== 1) {
+    throw new Error(`After seek(1): position is ${pos1Back}, expected 1`);
   }
 
   const value2 = decoder.readUint8();
@@ -72,8 +76,9 @@ function testSeekToValidOffset() {
 
   // Seek to beginning
   decoder.seek(0);
-  if (decoder.position !== 0) {
-    throw new Error(`After seek(0): position is ${decoder.position}, expected 0`);
+  const pos0: number = decoder.position;
+  if (pos0 !== 0) {
+    throw new Error(`After seek(0): position is ${pos0}, expected 0`);
   }
 
   const value3 = decoder.readUint8();
@@ -83,8 +88,9 @@ function testSeekToValidOffset() {
 
   // Seek to end (valid - allows peeking/checking if at end)
   decoder.seek(8);
-  if (decoder.position !== 8) {
-    throw new Error(`After seek(8): position is ${decoder.position}, expected 8`);
+  const pos8: number = decoder.position;
+  if (pos8 !== 8) {
+    throw new Error(`After seek(8): position is ${pos8}, expected 8`);
   }
 
   console.log("✓ Seek to valid offsets works correctly");
@@ -231,9 +237,10 @@ function testPushPopPositionNested() {
 
   // Pop to position 4
   decoder.popPosition();
-  if (decoder.position !== 4) {
+  const pos4: number = decoder.position;
+  if (pos4 !== 4) {
     throw new Error(
-      `After first pop: position is ${decoder.position}, expected 4`
+      `After first pop: position is ${pos4}, expected 4`
     );
   }
 
@@ -479,8 +486,9 @@ function testPositionWithBitOffset() {
   const decoder = new BitStreamDecoder(new Uint8Array([0xFF, 0xAA, 0xBB]));
 
   // Initially at byte 0, bit 0
-  if (decoder.position !== 0) {
-    throw new Error(`Initial position: got ${decoder.position}, expected 0`);
+  const initialPos: number = decoder.position;
+  if (initialPos !== 0) {
+    throw new Error(`Initial position: got ${initialPos}, expected 0`);
   }
 
   // Read 3 bits (still in byte 0, bit offset = 3)
@@ -502,8 +510,9 @@ function testPositionWithBitOffset() {
   }
 
   // Position should now be 1
-  if (decoder.position !== 1) {
-    throw new Error(`Position after 8 bits: got ${decoder.position}, expected 1`);
+  const pos1After8Bits: number = decoder.position;
+  if (pos1After8Bits !== 1) {
+    throw new Error(`Position after 8 bits: got ${pos1After8Bits}, expected 1`);
   }
 
   console.log("✓ Position getter returns byte offset (ignores bit offset)");

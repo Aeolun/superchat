@@ -143,6 +143,7 @@ const ArrayKindSchema = z.enum([
   "fixed",           // Fixed size array
   "length_prefixed", // Length prefix, then elements
   "null_terminated", // Elements until null/zero terminator
+  "field_referenced", // Length comes from a field decoded earlier
 ]);
 export type ArrayKind = z.infer<typeof ArrayKindSchema>;
 
@@ -292,18 +293,20 @@ const ArrayElementSchema = z.object({
   },
   length: z.number().int().min(1).optional(),
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(),
-  length_field: z.string().optional(), // Optional: name to display for the length field
+  length_field: z.string().optional(), // For field_referenced: field name to read length from (supports dot notation)
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
+  terminal_variants: z.array(z.string()).optional(), // Optional: variant types that terminate the array (no null terminator after)
   description: z.string().optional(),
 }).refine(
   (data) => {
     if (data.kind === "fixed") return data.length !== undefined;
     if (data.kind === "length_prefixed") return data.length_type !== undefined;
+    if (data.kind === "field_referenced") return data.length_field !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', field_referenced arrays require 'length_field'",
   }
 );
 
@@ -369,18 +372,20 @@ const ArrayFieldSchema = z.object({
   },
   length: z.number().int().min(1).optional(), // For fixed arrays
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
-  length_field: z.string().optional(), // Optional: name to display for the length field
+  length_field: z.string().optional(), // For field_referenced: field name to read length from (supports dot notation like "flags.opcode")
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
+  terminal_variants: z.array(z.string()).optional(), // Optional: variant types that terminate the array (no null terminator after)
   description: z.string().optional(),
 }).refine(
   (data) => {
     if (data.kind === "fixed") return data.length !== undefined;
     if (data.kind === "length_prefixed") return data.length_type !== undefined;
+    if (data.kind === "field_referenced") return data.length_field !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', field_referenced arrays require 'length_field'",
   }
 );
 
@@ -566,12 +571,139 @@ export type TypeDef = z.infer<typeof TypeDefSchema>;
 // ============================================================================
 
 /**
+ * Helper function to get variants from a discriminated union type
+ */
+function getDiscriminatedUnionVariants(typeDef: any): string[] {
+  if (typeDef && typeDef.type === "discriminated_union" && typeDef.variants) {
+    return typeDef.variants.map((v: any) => v.type);
+  }
+  return [];
+}
+
+/**
+ * Helper function to validate terminal_variants references
+ */
+function validateTerminalVariants(schema: any): { valid: boolean; error?: string } {
+  // Walk through all types and find arrays with terminal_variants
+  for (const [typeName, typeDef] of Object.entries(schema.types)) {
+    // Check if this is an array type (either top-level or nested in sequence/fields)
+    const checkArray = (arrayDef: any, path: string) => {
+      if (!arrayDef || arrayDef.type !== "array" || !arrayDef.terminal_variants) {
+        return { valid: true };
+      }
+
+      // terminal_variants only makes sense for null_terminated arrays
+      if (arrayDef.kind !== "null_terminated") {
+        return {
+          valid: false,
+          error: `${path}: terminal_variants can only be used with null_terminated arrays (current kind: ${arrayDef.kind})`
+        };
+      }
+
+      // Get the items type
+      const itemsType = arrayDef.items;
+      if (!itemsType) {
+        return {
+          valid: false,
+          error: `${path}: Array has terminal_variants but no items type defined`
+        };
+      }
+
+      // If items is a type reference (string), resolve it
+      let itemsTypeDef = itemsType;
+      if (typeof itemsType === "string" || (itemsType.type && typeof itemsType.type === "string" && !["array", "discriminated_union", "pointer"].includes(itemsType.type))) {
+        const refTypeName = typeof itemsType === "string" ? itemsType : itemsType.type;
+        itemsTypeDef = schema.types[refTypeName];
+        if (!itemsTypeDef) {
+          return {
+            valid: false,
+            error: `${path}: Array items type '${refTypeName}' not found in schema`
+          };
+        }
+      }
+
+      // Items must be a discriminated union to have variants
+      if (itemsTypeDef.type !== "discriminated_union") {
+        return {
+          valid: false,
+          error: `${path}: terminal_variants requires items to be a discriminated_union (current type: ${itemsTypeDef.type || "type reference"})`
+        };
+      }
+
+      // Get available variant types
+      const availableVariants = getDiscriminatedUnionVariants(itemsTypeDef);
+      if (availableVariants.length === 0) {
+        return {
+          valid: false,
+          error: `${path}: Items discriminated union has no variants defined`
+        };
+      }
+
+      // Check each terminal_variant is actually a valid variant type
+      for (const terminalVariant of arrayDef.terminal_variants) {
+        if (!availableVariants.includes(terminalVariant)) {
+          return {
+            valid: false,
+            error: `${path}: terminal_variant '${terminalVariant}' is not a valid variant of items type (available variants: ${availableVariants.join(", ")})`
+          };
+        }
+      }
+
+      return { valid: true };
+    };
+
+    // Check if typeDef is itself an array
+    const result = checkArray(typeDef, `Type '${typeName}'`);
+    if (!result.valid) {
+      return result;
+    }
+
+    // Check fields/sequence for array fields
+    const fields = (typeDef as any).sequence || (typeDef as any).fields;
+    if (Array.isArray(fields)) {
+      for (const field of fields) {
+        if (field.type === "array") {
+          const result = checkArray(field, `Type '${typeName}', field '${field.name}'`);
+          if (!result.valid) {
+            return result;
+          }
+        }
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
+/**
  * Complete binary schema definition
  */
 export const BinarySchemaSchema = z.object({
   config: ConfigSchema,
   types: z.record(z.string(), TypeDefSchema), // Map of type name → definition
-});
+}).refine(
+  (schema) => {
+    // Validate all user-defined type names start with uppercase letter
+    for (const typeName of Object.keys(schema.types)) {
+      if (!/^[A-Z]/.test(typeName)) {
+        return false;
+      }
+    }
+    return true;
+  },
+  {
+    message: "User-defined types must start with an uppercase letter (e.g., 'String', 'MyType'). This prevents conflicts with built-in types like 'string', 'uint8', 'array', etc.",
+  }
+).refine(
+  (schema) => {
+    // Validate terminal_variants references
+    const result = validateTerminalVariants(schema);
+    return result.valid;
+  },
+  {
+    message: "Invalid terminal_variants configuration (check terminal_variant references)"
+  }
+);
 export type BinarySchema = z.infer<typeof BinarySchemaSchema>;
 
 /**

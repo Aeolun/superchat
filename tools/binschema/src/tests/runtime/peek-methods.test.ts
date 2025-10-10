@@ -213,10 +213,11 @@ function testPeekDoesNotAdvancePosition() {
     }
 
     // Position should now be advanced
-    const expectedPosition = tc.peekMethod === "peekUint8" ? 1 : tc.peekMethod === "peekUint16" ? 2 : 4;
-    if (decoder.position !== expectedPosition) {
+    const expectedPosition: number = tc.peekMethod === "peekUint8" ? 1 : tc.peekMethod === "peekUint16" ? 2 : 4;
+    const actualPosition: number = decoder.position;
+    if (actualPosition !== expectedPosition) {
       throw new Error(
-        `${tc.description}: position is ${decoder.position}, expected ${expectedPosition} after read`
+        `${tc.description}: position is ${actualPosition}, expected ${expectedPosition} after read`
       );
     }
   }
@@ -608,8 +609,9 @@ function testPeekThenSeekIntegration() {
   }
 
   // Now at position 2
-  if (decoder.position !== 2) {
-    throw new Error(`Position after reading pointer: got ${decoder.position}, expected 2`);
+  const currentPosition: number = decoder.position;
+  if (currentPosition !== 2) {
+    throw new Error(`Position after reading pointer: got ${currentPosition}, expected 2`);
   }
 
   // Save position before following pointer
@@ -617,8 +619,9 @@ function testPeekThenSeekIntegration() {
 
   // Seek to offset
   decoder.seek(offset);
-  if (decoder.position !== 12) {
-    throw new Error(`Position after seek: got ${decoder.position}, expected 12`);
+  const posAfterSeek: number = decoder.position;
+  if (posAfterSeek !== 12) {
+    throw new Error(`Position after seek: got ${posAfterSeek}, expected 12`);
   }
 
   // Read data at offset
@@ -629,8 +632,9 @@ function testPeekThenSeekIntegration() {
 
   // Restore position
   decoder.popPosition();
-  if (decoder.position !== 2) {
-    throw new Error(`Position after popPosition: got ${decoder.position}, expected 2`);
+  const posAfterPop: number = decoder.position;
+  if (posAfterPop !== 2) {
+    throw new Error(`Position after popPosition: got ${posAfterPop}, expected 2`);
   }
 
   console.log("✓ Peek → seek integration works correctly (DNS compression pattern)");

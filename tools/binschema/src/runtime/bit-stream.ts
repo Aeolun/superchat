@@ -216,6 +216,14 @@ export class BitStreamEncoder {
   }
 
   /**
+   * Get current byte offset (position in buffer)
+   * Returns the number of complete bytes written (for compression dictionary tracking)
+   */
+  get byteOffset(): number {
+    return this.bytes.length;
+  }
+
+  /**
    * Get encoded bytes
    * Flushes any partial byte (pads with zeros)
    */
