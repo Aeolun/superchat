@@ -13,6 +13,8 @@ client.lcov
 superchat-server
 superchat
 superchat-client
+client
+server
 *.exe
 *.dll
 *.so
