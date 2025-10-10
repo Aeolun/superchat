@@ -808,7 +808,18 @@ export function runProtocolTransformationTests() {
         ? { combinedTypeName: tc.expectedOutput.combinedTypeName }
         : undefined;
 
-      const result = transformProtocolToBinary(tc.protocolSchema, tc.binarySchema, options);
+      // Merge protocol schema and binary schema into unified schema
+      // Map old field names to new ones for backward compatibility with tests
+      const protocol = tc.protocolSchema.protocol;
+      const unifiedSchema: BinarySchema = {
+        ...tc.binarySchema,
+        protocol: {
+          ...protocol,
+          header: (protocol as any).header_format || (protocol as any).header,
+          discriminator: (protocol as any).discriminator_field || (protocol as any).discriminator
+        }
+      };
+      const result = transformProtocolToBinary(unifiedSchema, options);
 
       if (!tc.shouldSucceed) {
         // Expected failure, but got success

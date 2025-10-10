@@ -1787,7 +1787,7 @@ function generateDecoder(
 ): string {
   const fields = getTypeFields(typeDef);
   let code = `export class ${typeName}Decoder extends BitStreamDecoder {\n`;
-  code += `  constructor(bytes: Uint8Array | number[]) {\n`;
+  code += `  constructor(bytes: Uint8Array | number[], private context?: any) {\n`;
   code += `    super(bytes, "${globalBitOrder}");\n`;
   code += `  }\n\n`;
   code += `  decode(): ${typeName} {\n`;
@@ -1968,19 +1968,21 @@ function generateDecodeDiscriminatedUnion(
         // Check if variant type is a pointer - pointers need full bytes to seek backwards
         const variantTypeDef = schema.types[variant.type];
         const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+        // Determine the base object for context (usually "value" for top-level, or extract from target)
+        const baseObject = target.includes(".") ? target.split(".")[0] : "value";
         if (isPointer) {
           // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes);\n`;
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
-          code += `${indent}  const value = decoder.decode();\n`;
+          code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
           // Non-pointer variant: pass sliced bytes (standard pattern)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset));\n`;
-          code += `${indent}  const value = decoder.decode();\n`;
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
+          code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
         }
-        code += `${indent}  ${target} = { type: '${variant.type}', value };\n`;
+        code += `${indent}  ${target} = { type: '${variant.type}', value: decodedValue };\n`;
         code += `${indent}}`;
         if (i < variants.length - 1) {
           code += "\n";
@@ -1991,19 +1993,21 @@ function generateDecodeDiscriminatedUnion(
         // Check if variant type is a pointer - pointers need full bytes to seek backwards
         const variantTypeDef = schema.types[variant.type];
         const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+        // Determine the base object for context (usually "value" for top-level, or extract from target)
+        const baseObject = target.includes(".") ? target.split(".")[0] : "value";
         if (isPointer) {
           // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes);\n`;
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
-          code += `${indent}  const value = decoder.decode();\n`;
+          code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
           // Non-pointer variant: pass sliced bytes (standard pattern)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset));\n`;
-          code += `${indent}  const value = decoder.decode();\n`;
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
+          code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
         }
-        code += `${indent}  ${target} = { type: '${variant.type}', value };\n`;
+        code += `${indent}  ${target} = { type: '${variant.type}', value: decodedValue };\n`;
         code += `${indent}}\n`;
         return code;
       }
@@ -2034,18 +2038,20 @@ function generateDecodeDiscriminatedUnion(
         const ifKeyword = i === 0 ? "if" : "else if";
 
         code += `${indent}${ifKeyword} (${condition}) {\n`;
+        // Determine base object for context
+        const baseObject = target.includes(".") ? target.split(".")[0] : "value";
         // Check if variant type is a pointer - pointers need full bytes to seek backwards
         const variantTypeDef = schema.types[variant.type];
         const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
         if (isPointer) {
           // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes);\n`;
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
           code += `${indent}  const payload = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
           // Non-pointer variant: pass sliced bytes (standard pattern)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset));\n`;
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
           code += `${indent}  const payload = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
         }
@@ -2057,18 +2063,20 @@ function generateDecodeDiscriminatedUnion(
       } else {
         // Fallback variant
         code += ` else {\n`;
+        // Determine base object for context
+        const baseObject = target.includes(".") ? target.split(".")[0] : "value";
         // Check if variant type is a pointer - pointers need full bytes to seek backwards
         const variantTypeDef = schema.types[variant.type];
         const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
         if (isPointer) {
           // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes);\n`;
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
           code += `${indent}  const payload = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
           // Non-pointer variant: pass sliced bytes (standard pattern)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset));\n`;
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
           code += `${indent}  const payload = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
         }
@@ -2208,9 +2216,12 @@ function generateDecodeArray(
     // Length comes from a previously-decoded field
     const lengthField = field.length_field;
     // Support dot notation for bitfield sub-fields (e.g., "flags.count")
-    const lengthRef = `value.${lengthField}`;
+    // Try value first, then context (for protocol headers)
     const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
-    code += `${indent}const ${lengthVarName} = ${lengthRef};\n`;
+    code += `${indent}const ${lengthVarName} = value.${lengthField} ?? this.context?.${lengthField};\n`;
+    code += `${indent}if (${lengthVarName} === undefined) {\n`;
+    code += `${indent}  throw new Error('Field-referenced array length field "${lengthField}" not found in value or context');\n`;
+    code += `${indent}}\n`;
     code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
   } else if (field.kind === "null_terminated") {
     // For null-terminated arrays, we need to peek ahead to check for null terminator
