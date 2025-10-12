@@ -38,14 +38,57 @@ function sanitizeTypeName(typeName: string): string {
 }
 
 /**
+ * JavaScript/TypeScript reserved keywords that cannot be used as variable names
+ */
+const JS_RESERVED_KEYWORDS = new Set([
+  "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+  "delete", "do", "else", "enum", "export", "extends", "false", "finally",
+  "for", "function", "if", "import", "in", "instanceof", "new", "null",
+  "return", "super", "switch", "this", "throw", "true", "try", "typeof",
+  "var", "void", "while", "with", "yield", "let", "static", "implements",
+  "interface", "package", "private", "protected", "public", "await", "async"
+]);
+
+/**
+ * Sanitize a variable/field name for TypeScript to avoid reserved keywords
+ * Appends "_" to reserved keywords (e.g., "class" → "class_")
+ */
+function sanitizeVarName(varName: string): string {
+  if (JS_RESERVED_KEYWORDS.has(varName)) {
+    return `${varName}_`;
+  }
+  return varName;
+}
+
+/**
+ * Generate JSDoc comment from description
+ */
+function generateJSDoc(description: string | undefined, indent: string = ""): string {
+  if (!description) return "";
+  return `${indent}/**\n${indent} * ${description}\n${indent} */\n`;
+}
+
+/**
  * Generate TypeScript code for all types in the schema (functional style with standalone functions)
+ *
+ * ⚠️ WARNING: THIS GENERATOR IS INCOMPLETE AND NOT TESTED
+ *
+ * Known issues:
+ * - Does not properly handle Optional<T> generic expansion (inlines incorrectly)
+ * - Decoder does not handle generic types at all
+ * - No test coverage (all tests use class-based generator)
+ *
+ * TODO: Either complete this generator with proper tests, or create functional wrappers
+ * around the class-based generator (e.g., encode(value) => new Encoder().encode(value))
+ *
+ * For production use, use generateTypeScript() (class-based) instead.
  */
 export function generateTypeScriptCode(schema: BinarySchema): string {
   const globalEndianness = schema.config?.endianness || "big_endian";
   const globalBitOrder = schema.config?.bit_order || "msb_first";
 
-  // Import runtime library
-  let code = `import { BitStreamDecoder } from "../dist/runtime/bit-stream.js";\n\n`;
+  // Import runtime library (from same directory)
+  let code = `import { BitStreamEncoder, BitStreamDecoder } from "./BitStream.js";\n\n`;
 
   // Add global visitedOffsets for pointer circular reference detection
   code += `// Global set for circular reference detection in pointers\n`;
@@ -72,8 +115,8 @@ export function generateTypeScript(schema: BinarySchema): string {
   const globalEndianness = schema.config?.endianness || "big_endian";
   const globalBitOrder = schema.config?.bit_order || "msb_first";
 
-  // Import runtime library (relative to .generated/ → dist/runtime/)
-  let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "../dist/runtime/bit-stream.js";\n\n`;
+  // Import runtime library (from same directory)
+  let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "./BitStream.js";\n\n`;
 
   // Generate code for each type (skip generic templates like Optional<T>)
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
@@ -112,16 +155,33 @@ function generateFunctionalTypeCode(
     return generateFunctionalPointer(typeName, typeDefAny, schema, globalEndianness);
   }
 
+  // Handle string types - generate type alias + functions
+  if (typeDefAny.type === "string") {
+    let code = generateJSDoc(typeDefAny.description);
+    code += `export type ${typeName} = string;`;
+    const encoderCode = generateFunctionalEncoder(typeName, typeDef, schema, globalEndianness);
+    const decoderCode = generateFunctionalDecoder(typeName, typeDef, schema, globalEndianness);
+    return `${code}\n\n${encoderCode}\n\n${decoderCode}`;
+  }
+
+  // Handle array types - generate type alias + functions
+  if (typeDefAny.type === "array") {
+    const itemType = getElementTypeScriptType(typeDefAny.items, schema);
+    let code = generateJSDoc(typeDefAny.description);
+    code += `export type ${typeName} = ${itemType}[];`;
+    const encoderCode = generateFunctionalEncoder(typeName, typeDef, schema, globalEndianness);
+    const decoderCode = generateFunctionalDecoder(typeName, typeDef, schema, globalEndianness);
+    return `${code}\n\n${encoderCode}\n\n${decoderCode}`;
+  }
+
   // Check if this is a type alias or composite type
   if (isTypeAlias(typeDef)) {
     // Regular type alias
     const aliasedType = typeDefAny;
     const tsType = getElementTypeScriptType(aliasedType, schema);
 
-    let code = `export type ${typeName} = ${tsType};`;
-    if (typeDefAny.description) {
-      code = `// ${typeDefAny.description}\n${code}`;
-    }
+    let code = generateJSDoc(typeDefAny.description);
+    code += `export type ${typeName} = ${tsType};`;
 
     // For simple type aliases, we might not need encode/decode functions
     // (they'd just call the underlying type's functions)
@@ -138,9 +198,24 @@ function generateFunctionalTypeCode(
 
 /**
  * Check if a type is a composite (has sequence/fields) or a type alias
+ * Note: Standalone array types (type: "array") and string types (type: "string")
+ * are NOT aliases - they need encoder/decoder functions
  */
 function isTypeAlias(typeDef: TypeDef): boolean {
-  return !('sequence' in typeDef || 'fields' in typeDef);
+  const typeDefAny = typeDef as any;
+
+  // Types with sequence or fields are composite types
+  if ('sequence' in typeDef || 'fields' in typeDef) {
+    return false;
+  }
+
+  // Standalone array and string types need encoder/decoder functions
+  if (typeDefAny.type === 'array' || typeDefAny.type === 'string') {
+    return false;
+  }
+
+  // Everything else is a type alias
+  return true;
 }
 
 /**
@@ -157,6 +232,35 @@ function getTypeFields(typeDef: TypeDef): Field[] {
 }
 
 /**
+ * Generate encoder for standalone array type
+ */
+function generateFunctionalEncoderForArray(
+  typeName: string,
+  typeDefAny: any,
+  schema: BinarySchema,
+  globalEndianness: Endianness
+): string {
+  const arrayField = { ...typeDefAny, name: 'value' };
+  const encodeCode = generateFunctionalEncodeArray(arrayField, schema, globalEndianness, 'value', '  ');
+
+  return `export function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n${encodeCode}}`;
+}
+
+/**
+ * Generate encoder for standalone string type
+ */
+function generateFunctionalEncoderForString(
+  typeName: string,
+  typeDefAny: any,
+  globalEndianness: Endianness
+): string {
+  const stringField = { ...typeDefAny, name: 'value' };
+  const encodeCode = generateFunctionalEncodeString(stringField, globalEndianness, 'value', '  ');
+
+  return `export function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n${encodeCode}}`;
+}
+
+/**
  * Generate functional-style encoder for composite types
  */
 function generateFunctionalEncoder(
@@ -165,6 +269,18 @@ function generateFunctionalEncoder(
   schema: BinarySchema,
   globalEndianness: Endianness
 ): string {
+  const typeDefAny = typeDef as any;
+
+  // Handle standalone array types
+  if (typeDefAny.type === 'array') {
+    return generateFunctionalEncoderForArray(typeName, typeDefAny, schema, globalEndianness);
+  }
+
+  // Handle standalone string types
+  if (typeDefAny.type === 'string') {
+    return generateFunctionalEncoderForString(typeName, typeDefAny, globalEndianness);
+  }
+
   const fields = getTypeFields(typeDef);
 
   // Optimization: if struct has exactly 1 field and it's a pointer, encode the target directly
@@ -174,7 +290,7 @@ function generateFunctionalEncoder(
     if (fieldTypeDef && (fieldTypeDef as any).type === "pointer") {
       // Encode target type directly (pointers are transparent during encoding)
       const targetType = (fieldTypeDef as any).target_type;
-      let code = `function encode${typeName}(stream: any, value: ${typeName}): void {\n`;
+      let code = `function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
       code += `  encode${targetType}(stream, value.${field.name});\n`;
       code += `}`;
       return code;
@@ -182,7 +298,12 @@ function generateFunctionalEncoder(
   }
 
   // Regular multi-field struct
-  let code = `function encode${typeName}(stream: any, value: ${typeName}): void {\n`;
+  let code = `/**\n`;
+  code += ` * Encode ${typeName} to the stream\n`;
+  code += ` * @param stream - The bit stream to write to\n`;
+  code += ` * @param value - The ${typeName} to encode\n`;
+  code += ` */\n`;
+  code += `export function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
 
   for (const field of fields) {
     code += generateFunctionalEncodeField(field, schema, globalEndianness, "value", "  ");
@@ -190,6 +311,35 @@ function generateFunctionalEncoder(
 
   code += `}`;
   return code;
+}
+
+/**
+ * Generate decoder for standalone array type
+ */
+function generateFunctionalDecoderForArray(
+  typeName: string,
+  typeDefAny: any,
+  schema: BinarySchema,
+  globalEndianness: Endianness
+): string {
+  const arrayField = { ...typeDefAny, name: 'result' };
+  const decodeCode = generateFunctionalDecodeArray(arrayField, schema, globalEndianness, 'result', '  ');
+
+  return `export function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n${decodeCode}  return result;\n}`;
+}
+
+/**
+ * Generate decoder for standalone string type
+ */
+function generateFunctionalDecoderForString(
+  typeName: string,
+  typeDefAny: any,
+  globalEndianness: Endianness
+): string {
+  const stringField = { ...typeDefAny, name: 'result' };
+  const decodeCode = generateFunctionalDecodeString(stringField, globalEndianness, 'result', '  ');
+
+  return `export function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n${decodeCode}  return result;\n}`;
 }
 
 /**
@@ -201,6 +351,18 @@ function generateFunctionalDecoder(
   schema: BinarySchema,
   globalEndianness: Endianness
 ): string {
+  const typeDefAny = typeDef as any;
+
+  // Handle standalone array types
+  if (typeDefAny.type === 'array') {
+    return generateFunctionalDecoderForArray(typeName, typeDefAny, schema, globalEndianness);
+  }
+
+  // Handle standalone string types
+  if (typeDefAny.type === 'string') {
+    return generateFunctionalDecoderForString(typeName, typeDefAny, globalEndianness);
+  }
+
   const fields = getTypeFields(typeDef);
 
   // Optimization: if struct has exactly 1 field and it's a pointer, inline the logic
@@ -229,7 +391,12 @@ function generateFunctionalDecoder(
   }
 
   // Regular multi-field struct
-  let code = `function decode${typeName}(stream: any): ${typeName} {\n`;
+  let code = `/**\n`;
+  code += ` * Decode ${typeName} from the stream\n`;
+  code += ` * @param stream - The bit stream to read from\n`;
+  code += ` * @returns The decoded ${typeName}\n`;
+  code += ` */\n`;
+  code += `export function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
 
   // Decode each field
   for (const field of fields) {
@@ -237,8 +404,16 @@ function generateFunctionalDecoder(
   }
 
   // Build return object
-  const fieldNames = fields.filter(f => 'name' in f).map(f => f.name);
-  code += `  return { ${fieldNames.join(", ")} };\n`;
+  const returnFields = fields
+    .filter(f => 'name' in f)
+    .map(f => {
+      const originalName = f.name;
+      const sanitizedName = sanitizeVarName(originalName);
+      // If sanitized, use explicit mapping: field: varName
+      // If not sanitized, use shorthand: field
+      return sanitizedName === originalName ? originalName : `${originalName}: ${sanitizedName}`;
+    });
+  code += `  return { ${returnFields.join(", ")} };\n`;
   code += `}`;
   return code;
 }
@@ -253,7 +428,7 @@ function generateFunctionalDecoderWithEarlyReturns(
   schema: BinarySchema,
   globalEndianness: Endianness
 ): string {
-  let code = `function decode${typeName}(stream: any): ${typeName} {\n`;
+  let code = `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
 
   // Decode all fields before the discriminated union
   for (let i = 0; i < unionFieldIndex; i++) {
@@ -265,10 +440,16 @@ function generateFunctionalDecoderWithEarlyReturns(
   const unionFieldName = unionField.name;
   const discriminator = unionField.discriminator;
   const variants = unionField.variants || [];
-  const discriminatorField = discriminator.field;
+  const discriminatorField = sanitizeVarName(discriminator.field);
 
   // Collect names of fields decoded before the union
-  const beforeFieldNames = fields.slice(0, unionFieldIndex).filter(f => 'name' in f).map(f => f.name);
+  const beforeFieldNames = fields.slice(0, unionFieldIndex)
+    .filter(f => 'name' in f)
+    .map(f => {
+      const originalName = f.name;
+      const sanitizedName = sanitizeVarName(originalName);
+      return sanitizedName === originalName ? originalName : `${originalName}: ${sanitizedName}`;
+    });
 
   // Generate if-else chain with early returns
   for (let i = 0; i < variants.length; i++) {
@@ -331,7 +512,7 @@ function generateInlinedPointerDecoder(
   const targetType = pointerDef.target_type;
   const endianness = pointerDef.endianness || globalEndianness;
 
-  let code = `function decode${typeName}(stream: any): ${typeName} {\n`;
+  let code = `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
 
   // Initialize visitedOffsets if needed
   code += `  if (!visitedOffsets) visitedOffsets = new Set<number>();\n\n`;
@@ -341,7 +522,7 @@ function generateInlinedPointerDecoder(
   if (storage === "uint8") {
     code += `  const pointerValue = stream.${storageMethodName}();\n`;
   } else {
-    code += `  const pointerValue = stream.${storageMethodName}('${endianessToShortForm(endianness)}');\n`;
+    code += `  const pointerValue = stream.${storageMethodName}('${endianness}');\n`;
   }
 
   // Extract offset using mask
@@ -392,14 +573,11 @@ function generateFunctionalDiscriminatedUnion(
   const variants = unionDef.variants || [];
 
   // Generate TypeScript union type
-  let code = "";
-  if (unionDef.description) {
-    code += `// ${unionDef.description}\n`;
-  }
+  let code = generateJSDoc(unionDef.description);
   code += `export type ${typeName} = ${generateDiscriminatedUnionType(unionDef, schema)};\n\n`;
 
   // Generate encoder
-  code += `function encode${typeName}(stream: any, value: ${typeName}): void {\n`;
+  code += `function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
   for (let i = 0; i < variants.length; i++) {
     const variant = variants[i];
     const ifKeyword = i === 0 ? "if" : "else if";
@@ -416,13 +594,13 @@ function generateFunctionalDiscriminatedUnion(
   code += `}\n\n`;
 
   // Generate decoder
-  code += `function decode${typeName}(stream: any): ${typeName} {\n`;
+  code += `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
 
   if (discriminator.peek) {
     // Peek-based discriminator
     const peekType = discriminator.peek;
     const endianness = discriminator.endianness || globalEndianness;
-    const endiannessArg = peekType !== "uint8" ? `'${endianessToShortForm(endianness)}'` : "";
+    const endiannessArg = peekType !== "uint8" ? `'${endianness}'` : "";
 
     code += `  const discriminator = stream.peek${capitalize(peekType)}(${endiannessArg});\n`;
 
@@ -507,19 +685,16 @@ function generateFunctionalPointer(
   const endianness = pointerDef.endianness || globalEndianness;
 
   // Generate type alias (transparent to target type)
-  let code = "";
-  if (pointerDef.description) {
-    code += `// ${pointerDef.description}\n`;
-  }
+  let code = generateJSDoc(pointerDef.description);
   code += `export type ${typeName} = ${targetType};\n\n`;
 
   // Generate encoder (just encode the target)
-  code += `function encode${typeName}(stream: any, value: ${typeName}): void {\n`;
+  code += `function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
   code += `  encode${targetType}(stream, value);\n`;
   code += `}\n\n`;
 
   // Generate decoder (with pointer following logic)
-  code += `function decode${typeName}(stream: any): ${typeName} {\n`;
+  code += `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
 
   // Initialize visitedOffsets if needed
   code += `  if (!visitedOffsets) visitedOffsets = new Set<number>();\n`;
@@ -530,7 +705,7 @@ function generateFunctionalPointer(
   if (storage === "uint8") {
     code += `  const pointerValue = stream.${storageMethodName}();\n`;
   } else {
-    code += `  const pointerValue = stream.${storageMethodName}('${endianessToShortForm(endianness)}');\n`;
+    code += `  const pointerValue = stream.${storageMethodName}('${endianness}');\n`;
   }
 
   // Extract offset using mask
@@ -588,30 +763,64 @@ function generateFunctionalEncodeField(
     case "uint8":
       return `${indent}stream.writeUint8(${fieldPath});\n`;
     case "uint16":
-      return `${indent}stream.writeUint16(${fieldPath}, '${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}stream.writeUint16(${fieldPath}, '${fieldEndianness}');\n`;
     case "uint32":
-      return `${indent}stream.writeUint32(${fieldPath}, '${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}stream.writeUint32(${fieldPath}, '${fieldEndianness}');\n`;
     case "uint64":
-      return `${indent}stream.writeUint64(${fieldPath}, '${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}stream.writeUint64(${fieldPath}, '${fieldEndianness}');\n`;
     case "int8":
       return `${indent}stream.writeInt8(${fieldPath});\n`;
     case "int16":
-      return `${indent}stream.writeInt16(${fieldPath}, '${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}stream.writeInt16(${fieldPath}, '${fieldEndianness}');\n`;
     case "int32":
-      return `${indent}stream.writeInt32(${fieldPath}, '${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}stream.writeInt32(${fieldPath}, '${fieldEndianness}');\n`;
     case "int64":
-      return `${indent}stream.writeInt64(${fieldPath}, '${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}stream.writeInt64(${fieldPath}, '${fieldEndianness}');\n`;
     case "array":
       return generateFunctionalEncodeArray(field, schema, globalEndianness, fieldPath, indent);
     case "string":
       return generateFunctionalEncodeString(field, globalEndianness, fieldPath, indent);
+    case "bitfield":
+      return generateFunctionalEncodeBitfield(field, fieldPath, indent);
     case "discriminated_union":
       return generateFunctionalEncodeDiscriminatedUnionField(field as any, schema, globalEndianness, fieldPath, indent);
     default:
+      // Check for generic type instantiation (e.g., Optional<uint64>)
+      const genericMatch = field.type.match(/^(\w+)<(.+)>$/);
+      if (genericMatch) {
+        const [, genericType, typeArg] = genericMatch;
+        const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
+
+        if (templateDef) {
+          const templateFields = getTypeFields(templateDef);
+          // Inline expand the generic by replacing T with the type argument
+          let code = "";
+          for (const tmplField of templateFields) {
+            // Replace T with the actual type
+            const expandedField = JSON.parse(
+              JSON.stringify(tmplField).replace(/"T"/g, `"${typeArg}"`)
+            );
+            const newFieldPath = `${fieldPath}.${expandedField.name}`;
+            code += generateFunctionalEncodeField(expandedField, schema, globalEndianness, newFieldPath, indent);
+          }
+          return code;
+        }
+      }
       // Type reference - resolve pointers to their target type
       const resolvedType = resolvePointerType(field.type, schema);
       return `${indent}encode${resolvedType}(stream, ${fieldPath});\n`;
   }
+}
+
+/**
+ * Generate functional encoding for bitfield
+ */
+function generateFunctionalEncodeBitfield(field: any, valuePath: string, indent: string): string {
+  let code = "";
+  for (const subField of field.fields) {
+    code += `${indent}stream.writeBits(${valuePath}.${subField.name}, ${subField.size});\n`;
+  }
+  return code;
 }
 
 /**
@@ -679,10 +888,10 @@ function generateFunctionalEncodeArray(
         code += `${indent}stream.writeUint8(${valuePath}.length);\n`;
         break;
       case "uint16":
-        code += `${indent}stream.writeUint16(${valuePath}.length, '${endianessToShortForm(globalEndianness)}');\n`;
+        code += `${indent}stream.writeUint16(${valuePath}.length, '${globalEndianness}');\n`;
         break;
       case "uint32":
-        code += `${indent}stream.writeUint32(${valuePath}.length, '${endianessToShortForm(globalEndianness)}');\n`;
+        code += `${indent}stream.writeUint32(${valuePath}.length, '${globalEndianness}');\n`;
         break;
     }
   }
@@ -697,6 +906,15 @@ function generateFunctionalEncodeArray(
     code += `${indent}  encode${itemType}(stream, ${itemVar});\n`;
   }
   code += `${indent}}\n`;
+
+  // Write null terminator for null-terminated arrays
+  if (field.kind === "null_terminated") {
+    if (itemType === "uint8") {
+      code += `${indent}stream.writeUint8(0);\n`;
+    }
+    // For complex types with terminal variants, the terminal variant IS the terminator
+    // so we don't add anything extra
+  }
 
   return code;
 }
@@ -730,7 +948,7 @@ function generateFunctionalEncodeString(
         code += `${indent}stream.writeUint8(${bytesVarName}.length);\n`;
         break;
       case "uint16":
-        code += `${indent}stream.writeUint16(${bytesVarName}.length, '${endianessToShortForm(globalEndianness)}');\n`;
+        code += `${indent}stream.writeUint16(${bytesVarName}.length, '${globalEndianness}');\n`;
         break;
     }
     code += `${indent}for (const byte of ${bytesVarName}) {\n`;
@@ -762,36 +980,50 @@ function generateFunctionalDecodeField(
 ): string {
   if (!('type' in field)) return "";
 
-  const fieldName = field.name;
+  const fieldName = sanitizeVarName(field.name);
   const fieldEndianness = 'endianness' in field && field.endianness ? field.endianness : globalEndianness;
 
   switch (field.type) {
     case "uint8":
       return `${indent}const ${fieldName} = stream.readUint8();\n`;
     case "uint16":
-      return `${indent}const ${fieldName} = stream.readUint16('${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}const ${fieldName} = stream.readUint16('${fieldEndianness}');\n`;
     case "uint32":
-      return `${indent}const ${fieldName} = stream.readUint32('${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}const ${fieldName} = stream.readUint32('${fieldEndianness}');\n`;
     case "uint64":
-      return `${indent}const ${fieldName} = stream.readUint64('${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}const ${fieldName} = stream.readUint64('${fieldEndianness}');\n`;
     case "int8":
       return `${indent}const ${fieldName} = stream.readInt8();\n`;
     case "int16":
-      return `${indent}const ${fieldName} = stream.readInt16('${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}const ${fieldName} = stream.readInt16('${fieldEndianness}');\n`;
     case "int32":
-      return `${indent}const ${fieldName} = stream.readInt32('${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}const ${fieldName} = stream.readInt32('${fieldEndianness}');\n`;
     case "int64":
-      return `${indent}const ${fieldName} = stream.readInt64('${endianessToShortForm(fieldEndianness)}');\n`;
+      return `${indent}const ${fieldName} = stream.readInt64('${fieldEndianness}');\n`;
     case "array":
       return generateFunctionalDecodeArray(field, schema, globalEndianness, fieldName, indent);
     case "string":
       return generateFunctionalDecodeString(field, globalEndianness, fieldName, indent);
+    case "bitfield":
+      return generateFunctionalDecodeBitfield(field, fieldName, indent);
     case "discriminated_union":
       return generateFunctionalDecodeDiscriminatedUnionField(field as any, schema, globalEndianness, fieldName, indent);
     default:
       // Type reference - always call the decoder function
       return `${indent}const ${fieldName} = decode${field.type}(stream);\n`;
   }
+}
+
+/**
+ * Generate functional decoding for bitfield
+ */
+function generateFunctionalDecodeBitfield(field: any, fieldName: string, indent: string): string {
+  let code = `${indent}const ${fieldName} = {\n`;
+  for (const subField of field.fields) {
+    code += `${indent}  ${subField.name}: Number(stream.readBits(${subField.size})),\n`;
+  }
+  code += `${indent}};\n`;
+  return code;
 }
 
 /**
@@ -818,7 +1050,7 @@ function generateFunctionalDecodeDiscriminatedUnionField(
     // Peek-based discriminator
     const peekType = discriminator.peek;
     const endianness = discriminator.endianness || globalEndianness;
-    const endiannessArg = peekType !== "uint8" ? `'${endianessToShortForm(endianness)}'` : "";
+    const endiannessArg = peekType !== "uint8" ? `'${endianness}'` : "";
 
     code += `${indent}const discriminator = stream.peek${capitalize(peekType)}(${endiannessArg});\n`;
 
@@ -896,7 +1128,8 @@ function generateFunctionalDecodeArray(
 ): string {
   // Get proper type annotation for array
   const itemType = field.items?.type || "any";
-  const typeAnnotation = `${itemType}[]`;
+  const tsItemType = getElementTypeScriptType(field.items, schema);
+  const typeAnnotation = `${tsItemType}[]`;
   let code = `${indent}const ${fieldName}: ${typeAnnotation} = [];\n`;
 
   // Read length if length_prefixed
@@ -908,19 +1141,53 @@ function generateFunctionalDecodeArray(
         lengthRead = "stream.readUint8()";
         break;
       case "uint16":
-        lengthRead = `stream.readUint16('${endianessToShortForm(globalEndianness)}')`;
+        lengthRead = `stream.readUint16('${globalEndianness}')`;
         break;
       case "uint32":
-        lengthRead = `stream.readUint32('${endianessToShortForm(globalEndianness)}')`;
+        lengthRead = `stream.readUint32('${globalEndianness}')`;
         break;
     }
     code += `${indent}const ${fieldName}_length = ${lengthRead};\n`;
     code += `${indent}for (let i = 0; i < ${fieldName}_length; i++) {\n`;
   } else if (field.kind === "fixed") {
     code += `${indent}for (let i = 0; i < ${field.length}; i++) {\n`;
+  } else if (field.kind === "field_referenced") {
+    // Length comes from a previously-decoded field in the same sequence
+    const lengthField = sanitizeVarName(field.length_field);
+    code += `${indent}for (let i = 0; i < ${lengthField}; i++) {\n`;
+  } else if (field.kind === "null_terminated") {
+    // Null-terminated array - read until null terminator or terminal variant
+    code += `${indent}while (true) {\n`;
+
+    // Check for terminal variants if specified
+    if (field.terminal_variants && field.terminal_variants.length > 0) {
+      // For discriminated unions with terminal variants, check if we got a terminal
+      code += `${indent}  const item = decode${itemType}(stream);\n`;
+      code += `${indent}  ${fieldName}.push(item);\n`;
+      // Check if this item is a terminal variant
+      code += `${indent}  if (`;
+      code += field.terminal_variants.map((v: string) => `item.type === '${v}'`).join(' || ');
+      code += `) break;\n`;
+      // Also check for empty label/string (common terminator pattern in protocols like DNS)
+      code += `${indent}  if (item.type === 'Label' && item.value === '') break;\n`;
+      code += `${indent}}\n`;
+      return code;
+    }
+
+    // For simple types, check for zero byte
+    if (itemType === "uint8") {
+      code += `${indent}  const byte = stream.readUint8();\n`;
+      code += `${indent}  if (byte === 0) break;\n`;
+      code += `${indent}  ${fieldName}.push(byte);\n`;
+      code += `${indent}}\n`;
+      return code;
+    }
+
+    // For complex types without terminal variants, this is an error
+    throw new Error(`Null-terminated array of ${itemType} requires terminal_variants`);
   }
 
-  // Read array item (reuse itemType from line 683)
+  // Read array item (for non-null-terminated arrays)
   if (itemType === "uint8") {
     code += `${indent}  ${fieldName}.push(stream.readUint8());\n`;
   } else {
@@ -952,10 +1219,10 @@ function generateFunctionalDecodeString(
         lengthRead = "stream.readUint8()";
         break;
       case "uint16":
-        lengthRead = `stream.readUint16('${endianessToShortForm(globalEndianness)}')`;
+        lengthRead = `stream.readUint16('${globalEndianness}')`;
         break;
       case "uint32":
-        lengthRead = `stream.readUint32('${endianessToShortForm(globalEndianness)}')`;
+        lengthRead = `stream.readUint32('${globalEndianness}')`;
         break;
     }
 
@@ -1012,6 +1279,29 @@ function generateTypeCode(
   globalEndianness: Endianness,
   globalBitOrder: string
 ): string {
+  const typeDefAny = typeDef as any;
+
+  // Handle standalone string types - generate type alias + encoder/decoder
+  if (typeDefAny.type === 'string') {
+    let code = generateJSDoc(typeDefAny.description);
+    code += `export type ${typeName} = string;\n\n`;
+    code += generateTypeAliasEncoder(typeName, typeDefAny, schema, globalEndianness, globalBitOrder);
+    code += '\n\n';
+    code += generateTypeAliasDecoder(typeName, typeDefAny, schema, globalEndianness, globalBitOrder);
+    return code;
+  }
+
+  // Handle standalone array types - generate type alias + encoder/decoder
+  if (typeDefAny.type === 'array') {
+    const itemType = getElementTypeScriptType(typeDefAny.items, schema);
+    let code = generateJSDoc(typeDefAny.description);
+    code += `export type ${typeName} = ${itemType}[];\n\n`;
+    code += generateTypeAliasEncoder(typeName, typeDefAny, schema, globalEndianness, globalBitOrder);
+    code += '\n\n';
+    code += generateTypeAliasDecoder(typeName, typeDefAny, schema, globalEndianness, globalBitOrder);
+    return code;
+  }
+
   // Check if this is a type alias or composite type
   if (isTypeAlias(typeDef)) {
     // Type alias - generate type alias, encoder, and decoder
@@ -1194,11 +1484,21 @@ function generateTypeAliasDecoder(
  */
 function generateInterface(typeName: string, typeDef: TypeDef, schema: BinarySchema): string {
   const fields = getTypeFields(typeDef);
-  let code = `export interface ${typeName} {\n`;
+  const typeDefAny = typeDef as any;
+
+  // Add JSDoc for the interface itself
+  let code = generateJSDoc(typeDefAny.description);
+  code += `export interface ${typeName} {\n`;
 
   for (const field of fields) {
     const fieldType = getFieldTypeScriptType(field, schema);
     const optional = isFieldConditional(field) ? "?" : "";
+
+    // Add JSDoc for each field
+    const fieldAny = field as any;
+    if (fieldAny.description) {
+      code += generateJSDoc(fieldAny.description, "  ");
+    }
     code += `  ${field.name}${optional}: ${fieldType};\n`;
   }
 
@@ -1494,13 +1794,12 @@ function generateEncodeDiscriminatedUnion(
     const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
 
     if (!isPointer) {
-      // Check if variant is a primitive type (string, number, etc.) - only track primitives for compression
+      // Check if variant is a string type that can be referenced by pointers
       const variantTypeDef = schema.types[variant.type];
-      const isPrimitive = variantTypeDef && isTypeAlias(variantTypeDef) &&
-                         (variantTypeDef as any).type === "string";
+      const isStringType = variantTypeDef && (variantTypeDef as any).type === "string";
 
-      if (isPrimitive) {
-        // Non-pointer primitive variant: Record offset before encoding
+      if (isStringType) {
+        // Non-pointer string variant: Record offset before encoding so pointers can reference it
         code += `${indent}  const valueKey = JSON.stringify(${valuePath}.value);\n`;
         code += `${indent}  const currentOffset = this.byteOffset;\n`;
         code += `${indent}  this.compressionDict.set(valueKey, currentOffset);\n`;
@@ -1616,6 +1915,14 @@ function generateEncodeArray(
   // Write array elements
   // Use unique variable name to avoid shadowing in nested arrays
   const itemVar = valuePath.replace(/[.\[\]]/g, "_") + "_item";
+
+  // Track if we encounter a terminal variant (to skip null terminator)
+  const hasTerminalVariants = field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants) && field.terminal_variants.length > 0;
+  if (hasTerminalVariants) {
+    const terminatedVar = valuePath.replace(/[.\[\]]/g, "_") + "_terminated";
+    code += `${indent}let ${terminatedVar} = false;\n`;
+  }
+
   code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
   code += generateEncodeFieldCoreImpl(
     field.items as Field,
@@ -1626,19 +1933,28 @@ function generateEncodeArray(
   );
 
   // Check if this is a terminal variant (for null_terminated arrays with discriminated unions)
-  if (field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants)) {
+  if (hasTerminalVariants) {
+    const terminatedVar = valuePath.replace(/[.\[\]]/g, "_") + "_terminated";
     code += `${indent}  // Check if item is a terminal variant\n`;
     const conditions = field.terminal_variants.map((v: string) => `${itemVar}.type === '${v}'`).join(' || ');
     code += `${indent}  if (${conditions}) {\n`;
-    code += `${indent}    return this.finish();\n`;
+    code += `${indent}    ${terminatedVar} = true;\n`;
+    code += `${indent}    break;\n`;
     code += `${indent}  }\n`;
   }
 
   code += `${indent}}\n`;
 
-  // Write null terminator if null_terminated (only if no terminal variant was encountered)
+  // Write null terminator if null_terminated and no terminal variant was encountered
   if (field.kind === "null_terminated") {
-    code += `${indent}this.writeUint8(0);\n`;
+    if (hasTerminalVariants) {
+      const terminatedVar = valuePath.replace(/[.\[\]]/g, "_") + "_terminated";
+      code += `${indent}if (!${terminatedVar}) {\n`;
+      code += `${indent}  this.writeUint8(0);\n`;
+      code += `${indent}}\n`;
+    } else {
+      code += `${indent}this.writeUint8(0);\n`;
+    }
   }
 
   return code;
@@ -1754,6 +2070,20 @@ function generateEncodeTypeReference(
   const typeDef = schema.types[typeRef] as TypeDef | undefined;
   if (!typeDef) {
     return `${indent}// TODO: Unknown type ${typeRef}\n`;
+  }
+
+  const typeDefAny = typeDef as any;
+
+  // Handle standalone string types - encode using the aliased string type
+  if (typeDefAny.type === 'string') {
+    const pseudoField = { ...typeDefAny, name: valuePath.split('.').pop() };
+    return generateEncodeFieldCoreImpl(pseudoField, schema, "big_endian", valuePath, indent);
+  }
+
+  // Handle standalone array types - encode using the aliased array type
+  if (typeDefAny.type === 'array') {
+    const pseudoField = { ...typeDefAny, name: valuePath.split('.').pop() };
+    return generateEncodeFieldCoreImpl(pseudoField, schema, "big_endian", valuePath, indent);
   }
 
   // Check if this is a type alias
@@ -2167,13 +2497,6 @@ function capitalize(str: string): string {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-/**
- * Convert endianness to short form for runtime
- * big_endian → 'big', little_endian → 'little'
- */
-function endianessToShortForm(endianness: Endianness): string {
-  return endianness === "big_endian" ? "big" : "little";
-}
 
 /**
  * Generate decoding for array field
@@ -2451,6 +2774,20 @@ function generateDecodeTypeReference(
   const typeDef = schema.types[typeRef] as TypeDef | undefined;
   if (!typeDef) {
     return `${indent}// TODO: Unknown type ${typeRef}\n`;
+  }
+
+  const typeDefAny = typeDef as any;
+
+  // Handle standalone string types - decode using the aliased string type
+  if (typeDefAny.type === 'string') {
+    const pseudoField = { ...typeDefAny, name: fieldName.split('.').pop() };
+    return generateDecodeFieldCoreImpl(pseudoField, schema, "big_endian", fieldName, indent);
+  }
+
+  // Handle standalone array types - decode using the aliased array type
+  if (typeDefAny.type === 'array') {
+    const pseudoField = { ...typeDefAny, name: fieldName.split('.').pop() };
+    return generateDecodeFieldCoreImpl(pseudoField, schema, "big_endian", fieldName, indent);
   }
 
   // Check if this is a type alias
