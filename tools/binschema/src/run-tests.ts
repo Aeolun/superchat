@@ -1,87 +1,93 @@
 /**
- * Comprehensive test runner
+ * Comprehensive test runner with automatic test discovery
  *
- * Runs all test suites and reports results
+ * Automatically finds and runs all *.test.ts files
  */
 
 import { runTestSuite, printTestResults, TestResult } from "./test-runner/runner.js";
+import { readdirSync, statSync } from "fs";
+import { join, relative } from "path";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
 
-// Primitives
-import { uint8TestSuite } from "./tests/primitives/uint8.test.js";
-import { uint16BigEndianTestSuite, uint16LittleEndianTestSuite } from "./tests/primitives/uint16.test.js";
-import { uint32BigEndianTestSuite, uint32LittleEndianTestSuite } from "./tests/primitives/uint32.test.js";
-import { uint64BigEndianTestSuite, uint64LittleEndianTestSuite } from "./tests/primitives/uint64.test.js";
-import { int8TestSuite, int16BigEndianTestSuite, int32BigEndianTestSuite, int64BigEndianTestSuite, int16LittleEndianTestSuite, int32LittleEndianTestSuite, int64LittleEndianTestSuite } from "./tests/primitives/signed-integers.test.js";
-import { float32BigEndianTestSuite, float32LittleEndianTestSuite, float64BigEndianTestSuite, float64LittleEndianTestSuite } from "./tests/primitives/floats.test.js";
-import { boundaryValuesTestSuite, powerOfTwoBoundariesTestSuite, bitPatternTestSuite, signedBoundariesTestSuite } from "./tests/primitives/boundary-values.test.js";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-// Bit-level
-import { singleBitTestSuite } from "./tests/bit-level/single-bit.test.js";
-import { threeBitsTestSuite } from "./tests/bit-level/three-bits.test.js";
-import { spanningBytesTestSuite, spanningBytesLSBTestSuite } from "./tests/bit-level/spanning-bytes.test.js";
-import { msbFirstTestSuite, lsbFirstTestSuite, bitOrderComparisonTestSuite } from "./tests/bit-level/bit-ordering.test.js";
-import { h264NALHeaderTestSuite, bitfield8TestSuite, bitfield16TestSuite, bitfieldLSBFirstTestSuite } from "./tests/bit-level/bitfields.test.js";
-import { twelveBitsTestSuite, twentyBitsTestSuite, twentyFourBitsTestSuite, fortyBitsTestSuite, fortyEightBitsTestSuite, sixtyFourBitsTestSuite, unalignedTenBitsTestSuite } from "./tests/bit-level/multi-byte-bits.test.js";
-import { mixedSizeBitfieldsTestSuite, variableSizeBitfieldsTestSuite } from "./tests/bit-level/mixed-size-bitfields.test.js";
+interface TestSuite {
+  name: string;
+  description: string;
+  schema: any;
+  test_type: string;
+  test_cases: any[];
+}
 
-// Composite
-import { simpleStructTestSuite, mixedFieldsStructTestSuite } from "./tests/composite/simple-struct.test.js";
-import { nestedStructTestSuite, deeplyNestedStructTestSuite } from "./tests/composite/nested-struct.test.js";
-import { optionalUint64TestSuite, optionalWithBitFlagTestSuite, multipleOptionalsTestSuite, optionalStructTestSuite, optionalArrayTestSuite } from "./tests/composite/optional.test.js";
-import { fixedArrayTestSuite, lengthPrefixedArrayTestSuite, lengthPrefixedUint16ArrayTestSuite, nullTerminatedArrayTestSuite } from "./tests/composite/arrays.test.js";
-import { nestedArrays2DTestSuite } from "./tests/composite/nested-arrays.test.js";
-import {
-  simpleFieldReferencedArrayTestSuite,
-  fieldReferencedUint16ArrayTestSuite,
-  multipleFieldReferencedArraysTestSuite,
-  bitfieldSubFieldReferencedArrayTestSuite,
-  fieldReferencedStructArrayTestSuite
-} from "./tests/composite/field-referenced-arrays.test.js";
-import { emptyArraysAllTypesTestSuite, emptyUint16ArrayTestSuite, emptyUint32ArrayTestSuite, emptyUint64ArrayTestSuite, largeArrayLengthTestSuite } from "./tests/composite/arrays-edge-cases.test.js";
-import { fixedArrayOfStructsTestSuite, lengthPrefixedArrayOfStructsTestSuite, nestedArrayOfStructsTestSuite, arrayOfStructsWithOptionalsTestSuite } from "./tests/composite/array-of-structs.test.js";
-import { mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite, nestedStructEndiannessOverrideTestSuite, deeplyNestedEndiannessTestSuite } from "./tests/composite/endianness-overrides.test.js";
-import { stringTestSuite, shortStringTestSuite, cStringTestSuite, multipleStringsTestSuite } from "./tests/composite/strings.test.js";
-import {
-  lengthPrefixedUint8TestSuite,
-  lengthPrefixedUint16TestSuite,
-  lengthPrefixedUint32TestSuite,
-  nullTerminatedTestSuite,
-  fixedLengthTestSuite,
-  multipleStringsTestSuite as firstClassMultipleStringsTestSuite,
-  edgeCasesTestSuite
-} from "./tests/composite/first-class-strings.test.js";
-import { conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite, conditionalEqualityTestSuite, conditionalComparisonTestSuite } from "./tests/composite/conditionals.test.js";
-import { nestedFieldConditionalTestSuite, deeplyNestedConditionalTestSuite } from "./tests/composite/nested-conditionals.test.js";
+/**
+ * Recursively find all *.test.ts files in a directory
+ */
+function findTestFiles(dir: string): string[] {
+  const files: string[] = [];
 
-// Protocols
-import {
-  dnsLabelEmptyTestSuite,
-  dnsLabelSingleCharTestSuite,
-  dnsLabelTypicalTestSuite,
-  dnsLabelWithHyphensTestSuite,
-  dnsLabelMaxLengthTestSuite,
-  dnsLabelMixedCaseTestSuite
-} from "./tests/protocols/dns-labels.test.js";
-import {
-  dnsDomainSingleLabelTestSuite,
-  dnsDomainMultiLabelTestSuite,
-  dnsDomainRootTestSuite,
-  dnsDomainSpecialTestSuite
-} from "./tests/protocols/dns-domain-name.test.js";
-import {
-  dnsCompressionFullDomainTestSuite,
-  dnsCompressionPointerTestSuite,
-  dnsCompressionMixedTestSuite,
-  dnsCompressionEdgeCasesTestSuite
-} from "./tests/protocols/dns-compression.test.js";
-import {
-  dnsProtocolQueryTestSuite,
-  dnsProtocolResponseTestSuite
-} from "./tests/protocols/dns-protocol.test.js";
-import {
-  dnsCompleteQueryTestSuite,
-  dnsCompleteResponseTestSuite
-} from "./tests/protocols/dns-complete.test.js";
+  try {
+    const entries = readdirSync(dir);
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+
+      if (stat.isDirectory()) {
+        // Recursively search subdirectories
+        files.push(...findTestFiles(fullPath));
+      } else if (entry.endsWith('.test.ts')) {
+        files.push(fullPath);
+      }
+    }
+  } catch (err) {
+    // Ignore directories we can't read
+  }
+
+  return files;
+}
+
+/**
+ * Import a test file and extract all exported test suites
+ */
+async function loadTestSuites(filePath: string): Promise<TestSuite[]> {
+  // Convert absolute path to relative import path
+  const relativePath = './' + relative(__dirname, filePath).replace(/\.ts$/, '.js');
+
+  try {
+    const module = await import(relativePath);
+
+    // Extract all exports that look like test suites (end with "TestSuite")
+    const testSuites: TestSuite[] = [];
+    for (const [key, value] of Object.entries(module)) {
+      if (key.endsWith('TestSuite') && value && typeof value === 'object') {
+        testSuites.push(value as TestSuite);
+      }
+    }
+
+    return testSuites;
+  } catch (err) {
+    console.error(`Failed to load test file ${filePath}:`, err);
+    return [];
+  }
+}
+
+/**
+ * Get category name from file path (e.g., "tests/composite/strings.test.ts" -> "Composite")
+ */
+function getCategoryFromPath(filePath: string): string {
+  const parts = filePath.split('/');
+  const testsIndex = parts.indexOf('tests');
+
+  if (testsIndex >= 0 && testsIndex < parts.length - 1) {
+    const category = parts[testsIndex + 1];
+    // Capitalize first letter
+    return category.charAt(0).toUpperCase() + category.slice(1);
+  }
+
+  return 'Other';
+}
 
 async function main() {
   // Parse command line arguments
@@ -92,16 +98,16 @@ async function main() {
     if (arg.startsWith("--filter=")) {
       filter = arg.substring("--filter=".length);
     } else if (arg === "--help" || arg === "-h") {
-      console.log("Usage: node dist/run-tests.js [options]");
+      console.log("Usage: bun run src/run-tests.ts [options]");
       console.log("");
       console.log("Options:");
       console.log("  --filter=<pattern>  Only run tests with names containing <pattern>");
       console.log("  --help, -h          Show this help message");
       console.log("");
       console.log("Examples:");
-      console.log("  node dist/run-tests.js                    # Run all tests");
-      console.log("  node dist/run-tests.js --filter=optional  # Run tests with 'optional' in name");
-      console.log("  node dist/run-tests.js --filter=uint8     # Run only uint8 tests");
+      console.log("  bun run src/run-tests.ts                    # Run all tests");
+      console.log("  bun run src/run-tests.ts --filter=optional  # Run tests with 'optional' in name");
+      console.log("  bun run src/run-tests.ts --filter=uint8     # Run only uint8 tests");
       process.exit(0);
     }
   }
@@ -113,141 +119,47 @@ async function main() {
   }
   console.log("=".repeat(80));
 
+  // Find all test files
+  const testsDir = join(__dirname, 'tests');
+  const testFiles = findTestFiles(testsDir);
+
+  // Load all test suites
+  const allSuites: Map<string, TestSuite[]> = new Map();
+
+  for (const testFile of testFiles) {
+    const suites = await loadTestSuites(testFile);
+    const category = getCategoryFromPath(testFile);
+
+    if (!allSuites.has(category)) {
+      allSuites.set(category, []);
+    }
+
+    allSuites.get(category)!.push(...suites);
+  }
+
   const results: TestResult[] = [];
-
-  // Group tests by category
-  const testGroups = [
-    {
-      name: "Primitives - Unsigned Integers",
-      suites: [uint8TestSuite, uint16BigEndianTestSuite, uint16LittleEndianTestSuite, uint32BigEndianTestSuite, uint32LittleEndianTestSuite, uint64BigEndianTestSuite, uint64LittleEndianTestSuite],
-    },
-    {
-      name: "Primitives - Signed Integers",
-      suites: [int8TestSuite, int16BigEndianTestSuite, int16LittleEndianTestSuite, int32BigEndianTestSuite, int32LittleEndianTestSuite, int64BigEndianTestSuite, int64LittleEndianTestSuite],
-    },
-    {
-      name: "Primitives - Floats",
-      suites: [float32BigEndianTestSuite, float32LittleEndianTestSuite, float64BigEndianTestSuite, float64LittleEndianTestSuite],
-    },
-    {
-      name: "Primitives - Boundary Values",
-      suites: [boundaryValuesTestSuite, powerOfTwoBoundariesTestSuite, bitPatternTestSuite, signedBoundariesTestSuite],
-    },
-    {
-      name: "Bit-level Operations",
-      suites: [singleBitTestSuite, threeBitsTestSuite, spanningBytesTestSuite, spanningBytesLSBTestSuite, twelveBitsTestSuite, twentyBitsTestSuite, twentyFourBitsTestSuite, fortyBitsTestSuite, fortyEightBitsTestSuite, sixtyFourBitsTestSuite, unalignedTenBitsTestSuite, msbFirstTestSuite, lsbFirstTestSuite, bitOrderComparisonTestSuite, mixedSizeBitfieldsTestSuite, variableSizeBitfieldsTestSuite],
-    },
-    {
-      name: "Bitfields",
-      suites: [h264NALHeaderTestSuite, bitfield8TestSuite, bitfield16TestSuite, bitfieldLSBFirstTestSuite],
-    },
-    {
-      name: "Composite - Structs",
-      suites: [simpleStructTestSuite, mixedFieldsStructTestSuite, nestedStructTestSuite, deeplyNestedStructTestSuite],
-    },
-    {
-      name: "Composite - Optionals",
-      suites: [optionalUint64TestSuite, optionalWithBitFlagTestSuite, multipleOptionalsTestSuite, optionalStructTestSuite, optionalArrayTestSuite],
-    },
-    {
-      name: "Composite - Arrays",
-      suites: [fixedArrayTestSuite, lengthPrefixedArrayTestSuite, lengthPrefixedUint16ArrayTestSuite, nullTerminatedArrayTestSuite, nestedArrays2DTestSuite, emptyArraysAllTypesTestSuite, emptyUint16ArrayTestSuite, emptyUint32ArrayTestSuite, emptyUint64ArrayTestSuite, largeArrayLengthTestSuite],
-    },
-    {
-      name: "Composite - Field-Referenced Arrays",
-      suites: [simpleFieldReferencedArrayTestSuite, fieldReferencedUint16ArrayTestSuite, multipleFieldReferencedArraysTestSuite, bitfieldSubFieldReferencedArrayTestSuite, fieldReferencedStructArrayTestSuite],
-    },
-    {
-      name: "Composite - Arrays of Structs",
-      suites: [fixedArrayOfStructsTestSuite, lengthPrefixedArrayOfStructsTestSuite, nestedArrayOfStructsTestSuite, arrayOfStructsWithOptionalsTestSuite],
-    },
-    {
-      name: "Composite - Endianness Overrides",
-      suites: [mixedEndiannessTestSuite, cursedMixedEndiannessTestSuite, littleEndianWithBigOverrideTestSuite, floatEndiannessOverrideTestSuite, nestedStructEndiannessOverrideTestSuite, deeplyNestedEndiannessTestSuite],
-    },
-    {
-      name: "Composite - Strings (old array-based)",
-      suites: [stringTestSuite, shortStringTestSuite, cStringTestSuite, multipleStringsTestSuite],
-    },
-    {
-      name: "Composite - Strings (first-class)",
-      suites: [
-        lengthPrefixedUint8TestSuite,
-        lengthPrefixedUint16TestSuite,
-        lengthPrefixedUint32TestSuite,
-        nullTerminatedTestSuite,
-        fixedLengthTestSuite,
-        firstClassMultipleStringsTestSuite,
-        edgeCasesTestSuite
-      ],
-    },
-    {
-      name: "Composite - Conditionals",
-      suites: [conditionalFieldTestSuite, versionConditionalTestSuite, multipleConditionalsTestSuite, conditionalEqualityTestSuite, conditionalComparisonTestSuite, nestedFieldConditionalTestSuite, deeplyNestedConditionalTestSuite],
-    },
-    {
-      name: "Protocols - DNS Labels",
-      suites: [
-        dnsLabelEmptyTestSuite,
-        dnsLabelSingleCharTestSuite,
-        dnsLabelTypicalTestSuite,
-        dnsLabelWithHyphensTestSuite,
-        dnsLabelMaxLengthTestSuite,
-        dnsLabelMixedCaseTestSuite
-      ],
-    },
-    {
-      name: "Protocols - DNS Domain Names",
-      suites: [
-        dnsDomainSingleLabelTestSuite,
-        dnsDomainMultiLabelTestSuite,
-        dnsDomainRootTestSuite,
-        dnsDomainSpecialTestSuite
-      ],
-    },
-    {
-      name: "Protocols - DNS Compression",
-      suites: [
-        dnsCompressionFullDomainTestSuite,
-        dnsCompressionPointerTestSuite,
-        dnsCompressionMixedTestSuite,
-        dnsCompressionEdgeCasesTestSuite
-      ],
-    },
-    {
-      name: "Protocols - DNS Protocol (Full Frame)",
-      suites: [
-        dnsProtocolQueryTestSuite,
-        dnsProtocolResponseTestSuite
-      ],
-    },
-    {
-      name: "Protocols - DNS Complete (RFC 1035)",
-      suites: [
-        dnsCompleteQueryTestSuite,
-        dnsCompleteResponseTestSuite
-      ],
-    },
-  ];
-
-  // Filter test groups and suites
   let totalSuites = 0;
   let filteredSuites = 0;
 
-  for (const group of testGroups) {
-    // Filter suites within this group
-    const filteredGroupSuites = filter
-      ? group.suites.filter(suite => suite.name.toLowerCase().includes(filter.toLowerCase()))
-      : group.suites;
+  // Sort categories for consistent output
+  const sortedCategories = Array.from(allSuites.keys()).sort();
 
-    totalSuites += group.suites.length;
+  for (const category of sortedCategories) {
+    const suites = allSuites.get(category)!;
+
+    // Filter suites
+    const filteredGroupSuites = filter
+      ? suites.filter(suite => suite.name.toLowerCase().includes(filter.toLowerCase()))
+      : suites;
+
+    totalSuites += suites.length;
     filteredSuites += filteredGroupSuites.length;
 
-    // Skip empty groups
+    // Skip empty categories
     if (filteredGroupSuites.length === 0) continue;
 
     console.log(`\n${"━".repeat(80)}`);
-    console.log(`📦 ${group.name}`);
+    console.log(`📦 ${category}`);
     console.log(`${"━".repeat(80)}`);
 
     for (const suite of filteredGroupSuites) {
