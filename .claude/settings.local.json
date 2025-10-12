@@ -24,7 +24,10 @@
       "Bash(timeout:*)",
       "Read(//home/bart/Projects/zod/**)",
       "Bash(npm test:*)",
-      "Bash(bun:*)"
+      "Bash(bun:*)",
+      "Bash(git stash:*)",
+      "Bash(git -C /home/bart/Projects/superchat add .claude/settings.local.json)",
+      "Bash(git -C /home/bart/Projects/superchat commit -m \"chore: allow git stash commands\")"
     ],
     "deny": [],
     "ask": []
