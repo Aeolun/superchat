@@ -551,6 +551,12 @@ export const lengthPrefixedItemsOptionalTestSuite = defineTestSuite({
       endianness: "big_endian",
     },
     types: {
+      "Optional<T>": {
+        sequence: [
+          { name: "present", type: "uint8" },
+          { name: "value", type: "T", conditional: "present == 1" },
+        ]
+      },
       "OptionalItem": {
         sequence: [
           {
@@ -559,8 +565,7 @@ export const lengthPrefixedItemsOptionalTestSuite = defineTestSuite({
           },
           {
             name: "data",
-            type: "uint32",
-            optional: true,
+            type: "Optional<uint32>",
           }
         ]
       },
@@ -584,7 +589,7 @@ export const lengthPrefixedItemsOptionalTestSuite = defineTestSuite({
   test_cases: [
     {
       description: "Item without optional field",
-      value: { items: [{ id: 100, data: null }] },
+      value: { items: [{ id: 100, data: { present: 0 } }] },
       bytes: [
         0x01,       // Array length = 1
         0x03,       // Item 0 length = 3 bytes
@@ -594,7 +599,7 @@ export const lengthPrefixedItemsOptionalTestSuite = defineTestSuite({
     },
     {
       description: "Item with optional field",
-      value: { items: [{ id: 200, data: 0xDEADBEEF }] },
+      value: { items: [{ id: 200, data: { present: 1, value: 0xDEADBEEF } }] },
       bytes: [
         0x01,       // Array length = 1
         0x07,       // Item 0 length = 7 bytes
@@ -607,8 +612,8 @@ export const lengthPrefixedItemsOptionalTestSuite = defineTestSuite({
       description: "Mix of items with and without optional",
       value: {
         items: [
-          { id: 1, data: null },
-          { id: 2, data: 0x12345678 }
+          { id: 1, data: { present: 0 } },
+          { id: 2, data: { present: 1, value: 0x12345678 } }
         ]
       },
       bytes: [

@@ -1887,8 +1887,8 @@ function generateEncodeArray(
 ): string {
   let code = "";
 
-  // Write length prefix if length_prefixed
-  if (field.kind === "length_prefixed") {
+  // Write length prefix if length_prefixed or length_prefixed_items
+  if (field.kind === "length_prefixed" || field.kind === "length_prefixed_items") {
     const lengthType = field.length_type;
     switch (lengthType) {
       case "uint8":
@@ -1924,13 +1924,102 @@ function generateEncodeArray(
   }
 
   code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
-  code += generateEncodeFieldCoreImpl(
-    field.items as Field,
-    schema,
-    globalEndianness,
-    itemVar,
-    indent + "  "
-  );
+
+  // Write item length prefix if length_prefixed_items
+  if (field.kind === "length_prefixed_items" && field.item_length_type) {
+    const itemLengthType = field.item_length_type;
+
+    // Check if this is a fixed-size primitive type
+    const itemType = field.items?.type;
+    const isFixedSizePrimitive = ['uint8', 'int8', 'uint16', 'int16', 'uint32', 'int32', 'float32', 'uint64', 'int64', 'float64'].includes(itemType);
+
+    if (isFixedSizePrimitive) {
+      // For fixed-size primitives, we can write the size directly as a constant
+      const itemSize = getItemSize(field.items, schema, globalEndianness);
+      switch (itemLengthType) {
+        case "uint8":
+          code += `${indent}  this.writeUint8(${itemSize});\n`;
+          break;
+        case "uint16":
+          code += `${indent}  this.writeUint16(${itemSize}, "${globalEndianness}");\n`;
+          break;
+        case "uint32":
+          code += `${indent}  this.writeUint32(${itemSize}, "${globalEndianness}");\n`;
+          break;
+        case "uint64":
+          code += `${indent}  this.writeUint64(BigInt(${itemSize}), "${globalEndianness}");\n`;
+          break;
+      }
+    } else {
+      // For variable-length types, encode to temporary encoder and measure
+      code += `${indent}  // Encode item to temporary encoder to measure size\n`;
+      code += `${indent}  const ${itemVar}_temp = new BitStreamEncoder("${globalEndianness === 'big_endian' ? 'msb_first' : 'lsb_first'}");\n`;
+
+      // Generate inline encoding by reusing the encode logic
+      // We'll encode to temp encoder, then copy the bytes
+      const tempEncoding = generateEncodeFieldCoreImpl(
+        field.items as Field,
+        schema,
+        globalEndianness,
+        itemVar,
+        indent + "  "
+      );
+
+      // Replace 'this.' with '${itemVar}_temp.' in the generated encoding code
+      const modifiedEncoding = tempEncoding.replace(/\bthis\./g, `${itemVar}_temp.`);
+      code += modifiedEncoding;
+
+      code += `${indent}  const ${itemVar}_bytes = ${itemVar}_temp.finish();\n`;
+      code += `${indent}  const ${itemVar}_length = ${itemVar}_bytes.length;\n`;
+
+      // Validate size doesn't exceed max for item_length_type
+      const maxSizes: {[key: string]: number} = {
+        'uint8': 255,
+        'uint16': 65535,
+        'uint32': 4294967295,
+        'uint64': Number.MAX_SAFE_INTEGER
+      };
+      const maxSize = maxSizes[itemLengthType];
+      code += `${indent}  if (${itemVar}_length > ${maxSize}) {\n`;
+      code += `${indent}    throw new Error(\`Item size \${${itemVar}_length} exceeds maximum ${maxSize} bytes for ${itemLengthType}\`);\n`;
+      code += `${indent}  }\n`;
+
+      // Write item length
+      switch (itemLengthType) {
+        case "uint8":
+          code += `${indent}  this.writeUint8(${itemVar}_length);\n`;
+          break;
+        case "uint16":
+          code += `${indent}  this.writeUint16(${itemVar}_length, "${globalEndianness}");\n`;
+          break;
+        case "uint32":
+          code += `${indent}  this.writeUint32(${itemVar}_length, "${globalEndianness}");\n`;
+          break;
+        case "uint64":
+          code += `${indent}  this.writeUint64(BigInt(${itemVar}_length), "${globalEndianness}");\n`;
+          break;
+      }
+
+      // Write item bytes
+      code += `${indent}  for (const byte of ${itemVar}_bytes) {\n`;
+      code += `${indent}    this.writeUint8(byte);\n`;
+      code += `${indent}  }\n`;
+
+      // Continue to next iteration (don't encode again)
+      code += `${indent}  continue;\n`;
+    }
+  }
+
+  // Only encode if we didn't already handle it in length_prefixed_items above
+  if (!(field.kind === "length_prefixed_items" && field.item_length_type && !['uint8', 'int8', 'uint16', 'int16', 'uint32', 'int32', 'float32', 'uint64', 'int64', 'float64'].includes(field.items?.type))) {
+    code += generateEncodeFieldCoreImpl(
+      field.items as Field,
+      schema,
+      globalEndianness,
+      itemVar,
+      indent + "  "
+    );
+  }
 
   // Check if this is a terminal variant (for null_terminated arrays with discriminated unions)
   if (hasTerminalVariants) {
@@ -2511,8 +2600,8 @@ function generateDecodeArray(
   const target = getTargetPath(fieldName);
   let code = `${indent}${target} = [];\n`;
 
-  // Read length if length_prefixed
-  if (field.kind === "length_prefixed") {
+  // Read length if length_prefixed or length_prefixed_items
+  if (field.kind === "length_prefixed" || field.kind === "length_prefixed_items") {
     const lengthType = field.length_type;
     let lengthRead = "";
     switch (lengthType) {
@@ -2533,6 +2622,30 @@ function generateDecodeArray(
     const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
     code += `${indent}const ${lengthVarName} = ${lengthRead};\n`;
     code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
+
+    // Read item length prefix if length_prefixed_items
+    if (field.kind === "length_prefixed_items" && field.item_length_type) {
+      const itemLengthType = field.item_length_type;
+      const itemLengthVarName = fieldName.replace(/\./g, "_") + "_item_length";
+      let itemLengthRead = "";
+      switch (itemLengthType) {
+        case "uint8":
+          itemLengthRead = "this.readUint8()";
+          break;
+        case "uint16":
+          itemLengthRead = `this.readUint16("${globalEndianness}")`;
+          break;
+        case "uint32":
+          itemLengthRead = `this.readUint32("${globalEndianness}")`;
+          break;
+        case "uint64":
+          itemLengthRead = `Number(this.readUint64("${globalEndianness}"))`;
+          break;
+      }
+      code += `${indent}  const ${itemLengthVarName} = ${itemLengthRead};\n`;
+      // Note: We read the item length but don't use it for validation yet
+      // In a real implementation, you might validate that the item size matches expectations
+    }
   } else if (field.kind === "fixed") {
     code += `${indent}for (let i = 0; i < ${field.length}; i++) {\n`;
   } else if (field.kind === "field_referenced") {
@@ -2620,6 +2733,34 @@ function generateDecodeArray(
 function getTargetPath(fieldName: string): string {
   // Array item variables contain '_item' and should not be prefixed with 'value.'
   return fieldName.includes("_item") ? fieldName : `value.${fieldName}`;
+}
+
+/**
+ * Calculate the size in bytes of an item type
+ * Used for length_prefixed_items arrays
+ */
+function getItemSize(itemDef: any, schema: BinarySchema, globalEndianness: Endianness): number {
+  const itemType = itemDef.type;
+
+  // Primitive types
+  switch (itemType) {
+    case "uint8":
+    case "int8":
+      return 1;
+    case "uint16":
+    case "int16":
+      return 2;
+    case "uint32":
+    case "int32":
+    case "float32":
+      return 4;
+    case "uint64":
+    case "int64":
+    case "float64":
+      return 8;
+    default:
+      throw new Error(`length_prefixed_items: Cannot determine size for item type "${itemType}". Only fixed-size primitive types are supported.`);
+  }
 }
 
 /**

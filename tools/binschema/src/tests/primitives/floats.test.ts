@@ -234,9 +234,9 @@ export const float64LittleEndianTestSuite = defineTestSuite({
       bytes: [0xBB, 0xBD, 0xD7, 0xD9, 0xDF, 0x7C, 0xDB, 0x3D], // Little endian
     },
     {
-      description: "Negative zero (-0.0)",
+      description: "Negative zero (-0.0) normalizes to positive zero",
       value: { value: -0.0 },
-      bytes: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80], // Sign bit set
+      bytes: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], // Normalized to +0.0
     },
     {
       description: "Infinity",

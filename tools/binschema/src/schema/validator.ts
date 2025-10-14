@@ -22,6 +22,15 @@ export interface ValidationResult {
 }
 
 /**
+ * Built-in types that don't need to be defined in schema.types
+ */
+const BUILT_IN_TYPES = [
+  "bit", "int", "uint8", "uint16", "uint32", "uint64",
+  "int8", "int16", "int32", "int64", "float32", "float64",
+  "string", "array", "bitfield", "discriminated_union", "pointer"
+];
+
+/**
  * Check if a type is a composite (has sequence/fields) or a type alias
  */
 function isTypeAlias(typeDef: TypeDef): boolean {
@@ -595,18 +604,12 @@ function validateField(
   }
 
   // Check type references exist
-  const builtInTypes = [
-    "bit", "int", "uint8", "uint16", "uint32", "uint64",
-    "int8", "int16", "int32", "int64", "float32", "float64",
-    "array", "bitfield", "discriminated_union", "pointer"
-  ];
-
   // Allow 'T' as a type parameter in generic templates (don't validate it as a type reference)
   if (fieldType === 'T') {
     return;
   }
 
-  if (!builtInTypes.includes(fieldType)) {
+  if (!BUILT_IN_TYPES.includes(fieldType)) {
     // This is a type reference - check if it exists
     const referencedType = extractTypeReference(fieldType);
 
@@ -626,7 +629,7 @@ function validateField(
 
         // Validate the type argument (allow 'T' here too)
         const argType = extractTypeReference(typeArg);
-        if (argType !== 'T' && !builtInTypes.includes(argType) && !schema.types[argType]) {
+        if (argType !== 'T' && !BUILT_IN_TYPES.includes(argType) && !schema.types[argType]) {
           errors.push({
             path: `${path} (${field.name})`,
             message: `Type argument '${typeArg}' in '${fieldType}' not found in schema.types`,
@@ -690,18 +693,12 @@ function validateElementType(
   }
 
   // Check type references exist
-  const builtInTypes = [
-    "bit", "int", "uint8", "uint16", "uint32", "uint64",
-    "int8", "int16", "int32", "int64", "float32", "float64",
-    "array", "bitfield", "discriminated_union", "pointer"
-  ];
-
   // Allow 'T' as a type parameter in generic templates
   if (elementType === 'T') {
     return;
   }
 
-  if (!builtInTypes.includes(elementType)) {
+  if (!BUILT_IN_TYPES.includes(elementType)) {
     // This is a type reference - check if it exists
     const referencedType = extractTypeReference(elementType);
 
@@ -721,7 +718,7 @@ function validateElementType(
 
         // Validate the type argument (allow 'T' here too)
         const argType = extractTypeReference(typeArg);
-        if (argType !== 'T' && !builtInTypes.includes(argType) && !schema.types[argType]) {
+        if (argType !== 'T' && !BUILT_IN_TYPES.includes(argType) && !schema.types[argType]) {
           errors.push({
             path,
             message: `Type argument '${typeArg}' in '${elementType}' not found in schema.types`,
@@ -809,17 +806,11 @@ function findCircularDependency(
     const fieldType = field.type;
 
     // Skip built-in types
-    const builtInTypes = [
-      "bit", "int", "uint8", "uint16", "uint32", "uint64",
-      "int8", "int16", "int32", "int64", "float32", "float64",
-      "array", "bitfield", "discriminated_union", "pointer"
-    ];
-
-    if (builtInTypes.includes(fieldType)) {
+    if (BUILT_IN_TYPES.includes(fieldType)) {
       // Check array items recursively
       if (fieldType === "array" && "items" in field && field.items) {
         const itemType = (field.items as any).type;
-        if (itemType && !builtInTypes.includes(itemType)) {
+        if (itemType && !BUILT_IN_TYPES.includes(itemType)) {
           const cycle = findCircularDependency(itemType, schema, new Set(visited), [...path]);
           if (cycle) return cycle;
         }
@@ -828,7 +819,7 @@ function findCircularDependency(
       // Check discriminated union variants recursively
       if (fieldType === "discriminated_union" && "variants" in field && Array.isArray(field.variants)) {
         for (const variant of field.variants) {
-          if (variant.type && !builtInTypes.includes(variant.type)) {
+          if (variant.type && !BUILT_IN_TYPES.includes(variant.type)) {
             const cycle = findCircularDependency(variant.type, schema, new Set(visited), [...path]);
             if (cycle) return cycle;
           }
@@ -838,7 +829,7 @@ function findCircularDependency(
       // Check pointer target type recursively
       if (fieldType === "pointer" && "target_type" in field) {
         const targetType = (field as any).target_type;
-        if (targetType && !builtInTypes.includes(targetType)) {
+        if (targetType && !BUILT_IN_TYPES.includes(targetType)) {
           const cycle = findCircularDependency(targetType, schema, new Set(visited), [...path]);
           if (cycle) return cycle;
         }

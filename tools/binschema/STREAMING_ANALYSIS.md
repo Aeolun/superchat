@@ -19,19 +19,37 @@ console.log(message.items); // All items available
 
 ## Proposed Streaming Model
 
-Enable **network streaming + incremental decoding** for top-level arrays where:
+Enable **network streaming + incremental decoding** where:
 
 1. Binary data arrives incrementally from network (ReadableStream)
-2. Decoder yields items as soon as they're complete
-3. User processes items while rest of data still downloading
+2. Decoder yields fields/items as soon as they're complete
+3. User processes data while rest still downloading
 
-**Example desired flow:**
+**Example: Streaming array items:**
 ```typescript
 // Network streaming with async iterator
 const response = await fetch('/data.bin');
-for await (const item of decodeMessageStream(response.body)) {
-  console.log(item); // Each item yielded as network data arrives
+for await (const item of decodeMessageArrayStream(response.body)) {
+  console.log(item); // Each Message yielded as it arrives
   // Don't need to wait for entire response!
+}
+```
+
+**Example: Streaming mixed fields (union types):**
+```typescript
+// Stream a type with header, array, and footer
+for await (const event of decodeComplexMessageStream(response.body)) {
+  switch (event.type) {
+    case 'header':
+      console.log('Header:', event.value);
+      break;
+    case 'item':
+      console.log('Item:', event.value);
+      break;
+    case 'footer':
+      console.log('Footer:', event.value);
+      break;
+  }
 }
 ```
 
@@ -92,31 +110,52 @@ export function* decodeMessageStream(stream: BitStreamDecoder): Generator<Item, 
 - **Option B**: Only generate streaming variant (breaking change, requires collecting items manually)
 - **Option C**: Add configuration option to choose batch vs streaming per-type
 
-#### 2. **Non-Array Fields**
+#### 2. **Mixed Field Types - Solved with Union Types**
 
-Streaming only makes sense for **top-level arrays**. Messages with multiple fields need special handling:
+Messages with multiple fields can stream **everything** using discriminated unions:
 
 ```typescript
-interface Message {
-  header: Header;        // Must decode first (single value)
-  items: Item[];        // Can stream these
-  footer: Footer;       // Must decode after items (single value)
+interface ComplexMessage {
+  header: Header;        // Decoded first
+  items: Item[];        // Streamed as they arrive
+  footer: Footer;       // Decoded last
+}
+
+// Generated streaming decoder yields union type
+type ComplexMessageEvent =
+  | { type: 'header', value: Header }
+  | { type: 'item', value: Item }
+  | { type: 'footer', value: Footer };
+
+async function* decodeComplexMessageStream(
+  reader: ReadableStreamDefaultReader
+): AsyncGenerator<ComplexMessageEvent> {
+  // Decode header first
+  const headerBytes = await readExactly(reader, headerSize);
+  const header = decodeHeader(new BitStreamDecoder(headerBytes));
+  yield { type: 'header', value: header };
+
+  // Stream array items
+  const itemCount = header.itemCount; // or read separately
+  for (let i = 0; i < itemCount; i++) {
+    const itemBytes = await readItemBytes(reader);
+    const item = decodeItem(new BitStreamDecoder(itemBytes));
+    yield { type: 'item', value: item };
+  }
+
+  // Decode footer last
+  const footerBytes = await readExactly(reader, footerSize);
+  const footer = decodeFooter(new BitStreamDecoder(footerBytes));
+  yield { type: 'footer', value: footer };
 }
 ```
 
-**Problem**: How to yield items while also returning header/footer?
-
-**Possible solution**: Separate header/items/footer into different decode calls:
-
-```typescript
-const header = decodeMessageHeader(stream);
-for (const item of decodeMessageItems(stream)) {
-  process(item);
-}
-const footer = decodeMessageFooter(stream);
-```
-
-But this breaks encapsulation - user must know message structure.
+**Advantages:**
+- ✅ **Everything can stream** - not just simple arrays
+- ✅ Type-safe with discriminated unions
+- ✅ Consumer knows what type each event is
+- ✅ Encapsulation preserved - decoder handles structure
+- ✅ Works with any field ordering
 
 #### 3. **Null-Terminated Arrays**
 
@@ -134,22 +173,30 @@ This still works with streaming - just yield items until terminator found.
 
 #### 4. **Nested Structures**
 
-If array items contain nested arrays, where do we stream?
+For nested arrays, the outer array's streaming decoder yields complete inner arrays:
 
 ```typescript
 interface Message {
-  threads: {           // Top-level array (stream here?)
+  threads: {           // Top-level array
     id: number;
-    messages: {        // Nested array (stream here too?)
+    messages: {        // Nested array
       text: string;
     }[];
   }[];
 }
+
+// Streaming decoder yields complete Thread objects (with all messages loaded)
+async function* decodeMessageStream(reader): AsyncGenerator<Thread> {
+  const threadCount = await readArrayLength(reader);
+  for (let i = 0; i < threadCount; i++) {
+    const threadBytes = await readItemBytes(reader);
+    const thread = decodeThread(new BitStreamDecoder(threadBytes));
+    yield thread; // Thread contains all its messages
+  }
+}
 ```
 
-**Decision needed**: Stream only top-level arrays, or allow nested streaming?
-
-Nested streaming gets complex - would need multi-level callbacks/generators.
+**Rationale**: Keep streaming simple - stream at one level only. Inner arrays are decoded synchronously as part of the item.
 
 #### 5. **Error Handling**
 
@@ -398,8 +445,12 @@ For arrays without per-item lengths (existing `length_prefixed`, `fixed`, `null_
 
 **Error handling with error codes (cross-language compatible):**
 
+**Design Rationale: Why Error Codes?**
+
+BinSchema is designed to be implemented in multiple languages (TypeScript, Go, Rust, etc.). Using error codes in decoder state ensures **identical core logic** across all implementations:
+
 ```typescript
-// BitStreamDecoder sets error code when hitting EOF
+// TypeScript - uses exceptions idiomatically
 class BitStreamDecoder {
   lastErrorCode: string | null = null;
 
@@ -411,11 +462,61 @@ class BitStreamDecoder {
     this.lastErrorCode = null; // Clear on success
     return this.bytes[this.byteOffset++];
   }
-  // ... other read methods set lastErrorCode similarly
+}
+
+// Greedy buffering checks error code (same logic in all languages)
+try {
+  const item = decodeItem(stream);
+  if (stream.lastErrorCode === 'INCOMPLETE_DATA') {
+    // Incomplete item - buffer and wait for more data
+    buffer = buffer.slice(lastSuccessfulPosition);
+    continue;
+  }
+  items.push(item);
+} catch (e) {
+  // Real decode error - not incomplete data
+  throw new Error(`Decode failed: ${e.message}`);
 }
 ```
 
-**Implementation:**
+```go
+// Go - uses error returns idiomatically (nearly identical logic!)
+type BitStreamDecoder struct {
+    LastErrorCode *string
+    // ...
+}
+
+func (d *BitStreamDecoder) ReadUint8() (uint8, error) {
+    if d.byteOffset >= len(d.bytes) {
+        errCode := "INCOMPLETE_DATA"
+        d.LastErrorCode = &errCode
+        return 0, errors.New("unexpected end of stream")
+    }
+    d.LastErrorCode = nil // Clear on success
+    return d.bytes[d.byteOffset], nil
+}
+
+// Greedy buffering (same logic, different syntax)
+item, err := decodeItem(stream)
+if stream.LastErrorCode != nil && *stream.LastErrorCode == "INCOMPLETE_DATA" {
+    // Incomplete item - buffer and wait for more data
+    buffer = buffer[lastSuccessfulPosition:]
+    continue
+}
+if err != nil {
+    return fmt.Errorf("decode failed: %w", err)
+}
+items = append(items, item)
+```
+
+**Key Benefits:**
+1. ✅ **Core algorithm is identical** - copy-paste implementation between languages
+2. ✅ **Language generators add syntax sugar** - throw vs return, nil vs null
+3. ✅ **Cross-language compatibility** - same error codes, same logic
+4. ✅ **Bug fixes transfer directly** - fix once, apply everywhere
+5. ✅ **Tests check error codes** - language-agnostic test format
+
+**Complete Implementation:**
 ```typescript
 async function* decodeArrayGreedy<T>(
   reader: ReadableStreamDefaultReader,
@@ -431,51 +532,65 @@ async function* decodeArrayGreedy<T>(
     const { value, done } = await reader.read();
     if (value) buffer = concat(buffer, value);
 
-    // Decode as many items as possible
+    // Decode as many items as possible from current buffer
     const stream = new BitStreamDecoder(buffer);
     const itemsThisChunk: T[] = [];
 
-    let lastDecodedPosition = 0;
+    // Track last successful position for buffering incomplete items
+    let lastSuccessfulPosition = 0;
 
-    try {
-      while (itemsDecoded < arrayLength) {
-        lastDecodedPosition = stream.position;
+    while (itemsDecoded < arrayLength) {
+      // Save position before attempting decode
+      lastSuccessfulPosition = stream.position;
+
+      try {
         const item = itemDecoder(stream);
 
-        // Check if decoder made progress
-        if (stream.position === lastDecodedPosition) {
+        // Verify decoder made progress (prevent infinite loops)
+        if (stream.position === lastSuccessfulPosition) {
           throw new Error("Decoder stuck: no bytes consumed");
         }
 
+        // Check if decode succeeded but hit incomplete data
+        if (stream.lastErrorCode === 'INCOMPLETE_DATA') {
+          // Item decode succeeded but read ahead hit EOF
+          // This shouldn't happen with proper decoder design, but handle it
+          buffer = buffer.slice(lastSuccessfulPosition);
+          break; // Wait for more data
+        }
+
+        // Successful decode
         itemsThisChunk.push(item);
         itemsDecoded++;
         stream.lastErrorCode = null; // Clear error state
-      }
-    } catch (e) {
-      // Check error code (cross-language compatible)
-      if (stream.lastErrorCode === 'INCOMPLETE_DATA') {
-        // Incomplete item - need more bytes
-        // Keep unconsumed bytes in buffer (from last successful position)
-        buffer = buffer.slice(lastDecodedPosition);
-      } else {
-        // Real decode error - wrap with context for debugging
-        throw new Error(
-          `Decode failed at item ${itemsDecoded} of ${arrayLength} ` +
-          `(byte offset ${stream.position}): ${e.message}`
-        );
+
+      } catch (e) {
+        // Check if this was an incomplete data error
+        if (stream.lastErrorCode === 'INCOMPLETE_DATA') {
+          // Incomplete item - rewind to last successful position
+          buffer = buffer.slice(lastSuccessfulPosition);
+          break; // Wait for more network data
+        } else {
+          // Real decode error - wrap with context for debugging
+          throw new Error(
+            `Decode failed at item ${itemsDecoded} of ${arrayLength} ` +
+            `(byte offset ${stream.position}): ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
       }
     }
 
     // Yield all items decoded in this chunk
     for (const item of itemsThisChunk) yield item;
 
+    // Check if stream ended
     if (done) {
       if (itemsDecoded < arrayLength) {
         throw new Error(
           `Stream ended prematurely: decoded ${itemsDecoded} of ${arrayLength} items`
         );
       }
-      break;
+      break; // All items decoded successfully
     }
   }
 }
@@ -501,6 +616,113 @@ async function* decodeArrayGreedy<T>(
 - Existing protocols can't change wire format
 - Items have predictable sizes (fixed-size primitives/structs)
 - Backward compatibility required
+
+## Code Generation Rules
+
+**When to Generate Streaming Decoders:**
+
+Generate streaming decoders for **all types** - streaming is not limited to simple arrays!
+
+### Simple Array Types
+
+For types containing a single array field:
+
+```typescript
+type MessageArray = {
+  messages: Message[];
+}
+```
+
+Generate streaming decoder that yields **array items directly**:
+
+```typescript
+async function* decodeMessageArrayStream(
+  reader: ReadableStreamDefaultReader
+): AsyncGenerator<Message> {
+  // Yield individual Message objects
+}
+```
+
+**Test Expectation**: Test runner collects yielded items and compares with `testCase.value.messages`.
+
+### Mixed Field Types
+
+For types with multiple fields (header, array, footer):
+
+```typescript
+type ComplexMessage = {
+  header: Header;
+  items: Item[];
+  footer: Footer;
+}
+```
+
+Generate discriminated union type and streaming decoder:
+
+```typescript
+type ComplexMessageEvent =
+  | { type: 'header', value: Header }
+  | { type: 'item', value: Item }
+  | { type: 'footer', value: Footer };
+
+async function* decodeComplexMessageStream(
+  reader: ReadableStreamDefaultReader
+): AsyncGenerator<ComplexMessageEvent> {
+  // Yield header, then items, then footer
+}
+```
+
+### Simple Structs (No Arrays)
+
+For types with no array fields:
+
+```typescript
+type Point = {
+  x: number;
+  y: number;
+}
+```
+
+**Option 1**: Don't generate streaming decoder (use batch decoder only)
+**Option 2**: Generate streaming decoder that yields single value:
+
+```typescript
+async function* decodePointStream(
+  reader: ReadableStreamDefaultReader
+): AsyncGenerator<Point> {
+  const bytes = await readExactly(reader, pointSize);
+  yield decodePoint(new BitStreamDecoder(bytes));
+}
+```
+
+**Recommendation**: Option 1 (skip streaming for simple structs) - minimal value, adds complexity.
+
+### Nested Arrays
+
+For nested array structures:
+
+```typescript
+type Message = {
+  threads: Thread[];  // Each thread contains message array
+}
+
+type Thread = {
+  id: number;
+  messages: Message[];
+}
+```
+
+Stream at the **outermost level only**. Inner arrays are decoded synchronously:
+
+```typescript
+async function* decodeMessageStream(
+  reader: ReadableStreamDefaultReader
+): AsyncGenerator<Thread> {
+  // Each yielded Thread has all its messages already loaded
+}
+```
+
+**Rationale**: Multi-level streaming adds complexity without clear benefit. User can stream outer array and process inner arrays in memory.
 
 ## Implementation Plan
 
@@ -606,8 +828,15 @@ Test cases can optionally specify `chunkSizes` array to trigger streaming tests:
 When `chunkSizes` is present:
 1. Test runner creates mock `ReadableStream` that delivers bytes in specified chunks
 2. Calls generated `decode{TypeName}Stream()` async generator
-3. Collects all yielded items
-4. Compares with expected value
+3. Collects all yielded items into an array
+4. **For simple array types**: Unwraps the field (e.g., `testCase.value.messages`) and compares with yielded items
+5. **For mixed field types**: Reconstructs the object from yielded union events and compares with `testCase.value`
+6. **For simple structs**: Compares single yielded value with `testCase.value`
+
+**Test runner behavior (already implemented):**
+- Skips streaming test if `decode{TypeName}Stream()` doesn't exist yet (TDD approach)
+- Validates that `chunkSizes` sum to `bytes.length` (catches test mistakes)
+- Mock `ReadableStream` repeats chunk pattern if needed (e.g., `[1]` means every byte is a separate chunk)
 
 This automatically tests that the decoder handles:
 - Items split across chunk boundaries
@@ -615,34 +844,44 @@ This automatically tests that the decoder handles:
 - Incremental decoding
 - Error handling mid-stream
 
-## Technical Review Responses
+## Design Decisions Summary
 
-### Architect Concerns Addressed:
+### Key Decisions Made:
 
-1. **✅ Error handling fragility** → Fixed with error codes
-   - Use `lastErrorCode` property on `BitStreamDecoder`
-   - Cross-language compatible (Go, TypeScript, etc.)
-   - Clear distinction between `INCOMPLETE_DATA` and real decode errors
+1. **✅ Error codes for cross-language portability**
+   - Use `lastErrorCode` property in `BitStreamDecoder` state
+   - TypeScript throws exceptions (idiomatic) but sets error code first
+   - Go returns errors (idiomatic) but checks error code for control flow
+   - **Same core logic** across all languages - implementation is copy-paste portable
+   - Tests check error codes, not exception types (language-agnostic)
 
-2. **✅ Missing streaming tests** → Comprehensive edge case suite added
+2. **✅ Union types enable streaming everything**
+   - Not limited to simple arrays
+   - Mixed field types work via discriminated unions (`{ type: 'header', value: ... }`)
+   - Consumer gets type-safe events with clear semantics
+   - Encapsulation preserved - decoder handles structure
+
+3. **✅ Stream at one level only (no nested streaming)**
+   - Outer array streams items incrementally
+   - Inner arrays decoded synchronously as part of item
+   - Simpler implementation, clear semantics
+   - User can still process nested data in memory
+
+4. **✅ Comprehensive edge case tests**
    - `chunked-network.test.ts` tests real network conditions
    - Items split across chunks (critical for web clients)
    - Network errors, decode errors, backpressure handling
+   - Tests define API first (TDD approach)
 
-3. **✅ `item_length_type` defaults** → Made explicitly required
-   - Wire format specs should be explicit, no magic defaults
+5. **✅ `item_length_type` required field (no defaults)**
+   - Wire format specs should be explicit
    - Clear documentation of size constraints
+   - Prevents accidental protocol changes
 
-4. **✅ Compatibility concern** → Clarified in analysis
-   - Array length is still present (same as `length_prefixed`)
-   - Old decoders fail because they don't expect per-item lengths
-   - But wire format remains self-describing
-
-5. **✅ Encoding overhead** → One-pass encoding clarified
+6. **✅ One-pass encoding (no performance penalty)**
    - Encode item once to temp buffer
    - Measure buffer size
    - Write length + bytes
-   - No "two-pass" (not encoding twice)
    - For fixed-size types, could optimize to calculate size without buffer
 
 ## Conclusion
@@ -662,10 +901,11 @@ This automatically tests that the decoder handles:
    - Good for protocols that can't change wire format
 
 **Key architectural insights:**
-- Streaming layer wraps existing synchronous decoder (no rewrite needed)
-- Error codes for cross-language compatibility (not exception types)
-- Network I/O and decoding remain cleanly separated
-- Edge case tests critical for production reliability (web clients have unpredictable chunk boundaries)
+- **Cross-language portability**: Error codes in decoder state enable identical logic across TypeScript/Go/Rust
+- **Streaming layer wraps synchronous decoder**: No rewrite needed, clean separation of concerns
+- **Network I/O and decoding separated**: ReadableStream layer + synchronous BitStreamDecoder
+- **Union types enable streaming everything**: Not just arrays - mixed fields work via discriminated unions
+- **Edge case tests critical**: Web clients have unpredictable chunk boundaries, tests verify correctness
 
 **Estimated effort:**
 - Phase 1 (`length_prefixed_items`): ~2-3 days (schema, codegen, tests)

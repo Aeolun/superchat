@@ -142,6 +142,7 @@ const Float64FieldSchema = z.object({
 const ArrayKindSchema = z.enum([
   "fixed",           // Fixed size array
   "length_prefixed", // Length prefix, then elements
+  "length_prefixed_items", // Length prefix, then per-item length prefix + elements
   "null_terminated", // Elements until null/zero terminator
   "field_referenced", // Length comes from a field decoded earlier
 ]);
@@ -293,6 +294,7 @@ const ArrayElementSchema = z.object({
   },
   length: z.number().int().min(1).optional(),
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(),
+  item_length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed_items: per-item length prefix type
   length_field: z.string().optional(), // For field_referenced: field name to read length from (supports dot notation)
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
@@ -302,11 +304,12 @@ const ArrayElementSchema = z.object({
   (data) => {
     if (data.kind === "fixed") return data.length !== undefined;
     if (data.kind === "length_prefixed") return data.length_type !== undefined;
+    if (data.kind === "length_prefixed_items") return data.length_type !== undefined && data.item_length_type !== undefined;
     if (data.kind === "field_referenced") return data.length_field !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', field_referenced arrays require 'length_field'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field'",
   }
 );
 
@@ -372,6 +375,7 @@ const ArrayFieldSchema = z.object({
   },
   length: z.number().int().min(1).optional(), // For fixed arrays
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
+  item_length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed_items: per-item length prefix type
   length_field: z.string().optional(), // For field_referenced: field name to read length from (supports dot notation like "flags.opcode")
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
@@ -381,11 +385,12 @@ const ArrayFieldSchema = z.object({
   (data) => {
     if (data.kind === "fixed") return data.length !== undefined;
     if (data.kind === "length_prefixed") return data.length_type !== undefined;
+    if (data.kind === "length_prefixed_items") return data.length_type !== undefined && data.item_length_type !== undefined;
     if (data.kind === "field_referenced") return data.length_field !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', field_referenced arrays require 'length_field'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field'",
   }
 );
 

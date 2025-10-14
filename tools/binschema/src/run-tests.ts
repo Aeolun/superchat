@@ -1,28 +1,110 @@
 /**
  * Comprehensive test runner with automatic test discovery
  *
- * Automatically finds and runs all *.test.ts files
+ * Automatically exports TypeScript tests to JSON, then runs them
  */
 
 import { runTestSuite, printTestResults, TestResult } from "./test-runner/runner.js";
-import { readdirSync, statSync } from "fs";
-import { join, relative } from "path";
+import { readdirSync, statSync, readFileSync, mkdirSync, writeFileSync, copyFileSync } from "fs";
+import { join, relative, dirname } from "path";
 import { fileURLToPath } from "url";
-import { dirname } from "path";
+import { TestSuite } from "./schema/test-schema.js";
+import JSON5 from "json5";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-interface TestSuite {
-  name: string;
-  description: string;
-  schema: any;
-  test_type: string;
-  test_cases: any[];
+/**
+ * Export TypeScript tests to JSON (inline implementation)
+ */
+async function exportTestsToJson(): Promise<void> {
+  const testsDir = join(__dirname, 'tests');
+  const outputDir = join(__dirname, '../tests-json');
+
+  // Create output directory
+  mkdirSync(outputDir, { recursive: true });
+
+  // Find all .test.ts files
+  const testFiles = findTestSourceFiles(testsDir);
+
+  let totalSuites = 0;
+
+  for (const testFile of testFiles) {
+    const suites = await loadTestSuitesFromTypeScript(testFile);
+
+    for (const suite of suites) {
+      const relativeToTests = relative(testsDir, dirname(testFile));
+      const outputPath = join(outputDir, relativeToTests, `${suite.name}.test.json`);
+
+      mkdirSync(dirname(outputPath), { recursive: true });
+
+      // Use JSON5 to support Infinity, -Infinity, NaN
+      const json = JSON5.stringify(suite, (key, value) => {
+        if (typeof value === 'bigint') {
+          return value.toString() + 'n';
+        }
+        return value;
+      }, 2);
+
+      writeFileSync(outputPath, json, 'utf-8');
+      totalSuites++;
+    }
+  }
+
+  console.log(`Exported ${totalSuites} test suites to JSON`);
 }
 
 /**
- * Recursively find all *.test.ts and *.test.js files in a directory
+ * Find all *.test.ts files
+ */
+function findTestSourceFiles(dir: string): string[] {
+  const files: string[] = [];
+
+  try {
+    const entries = readdirSync(dir);
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+
+      if (stat.isDirectory()) {
+        files.push(...findTestSourceFiles(fullPath));
+      } else if (entry.endsWith('.test.ts')) {
+        files.push(fullPath);
+      }
+    }
+  } catch (err) {
+    // Ignore directories we can't read
+  }
+
+  return files;
+}
+
+/**
+ * Load test suites from TypeScript module
+ */
+async function loadTestSuitesFromTypeScript(filePath: string): Promise<TestSuite[]> {
+  const relativePath = './' + relative(__dirname, filePath).replace(/\.ts$/, '.js');
+
+  try {
+    const module = await import(relativePath);
+
+    const testSuites: TestSuite[] = [];
+    for (const [key, value] of Object.entries(module)) {
+      if (key.endsWith('TestSuite') && value && typeof value === 'object') {
+        testSuites.push(value as TestSuite);
+      }
+    }
+
+    return testSuites;
+  } catch (err) {
+    console.error(`Failed to load test file ${filePath}:`, err);
+    return [];
+  }
+}
+
+/**
+ * Recursively find all *.test.json files in a directory
  */
 function findTestFiles(dir: string): string[] {
   const files: string[] = [];
@@ -37,7 +119,7 @@ function findTestFiles(dir: string): string[] {
       if (stat.isDirectory()) {
         // Recursively search subdirectories
         files.push(...findTestFiles(fullPath));
-      } else if (entry.endsWith('.test.ts') || entry.endsWith('.test.js')) {
+      } else if (entry.endsWith('.test.json')) {
         files.push(fullPath);
       }
     }
@@ -49,27 +131,25 @@ function findTestFiles(dir: string): string[] {
 }
 
 /**
- * Import a test file and extract all exported test suites
+ * Load test suite from JSON file
  */
-async function loadTestSuites(filePath: string): Promise<TestSuite[]> {
-  // Convert absolute path to relative import path
-  const relativePath = './' + relative(__dirname, filePath).replace(/\.ts$/, '.js');
-
+async function loadTestSuite(filePath: string): Promise<TestSuite | null> {
   try {
-    const module = await import(relativePath);
+    const json = readFileSync(filePath, 'utf-8');
 
-    // Extract all exports that look like test suites (end with "TestSuite")
-    const testSuites: TestSuite[] = [];
-    for (const [key, value] of Object.entries(module)) {
-      if (key.endsWith('TestSuite') && value && typeof value === 'object') {
-        testSuites.push(value as TestSuite);
+    // Parse JSON5 with BigInt support (supports Infinity, NaN)
+    const suite = JSON5.parse(json, (key, value) => {
+      // Convert string ending with 'n' back to BigInt
+      if (typeof value === 'string' && /^-?\d+n$/.test(value)) {
+        return BigInt(value.slice(0, -1));
       }
-    }
+      return value;
+    });
 
-    return testSuites;
+    return suite as TestSuite;
   } catch (err) {
     console.error(`Failed to load test file ${filePath}:`, err);
-    return [];
+    return null;
   }
 }
 
@@ -87,6 +167,21 @@ function getCategoryFromPath(filePath: string): string {
   }
 
   return 'Other';
+}
+
+/**
+ * Set up runtime library in .generated directory
+ * Copies bit-stream.ts to BitStream.ts so generated code can import it
+ */
+function setupRuntimeLibrary(): void {
+  const genDir = join(__dirname, '../.generated');
+  mkdirSync(genDir, { recursive: true });
+
+  const runtimeSource = join(__dirname, 'runtime/bit-stream.ts');
+  const runtimeDest = join(genDir, 'BitStream.ts');
+
+  copyFileSync(runtimeSource, runtimeDest);
+  console.log(`Copied runtime library to ${runtimeDest}`);
 }
 
 async function main() {
@@ -119,22 +214,34 @@ async function main() {
   }
   console.log("=".repeat(80));
 
-  // Find all test files
-  const testsDir = join(__dirname, 'tests');
-  const testFiles = findTestFiles(testsDir);
+  // Always export TypeScript tests to JSON first
+  console.log("\n📝 Exporting TypeScript tests to JSON...");
+  await exportTestsToJson();
+  console.log("");
+
+  // Set up runtime library for generated code
+  console.log("📦 Setting up runtime library...");
+  setupRuntimeLibrary();
+  console.log("");
+
+  // Find all test JSON files
+  const testsJsonDir = join(__dirname, '../tests-json');
+  const testFiles = findTestFiles(testsJsonDir);
 
   // Load all test suites
   const allSuites: Map<string, TestSuite[]> = new Map();
 
   for (const testFile of testFiles) {
-    const suites = await loadTestSuites(testFile);
+    const suite = await loadTestSuite(testFile);
+    if (!suite) continue;
+
     const category = getCategoryFromPath(testFile);
 
     if (!allSuites.has(category)) {
       allSuites.set(category, []);
     }
 
-    allSuites.get(category)!.push(...suites);
+    allSuites.get(category)!.push(suite);
   }
 
   const results: TestResult[] = [];
