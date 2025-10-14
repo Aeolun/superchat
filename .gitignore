@@ -23,6 +23,9 @@ server
 # Test binaries
 *.test
 
+# Rust build artifacts
+target/
+
 # IDE files
 .vscode/
 .idea/
