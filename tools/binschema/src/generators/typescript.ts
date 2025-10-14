@@ -1563,6 +1563,13 @@ function resolveTypeReference(typeRef: string, schema: BinarySchema): string {
     const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
 
     if (templateDef) {
+      // Special handling for Optional<T> - expose as T | undefined instead of wire format
+      if (genericType === 'Optional' || genericType === 'OptionalStruct' || genericType === 'CompactOptional' || genericType === 'OptionalArray') {
+        const innerType = resolveTypeReference(typeArg, schema);
+        return `${innerType} | undefined`;
+      }
+
+      // For other generic types, expand inline
       const templateFields = getTypeFields(templateDef);
       // Generate inline interface structure
       const fields: string[] = [];
@@ -2140,15 +2147,46 @@ function generateEncodeTypeReference(
     const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
 
     if (templateDef) {
+      // Special handling for Optional<T> - API is T | undefined, wire format is { present, value? }
+      if (genericType === 'Optional' || genericType === 'OptionalStruct' || genericType === 'CompactOptional' || genericType === 'OptionalArray') {
+        let code = "";
+        const templateFields = getTypeFields(templateDef);
+        const presentField = templateFields.find(f => f.name === 'present');
+        const valueField = templateFields.find(f => f.name === 'value');
+
+        if (!presentField || !valueField) {
+          return `${indent}// ERROR: Optional type missing 'present' or 'value' field\n`;
+        }
+
+        // Generate: if (value === undefined) { write present=0 } else { write present=1, write value }
+        // Handle both missing property and explicit undefined
+        code += `${indent}if (${valuePath} === undefined || ${valuePath} === null) {\n`;
+        // Write present = 0
+        const presentFieldExpanded = JSON.parse(
+          JSON.stringify(presentField).replace(/"T"/g, `"${typeArg}"`)
+        );
+        code += generateEncodeFieldCoreImpl(presentFieldExpanded, schema, "big_endian", "0", indent + "  ");
+        code += `${indent}} else {\n`;
+        // Write present = 1
+        code += generateEncodeFieldCoreImpl(presentFieldExpanded, schema, "big_endian", "1", indent + "  ");
+        // Write value
+        const valueFieldExpanded = JSON.parse(
+          JSON.stringify(valueField).replace(/"T"/g, `"${typeArg}"`)
+        );
+        code += generateEncodeFieldCoreImpl(valueFieldExpanded, schema, "big_endian", valuePath, indent + "  ");
+        code += `${indent}}\n`;
+        return code;
+      }
+
+      // For other generic types, inline expand by replacing T with the type argument
       const templateFields = getTypeFields(templateDef);
-      // Inline expand the generic by replacing T with the type argument
       let code = "";
       for (const field of templateFields) {
         // Replace T with the actual type
         const expandedField = JSON.parse(
           JSON.stringify(field).replace(/"T"/g, `"${typeArg}"`)
         );
-        const newValuePath = `${valuePath}.${expandedField.name}`;
+        const newValuePath = `${valuePath}.${field.name}`;
         code += generateEncodeFieldCore(expandedField, schema, "big_endian", newValuePath, indent);
       }
       return code;
@@ -2736,6 +2774,48 @@ function getTargetPath(fieldName: string): string {
 }
 
 /**
+ * Generate decoding for a value directly to a target path (for Optional<T> value fields)
+ * This bypasses getTargetPath to avoid double-prefixing with "value."
+ */
+function generateDecodeValueField(
+  field: Field,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  targetPath: string,
+  indent: string
+): string {
+  const fieldType = field.type;
+
+  switch (fieldType) {
+    case "uint8":
+      return `${indent}${targetPath} = this.readUint8();\n`;
+    case "uint16":
+      return `${indent}${targetPath} = this.readUint16("${globalEndianness}");\n`;
+    case "uint32":
+      return `${indent}${targetPath} = this.readUint32("${globalEndianness}");\n`;
+    case "uint64":
+      return `${indent}${targetPath} = this.readUint64("${globalEndianness}");\n`;
+    case "int8":
+      return `${indent}${targetPath} = this.readInt8();\n`;
+    case "int16":
+      return `${indent}${targetPath} = this.readInt16("${globalEndianness}");\n`;
+    case "int32":
+      return `${indent}${targetPath} = this.readInt32("${globalEndianness}");\n`;
+    case "int64":
+      return `${indent}${targetPath} = this.readInt64("${globalEndianness}");\n`;
+    case "float32":
+      return `${indent}${targetPath} = this.readFloat32("${globalEndianness}");\n`;
+    case "float64":
+      return `${indent}${targetPath} = this.readFloat64("${globalEndianness}");\n`;
+    default:
+      // For complex types, we need to decode into the target
+      // Extract just the field name from the target path (e.g., "value.maybe_id" -> "maybe_id")
+      const fieldName = targetPath.replace(/^value\./, '');
+      return generateDecodeFieldCoreImpl(field, schema, globalEndianness, fieldName, indent);
+  }
+}
+
+/**
  * Calculate the size in bytes of an item type
  * Used for length_prefixed_items arrays
  */
@@ -2890,8 +2970,47 @@ function generateDecodeTypeReference(
     const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
 
     if (templateDef) {
+      // Special handling for Optional<T> - wire format is { present, value? }, API is T | undefined
+      if (genericType === 'Optional' || genericType === 'OptionalStruct' || genericType === 'CompactOptional' || genericType === 'OptionalArray') {
+        let code = "";
+        const templateFields = getTypeFields(templateDef);
+        const presentField = templateFields.find(f => f.name === 'present');
+        const valueField = templateFields.find(f => f.name === 'value');
+
+        if (!presentField || !valueField) {
+          return `${indent}// ERROR: Optional type missing 'present' or 'value' field\n`;
+        }
+
+        // Read present byte into a local variable
+        const presentVar = `${fieldName.replace(/\./g, "_")}_present`;
+        const presentFieldExpanded = JSON.parse(
+          JSON.stringify(presentField).replace(/"T"/g, `"${typeArg}"`)
+        );
+
+        // Generate the read for the present field - need to get the actual read code
+        code += `${indent}const ${presentVar} = `;
+        if (presentFieldExpanded.type === 'uint8') {
+          code += `this.readUint8();\n`;
+        } else if (presentFieldExpanded.type === 'bit') {
+          code += `Number(this.readBits(${presentFieldExpanded.size}));\n`;
+        } else {
+          code += `/* TODO: Unsupported present field type ${presentFieldExpanded.type} */;\n`;
+        }
+
+        // Generate: if (present !== 0) { read value } (omit field if not present)
+        code += `${indent}if (${presentVar} !== 0) {\n`;
+        const valueFieldExpanded = JSON.parse(
+          JSON.stringify(valueField).replace(/"T"/g, `"${typeArg}"`)
+        );
+        // For the value field, we need to decode directly to the target without nesting
+        // Call the impl function with the raw target path, not through getTargetPath again
+        code += generateDecodeValueField(valueFieldExpanded, schema, "big_endian", target, indent + "  ");
+        code += `${indent}}\n`;
+        return code;
+      }
+
+      // For other generic types, inline expand by replacing T with the type argument
       const templateFields = getTypeFields(templateDef);
-      // Inline expand the generic by replacing T with the type argument
       let code = `${indent}${target} = {};\n`;
       for (const field of templateFields) {
         // Replace T with the actual type

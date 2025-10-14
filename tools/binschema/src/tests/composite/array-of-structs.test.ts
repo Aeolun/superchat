@@ -265,7 +265,7 @@ export const arrayOfStructsWithOptionalsTestSuite = defineTestSuite({
       description: "Group with one person (no height)",
       value: {
         members: [
-          { age: 25, height: { present: 0 } },
+          { age: 25, height: undefined },
         ]
       },
       bytes: [
@@ -278,8 +278,8 @@ export const arrayOfStructsWithOptionalsTestSuite = defineTestSuite({
       description: "Group with two people (one with height)",
       value: {
         members: [
-          { age: 25, height: { present: 0 } },
-          { age: 30, height: { present: 1, value: 175 } },
+          { age: 25, height: undefined },
+          { age: 30, height: 175 },
         ]
       },
       bytes: [

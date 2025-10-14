@@ -35,12 +35,12 @@ export const optionalUint64TestSuite = defineTestSuite({
   test_cases: [
     {
       description: "Not present (null)",
-      value: { maybe_id: { present: 0 } },
+      value: { maybe_id: undefined },
       bytes: [0x00], // present = 0, no value follows
     },
     {
       description: "Present with value 0",
-      value: { maybe_id: { present: 1, value: 0n } },
+      value: { maybe_id: 0n },
       bytes: [
         0x01, // present = 1
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // value = 0
@@ -48,7 +48,7 @@ export const optionalUint64TestSuite = defineTestSuite({
     },
     {
       description: "Present with value 0x123456789ABCDEF0",
-      value: { maybe_id: { present: 1, value: 0x123456789ABCDEF0n } },
+      value: { maybe_id: 0x123456789ABCDEF0n },
       bytes: [
         0x01, // present = 1
         0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, // value
@@ -94,8 +94,8 @@ export const multipleOptionalsTestSuite = defineTestSuite({
       description: "Only channel_id (both optionals absent)",
       value: {
         channel_id: 1n,
-        parent_id: { present: 0 },
-        subchannel_id: { present: 0 },
+        parent_id: undefined,
+        subchannel_id: undefined,
       },
       bytes: [
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // channel_id = 1
@@ -107,8 +107,8 @@ export const multipleOptionalsTestSuite = defineTestSuite({
       description: "With parent_id, no subchannel",
       value: {
         channel_id: 1n,
-        parent_id: { present: 1, value: 42n },
-        subchannel_id: { present: 0 },
+        parent_id: 42n,
+        subchannel_id: undefined,
       },
       bytes: [
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // channel_id = 1
@@ -121,8 +121,8 @@ export const multipleOptionalsTestSuite = defineTestSuite({
       description: "All fields present",
       value: {
         channel_id: 1n,
-        parent_id: { present: 1, value: 42n },
-        subchannel_id: { present: 1, value: 99n },
+        parent_id: 42n,
+        subchannel_id: 99n,
       },
       bytes: [
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // channel_id = 1
@@ -168,12 +168,12 @@ export const optionalWithBitFlagTestSuite = defineTestSuite({
   test_cases: [
     {
       description: "Not present",
-      value: { has_parent: { present: 0 } },
+      value: { has_parent: undefined },
       bits: [0], // Just the presence bit
     },
     {
       description: "Present with value 42",
-      value: { has_parent: { present: 1, value: 42 } },
+      value: { has_parent: 42 },
       bits: [
         1,            // present = 1
         0,0,1,0,1,0,1,0, // value = 42 = 0b00101010
@@ -222,7 +222,7 @@ export const optionalStructTestSuite = defineTestSuite({
       description: "Location not present",
       value: {
         id: 42,
-        location: { present: 0 }
+        location: undefined
       },
       bytes: [
         0x2A, // id = 42
@@ -233,10 +233,7 @@ export const optionalStructTestSuite = defineTestSuite({
       description: "Location present (100, 200)",
       value: {
         id: 42,
-        location: {
-          present: 1,
-          value: { x: 100, y: 200 }
-        }
+        location: { x: 100, y: 200 }
       },
       bytes: [
         0x2A, // id = 42
@@ -259,21 +256,21 @@ export const optionalArrayTestSuite = defineTestSuite({
 
   schema: {
     types: {
+      "Optional<T>": {
+        sequence: [
+          { name: "present", type: "uint8" },
+          { name: "value", type: "T", conditional: "present == 1" },
+        ]
+      },
       "Uint8Array": {
         sequence: [
           { name: "data", type: "array", kind: "length_prefixed", length_type: "uint8", items: { type: "uint8" } }
         ]
       },
-      "OptionalArray": {
-        sequence: [
-          { name: "present", type: "uint8" },
-          { name: "value", type: "Uint8Array", conditional: "present == 1" },
-        ]
-      },
       "Message": {
         sequence: [
           { name: "id", type: "uint8" },
-          { name: "tags", type: "OptionalArray" },
+          { name: "tags", type: "Optional<Uint8Array>" },
         ]
       }
     }
@@ -286,7 +283,7 @@ export const optionalArrayTestSuite = defineTestSuite({
       description: "Tags not present",
       value: {
         id: 42,
-        tags: { present: 0 }
+        tags: undefined
       },
       bytes: [
         0x2A, // id = 42
@@ -297,10 +294,7 @@ export const optionalArrayTestSuite = defineTestSuite({
       description: "Tags present with empty array",
       value: {
         id: 42,
-        tags: {
-          present: 1,
-          value: { data: [] }
-        }
+        tags: { data: [] }
       },
       bytes: [
         0x2A, // id = 42
@@ -312,10 +306,7 @@ export const optionalArrayTestSuite = defineTestSuite({
       description: "Tags present with [1, 2, 3]",
       value: {
         id: 42,
-        tags: {
-          present: 1,
-          value: { data: [1, 2, 3] }
-        }
+        tags: { data: [1, 2, 3] }
       },
       bytes: [
         0x2A, // id = 42
