@@ -5,10 +5,10 @@
   "types": {
     "String": {
       "description": "Length-prefixed UTF-8 string",
-      "type": "array",
+      "type": "string",
       "kind": "length_prefixed",
       "length_type": "uint16",
-      "items": { "type": "uint8" }
+      "encoding": "utf8"
     },
     "Optional<T>": {
       "description": "Optional field with presence byte",
@@ -68,7 +68,7 @@
       "description": "Message post confirmation",
       "sequence": [
         { "name": "success", "type": "uint8" },
-        { "name": "message_id", "type": "Optional<uint64>" },
+        { "name": "message_id", "type": "uint64" },
         { "name": "message", "type": "String" }
       ]
     },
@@ -84,8 +84,165 @@
         { "name": "content", "type": "String" },
         { "name": "created_at", "type": "int64" },
         { "name": "edited_at", "type": "Optional<int64>" },
-        { "name": "thread_depth", "type": "uint8" },
         { "name": "reply_count", "type": "uint32" }
+      ]
+    },
+    "RegisterUser": {
+      "description": "Register current nickname with password",
+      "sequence": [
+        { "name": "password_hash", "type": "String" }
+      ]
+    },
+    "RegisterResponse": {
+      "description": "Registration result",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "user_id", "type": "Optional<uint64>" }
+      ]
+    },
+    "ListChannels": {
+      "description": "Request channel list",
+      "sequence": [
+        { "name": "from_channel_id", "type": "uint64" },
+        { "name": "limit", "type": "uint16" }
+      ]
+    },
+    "Channel": {
+      "description": "Channel information in list",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "name", "type": "String" },
+        { "name": "description", "type": "String" },
+        { "name": "user_count", "type": "uint32" },
+        { "name": "is_operator", "type": "uint8" },
+        { "name": "type", "type": "uint8" },
+        { "name": "retention_hours", "type": "uint32" }
+      ]
+    },
+    "ChannelList": {
+      "description": "List of channels",
+      "sequence": [
+        { "name": "channel_count", "type": "uint16" },
+        { "name": "channels", "type": "array", "kind": "field_referenced", "length_field": "channel_count", "items": { "type": "Channel" } }
+      ]
+    },
+    "JoinChannel": {
+      "description": "Join a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" }
+      ]
+    },
+    "JoinResponse": {
+      "description": "Join result",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" },
+        { "name": "message", "type": "String" }
+      ]
+    },
+    "ListMessages": {
+      "description": "Request messages from channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" },
+        { "name": "limit", "type": "uint16" },
+        { "name": "before_id", "type": "Optional<uint64>" },
+        { "name": "parent_id", "type": "Optional<uint64>" },
+        { "name": "after_id", "type": "Optional<uint64>" }
+      ]
+    },
+    "Message": {
+      "description": "Message in list",
+      "sequence": [
+        { "name": "message_id", "type": "uint64" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" },
+        { "name": "parent_id", "type": "Optional<uint64>" },
+        { "name": "author_user_id", "type": "Optional<uint64>" },
+        { "name": "author_nickname", "type": "String" },
+        { "name": "content", "type": "String" },
+        { "name": "created_at", "type": "int64" },
+        { "name": "edited_at", "type": "Optional<int64>" },
+        { "name": "reply_count", "type": "uint32" }
+      ]
+    },
+    "MessageList": {
+      "description": "List of messages",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" },
+        { "name": "parent_id", "type": "Optional<uint64>" },
+        { "name": "message_count", "type": "uint16" },
+        { "name": "messages", "type": "array", "kind": "field_referenced", "length_field": "message_count", "items": { "type": "Message" } }
+      ]
+    },
+    "Ping": {
+      "description": "Keepalive heartbeat",
+      "sequence": [
+        { "name": "timestamp", "type": "int64" }
+      ]
+    },
+    "Pong": {
+      "description": "Ping response",
+      "sequence": [
+        { "name": "client_timestamp", "type": "int64" }
+      ]
+    },
+    "SubscribeThread": {
+      "description": "Subscribe to thread updates",
+      "sequence": [
+        { "name": "thread_id", "type": "uint64" }
+      ]
+    },
+    "UnsubscribeThread": {
+      "description": "Unsubscribe from thread updates",
+      "sequence": [
+        { "name": "thread_id", "type": "uint64" }
+      ]
+    },
+    "SubscribeChannel": {
+      "description": "Subscribe to new threads in channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" }
+      ]
+    },
+    "UnsubscribeChannel": {
+      "description": "Unsubscribe from channel updates",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" }
+      ]
+    },
+    "SubscribeOk": {
+      "description": "Subscription confirmation",
+      "sequence": [
+        { "name": "type", "type": "uint8" },
+        { "name": "id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "Optional<uint64>" }
+      ]
+    },
+    "Error": {
+      "description": "Generic error response",
+      "sequence": [
+        { "name": "error_code", "type": "uint16" },
+        { "name": "message", "type": "String" }
+      ]
+    },
+    "ServerConfig": {
+      "description": "Server configuration and limits",
+      "sequence": [
+        { "name": "protocol_version", "type": "uint8" },
+        { "name": "max_message_rate", "type": "uint16" },
+        { "name": "max_channel_creates", "type": "uint16" },
+        { "name": "inactive_cleanup_days", "type": "uint16" },
+        { "name": "max_connections_per_ip", "type": "uint8" },
+        { "name": "max_message_length", "type": "uint32" },
+        { "name": "max_thread_subs", "type": "uint16" },
+        { "name": "max_channel_subs", "type": "uint16" },
+        { "name": "directory_enabled", "type": "uint8" }
       ]
     }
   }

@@ -53,7 +53,19 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 		return s.dbError(sess, "GetUserByNickname", err)
 	}
 
-	// Verify password
+	// Check if user has removed password (SSH-only authentication)
+	if user.PasswordHash == "" {
+		resp := &protocol.AuthResponseMessage{
+			Success: false,
+			Message: "This account requires SSH authentication. Please connect via SSH.",
+		}
+		return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
+	}
+
+	// Verify password hash
+	// msg.Password contains the client-side argon2id hash
+	// user.PasswordHash contains bcrypt(client_hash)
+	// So we compare: bcrypt(stored_hash, client_hash)
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(msg.Password))
 	if err != nil {
 		resp := &protocol.AuthResponseMessage{
@@ -63,11 +75,39 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 		return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
 	}
 
+	// Check if user is banned
+	ban, err := s.db.GetActiveBanForUser(&user.ID, &user.Nickname)
+	if err != nil {
+		log.Printf("Session %d: failed to check ban status: %v", sess.ID, err)
+		// Continue with login - don't block on ban check failures
+	}
+
+	if ban != nil {
+		// If shadowban, allow login but mark session (filtering happens during broadcasts)
+		if ban.Shadowban {
+			log.Printf("Session %d: user %s (id=%d) is shadowbanned", sess.ID, user.Nickname, user.ID)
+			// Continue with login - shadowban is enforced during message broadcasting
+		} else {
+			// Regular ban - reject authentication
+			bannedUntil := "permanently"
+			if ban.BannedUntil != nil {
+				bannedUntil = fmt.Sprintf("until %s", time.Unix(*ban.BannedUntil/1000, 0).Format(time.RFC3339))
+			}
+			resp := &protocol.AuthResponseMessage{
+				Success: false,
+				Message: fmt.Sprintf("Account banned %s. Reason: %s", bannedUntil, ban.Reason),
+			}
+			log.Printf("Session %d: rejected login for banned user %s (id=%d)", sess.ID, user.Nickname, user.ID)
+			return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
+		}
+	}
+
 	// Update session with user ID and flags
 	sess.mu.Lock()
 	sess.UserID = &user.ID
 	sess.Nickname = user.Nickname
 	sess.UserFlags = user.UserFlags
+	sess.Shadowbanned = ban != nil && ban.Shadowban // Mark session as shadowbanned
 	sess.mu.Unlock()
 
 	// Update database session
@@ -111,16 +151,18 @@ func (s *Server) handleRegisterUser(sess *Session, frame *protocol.Frame) error 
 		return s.sendMessage(sess, protocol.TypeRegisterResponse, resp)
 	}
 
-	// Validate password (minimum 6 characters)
-	if len(msg.Password) < 6 {
+	// Validate client hash (should be 43 characters for argon2id base64-encoded 32 bytes)
+	// Note: msg.Password actually contains the client-side argon2id hash
+	if len(msg.Password) < 40 || len(msg.Password) > 50 {
 		resp := &protocol.RegisterResponseMessage{
 			Success: false,
-			Message: "Password must be at least 6 characters",
+			Message: "Invalid password hash format",
 		}
 		return s.sendMessage(sess, protocol.TypeRegisterResponse, resp)
 	}
 
-	// Hash password
+	// Double-hash: bcrypt the client hash for storage
+	// This provides defense-in-depth against database breaches
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(msg.Password), bcrypt.DefaultCost)
 	if err != nil {
 		log.Printf("Session %d: bcrypt.GenerateFromPassword failed: %v", sess.ID, err)
@@ -588,7 +630,7 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 		threadRootID = &id
 	}
 
-	if err := s.broadcastNewMessage(broadcastMsg, threadRootID); err != nil {
+	if err := s.broadcastNewMessage(sess, broadcastMsg, threadRootID); err != nil {
 		// Log but don't fail - message was posted successfully
 		fmt.Printf("Failed to broadcast new message: %v\n", err)
 	}
@@ -618,8 +660,20 @@ func (s *Server) handleEditMessage(sess *Session, frame *protocol.Frame) error {
 		return s.sendError(sess, protocol.ErrCodeMessageTooLong, fmt.Sprintf("Message too long (max %d bytes)", s.config.MaxMessageLength))
 	}
 
+	// Check if user is admin - admins can edit any message
+	isAdmin := s.isAdmin(sess)
+
 	// Update message in database
-	dbMsg, err := s.db.UpdateMessage(msg.MessageID, uint64(*userID), msg.NewContent)
+	var dbMsg *database.Message
+	var err error
+
+	if isAdmin {
+		// Admin edit: bypass ownership check
+		dbMsg, err = s.db.AdminUpdateMessage(msg.MessageID, uint64(*userID), msg.NewContent)
+	} else {
+		// Regular edit: check ownership
+		dbMsg, err = s.db.UpdateMessage(msg.MessageID, uint64(*userID), msg.NewContent)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, database.ErrMessageNotFound):
@@ -675,7 +729,20 @@ func (s *Server) handleDeleteMessage(sess *Session, frame *protocol.Frame) error
 		return s.sendError(sess, protocol.ErrCodeNicknameRequired, "Nickname required. Use SET_NICKNAME first.")
 	}
 
-	dbMsg, err := s.db.SoftDeleteMessage(msg.MessageID, nickname)
+	// Check if user is admin - admins can delete any message
+	isAdmin := s.isAdmin(sess)
+
+	var dbMsg *database.Message
+	var err error
+
+	if isAdmin {
+		// Admin delete: bypass ownership check
+		dbMsg, err = s.db.AdminSoftDeleteMessage(msg.MessageID, nickname)
+	} else {
+		// Regular delete: check ownership
+		dbMsg, err = s.db.SoftDeleteMessage(msg.MessageID, nickname)
+	}
+
 	if err != nil {
 		switch {
 		case errors.Is(err, database.ErrMessageNotFound):
@@ -734,19 +801,47 @@ func (s *Server) handleChangePassword(sess *Session, frame *protocol.Frame) erro
 		return s.sendPasswordChanged(sess, false, "User not found")
 	}
 
-	// Verify old password (skip if user has no password set - SSH-registered)
+	// Verify old password hash (skip if user has no password set - SSH-registered)
+	// req.OldPassword contains client-side argon2id hash (or empty for SSH users)
 	if user.PasswordHash != "" && req.OldPassword != "" {
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.OldPassword)); err != nil {
 			return s.sendPasswordChanged(sess, false, "Incorrect current password")
 		}
 	}
 
-	// Validate new password
-	if len(req.NewPassword) < 8 {
-		return s.sendPasswordChanged(sess, false, "Password must be at least 8 characters")
+	// Check if this is a password removal request (empty new password)
+	if req.NewPassword == "" {
+		// Password removal: only allowed if user has SSH keys
+		sshKeys, err := s.db.GetSSHKeysByUserID(int64(*userID))
+		if err != nil {
+			log.Printf("Failed to check SSH keys for user %d: %v", *userID, err)
+			return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to check SSH keys")
+		}
+		if len(sshKeys) == 0 {
+			return s.sendPasswordChanged(sess, false, "Cannot remove password without SSH keys. Add an SSH key first.")
+		}
+
+		// Remove password by setting to empty string
+		if err := s.db.UpdateUserPassword(*userID, ""); err != nil {
+			log.Printf("Failed to remove password for user %d: %v", *userID, err)
+			return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to remove password")
+		}
+
+		sess.mu.RLock()
+		nickname := sess.Nickname
+		sess.mu.RUnlock()
+
+		log.Printf("User %s (ID: %d) removed password (SSH-only authentication)", nickname, *userID)
+		return s.sendPasswordChanged(sess, true, "")
 	}
 
-	// Hash new password
+	// Validate new password hash (should be 43 characters for argon2id base64-encoded 32 bytes)
+	// req.NewPassword contains client-side argon2id hash
+	if len(req.NewPassword) < 40 || len(req.NewPassword) > 50 {
+		return s.sendPasswordChanged(sess, false, "Invalid password hash format")
+	}
+
+	// Double-hash: bcrypt the client hash for storage
 	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
 		log.Printf("Failed to hash password for user %d: %v", *userID, err)
@@ -1208,7 +1303,8 @@ func (s *Server) broadcastToSessionsParallel(sessions []*Session, frameBytes []b
 }
 
 // broadcastNewMessage sends a NEW_MESSAGE to subscribed sessions only (subscription-aware)
-func (s *Server) broadcastNewMessage(msg *protocol.NewMessageMessage, threadRootID *uint64) error {
+// If authorSess is shadowbanned, the message is only sent to the author and admins
+func (s *Server) broadcastNewMessage(authorSess *Session, msg *protocol.NewMessageMessage, threadRootID *uint64) error {
 	startTime := time.Now()
 
 	// Encode message payload ONCE (not per recipient)
@@ -1269,6 +1365,28 @@ func (s *Server) broadcastNewMessage(msg *protocol.NewMessageMessage, threadRoot
 		debugLog.Printf("Broadcasting reply message %d to thread %d: %d subscribers", msg.ID, *threadRootID, len(targetSessions))
 	} else {
 		debugLog.Printf("WARNING: Reply message %d has no threadRootID - will not be broadcast!", msg.ID)
+	}
+
+	// Filter recipients if author is shadowbanned
+	authorSess.mu.RLock()
+	isShadowbanned := authorSess.Shadowbanned
+	authorSess.mu.RUnlock()
+
+	if isShadowbanned {
+		// Shadowbanned: only send to author and admins
+		filteredSessions := make([]*Session, 0)
+		for _, sess := range targetSessions {
+			sess.mu.RLock()
+			isAuthor := sess.ID == authorSess.ID
+			isAdmin := sess.UserID != nil && (sess.UserFlags&1) != 0 // Check admin flag
+			sess.mu.RUnlock()
+
+			if isAuthor || isAdmin {
+				filteredSessions = append(filteredSessions, sess)
+			}
+		}
+		debugLog.Printf("Shadowban: filtering message %d from %d recipients to %d (author + admins only)", msg.ID, len(targetSessions), len(filteredSessions))
+		targetSessions = filteredSessions
 	}
 
 	// Broadcast to target sessions using worker pool
@@ -1554,6 +1672,14 @@ func (s *Server) handleListUsers(sess *Session, frame *protocol.Frame) error {
 		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
 	}
 
+	// Check if include_offline is requested
+	if msg.IncludeOffline {
+		// Verify admin permission
+		if !s.isAdmin(sess) {
+			return s.sendError(sess, protocol.ErrCodePermissionDenied, "Admin permission required for include_offline")
+		}
+	}
+
 	// Apply limit constraints
 	limit := msg.Limit
 	if limit == 0 {
@@ -1563,42 +1689,75 @@ func (s *Server) handleListUsers(sess *Session, frame *protocol.Frame) error {
 		limit = 500 // Max
 	}
 
-	// Get all online sessions
-	allSessions := s.sessions.GetAllSessions()
+	var users []protocol.UserListEntry
 
-	// Build user list (deduplicate by nickname)
-	seenNicknames := make(map[string]bool)
-	users := []protocol.UserListEntry{}
-
-	for _, session := range allSessions {
-		session.mu.RLock()
-		nickname := session.Nickname
-		userID := session.UserID
-		session.mu.RUnlock()
-
-		// Skip if we've already added this nickname
-		if seenNicknames[nickname] {
-			continue
-		}
-		seenNicknames[nickname] = true
-
-		// Determine if registered and get user_id
-		isRegistered := userID != nil
-		var uid *uint64
-		if isRegistered {
-			u := uint64(*userID)
-			uid = &u
+	if msg.IncludeOffline {
+		// Admin requested all registered users (online + offline)
+		allUsers, err := s.db.ListAllUsers(int(limit))
+		if err != nil {
+			log.Printf("[ERROR] Failed to list all users: %v", err)
+			return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to retrieve user list")
 		}
 
-		users = append(users, protocol.UserListEntry{
-			Nickname:     nickname,
-			IsRegistered: isRegistered,
-			UserID:       uid,
-		})
+		// Get currently online user IDs
+		onlineUserIDs := make(map[int64]bool)
+		allSessions := s.sessions.GetAllSessions()
+		for _, session := range allSessions {
+			session.mu.RLock()
+			if session.UserID != nil {
+				onlineUserIDs[*session.UserID] = true
+			}
+			session.mu.RUnlock()
+		}
 
-		// Stop if we've reached the limit
-		if len(users) >= int(limit) {
-			break
+		// Build user list with online status
+		for _, user := range allUsers {
+			uid := uint64(user.ID)
+			users = append(users, protocol.UserListEntry{
+				Nickname:     user.Nickname,
+				IsRegistered: true, // All users from DB are registered
+				UserID:       &uid,
+				Online:       onlineUserIDs[user.ID],
+			})
+		}
+	} else {
+		// Standard request: online users only
+		allSessions := s.sessions.GetAllSessions()
+
+		// Build user list (deduplicate by nickname)
+		seenNicknames := make(map[string]bool)
+
+		for _, session := range allSessions {
+			session.mu.RLock()
+			nickname := session.Nickname
+			userID := session.UserID
+			session.mu.RUnlock()
+
+			// Skip if we've already added this nickname
+			if seenNicknames[nickname] {
+				continue
+			}
+			seenNicknames[nickname] = true
+
+			// Determine if registered and get user_id
+			isRegistered := userID != nil
+			var uid *uint64
+			if isRegistered {
+				u := uint64(*userID)
+				uid = &u
+			}
+
+			users = append(users, protocol.UserListEntry{
+				Nickname:     nickname,
+				IsRegistered: isRegistered,
+				UserID:       uid,
+				Online:       true, // All users from sessions are online
+			})
+
+			// Stop if we've reached the limit
+			if len(users) >= int(limit) {
+				break
+			}
 		}
 	}
 
@@ -1631,6 +1790,51 @@ func (s *Server) broadcastChannelCreated(ch *database.Channel, creatorSessionID 
 			log.Printf("Failed to broadcast CHANNEL_CREATED to session %d: %v", sess.ID, err)
 		}
 	}
+}
+
+// broadcastToAll broadcasts a message to all connected clients
+func (s *Server) broadcastToAll(msgType uint8, msg interface{}) error {
+	// Encode message payload
+	var payload []byte
+	var err error
+
+	switch m := msg.(type) {
+	case interface{ Encode() ([]byte, error) }:
+		payload, err = m.Encode()
+	default:
+		return fmt.Errorf("message type does not implement Encode()")
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// Create and encode frame once
+	frame := &protocol.Frame{
+		Version: protocol.ProtocolVersion,
+		Type:    msgType,
+		Flags:   0,
+		Payload: payload,
+	}
+
+	var buf bytes.Buffer
+	if err := protocol.EncodeFrame(&buf, frame); err != nil {
+		return fmt.Errorf("failed to encode frame: %w", err)
+	}
+	frameBytes := buf.Bytes()
+
+	// Get all sessions
+	allSessions := s.sessions.GetAllSessions()
+
+	// Broadcast to target sessions using worker pool
+	deadSessions := s.broadcastToSessionsParallel(allSessions, frameBytes)
+
+	// Remove dead sessions
+	for _, sessID := range deadSessions {
+		s.sessions.RemoveSession(sessID)
+	}
+
+	return nil
 }
 
 // ===== Server Discovery Handlers =====
@@ -2303,15 +2507,143 @@ func (s *Server) handleDeleteUser(sess *Session, frame *protocol.Frame) error {
 		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
 	}
 
-	// TODO: Implement user deletion
-	// This would involve:
-	// 1. Deleting user from User table (CASCADE will delete SSH keys)
-	// 2. Updating all messages with author_user_id=userID to set author_user_id=NULL
-	// 3. Disconnecting all sessions for this user
-	// 4. Logging admin action
+	// Get user info before deletion (for logging and session cleanup)
+	user, err := s.db.GetUserByID(int64(msg.UserID))
+	if err != nil {
+		return s.sendMessage(sess, protocol.TypeUserDeleted, &protocol.UserDeletedMessage{
+			Success: false,
+			Message: "User not found",
+		})
+	}
 
-	return s.sendMessage(sess, protocol.TypeUserDeleted, &protocol.UserDeletedMessage{
-		Success: false,
-		Message: "User deletion not yet implemented",
-	})
+	// Don't allow admins to delete themselves
+	sess.mu.RLock()
+	adminUserID := sess.UserID
+	sess.mu.RUnlock()
+
+	if adminUserID != nil && uint64(*adminUserID) == msg.UserID {
+		return s.sendMessage(sess, protocol.TypeUserDeleted, &protocol.UserDeletedMessage{
+			Success: false,
+			Message: "Cannot delete your own account",
+		})
+	}
+
+	// Get all active sessions for this user (for disconnection)
+	allSessions := s.sessions.GetAllSessions()
+	targetSessions := make([]*Session, 0)
+	for _, targetSess := range allSessions {
+		targetSess.mu.RLock()
+		if targetSess.UserID != nil && uint64(*targetSess.UserID) == msg.UserID {
+			targetSessions = append(targetSessions, targetSess)
+		}
+		targetSess.mu.RUnlock()
+	}
+
+	// Log admin action
+	if adminUserID != nil {
+		if err := s.db.LogAdminAction(uint64(*adminUserID), sess.Nickname, "DELETE_USER",
+			fmt.Sprintf("user_id=%d nickname=%s", msg.UserID, user.Nickname)); err != nil {
+			log.Printf("Failed to log admin action: %v", err)
+		}
+	}
+
+	// Delete user (anonymizes messages, removes from DB)
+	deletedNickname, err := s.db.DeleteUser(msg.UserID)
+	if err != nil {
+		return s.sendMessage(sess, protocol.TypeUserDeleted, &protocol.UserDeletedMessage{
+			Success: false,
+			Message: fmt.Sprintf("Failed to delete user: %v", err),
+		})
+	}
+
+	// Disconnect all active sessions for this user
+	for _, targetSess := range targetSessions {
+		log.Printf("Disconnecting session %d for deleted user %s (id=%d)", targetSess.ID, deletedNickname, msg.UserID)
+		s.sessions.RemoveSession(targetSess.ID)
+	}
+
+	// Send success response
+	resp := &protocol.UserDeletedMessage{
+		Success: true,
+		Message: fmt.Sprintf("User '%s' deleted successfully (messages anonymized, %d sessions disconnected)", deletedNickname, len(targetSessions)),
+	}
+
+	if err := s.sendMessage(sess, protocol.TypeUserDeleted, resp); err != nil {
+		return err
+	}
+
+	// Broadcast to all connected clients
+	if err := s.broadcastToAll(protocol.TypeUserDeleted, resp); err != nil {
+		log.Printf("Failed to broadcast user deletion: %v", err)
+	}
+
+	return nil
+}
+
+// handleDeleteChannel handles DELETE_CHANNEL message (admin only)
+func (s *Server) handleDeleteChannel(sess *Session, frame *protocol.Frame) error {
+	// Check admin permissions
+	if !s.isAdmin(sess) {
+		return s.sendMessage(sess, protocol.TypeChannelDeleted, &protocol.ChannelDeletedMessage{
+			Success:   false,
+			ChannelID: 0,
+			Message:   "Permission denied: admin access required",
+		})
+	}
+
+	// Decode message
+	msg := &protocol.DeleteChannelMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Get channel info before deletion (for logging and broadcast message)
+	channel, err := s.db.GetChannel(int64(msg.ChannelID))
+	if err != nil {
+		return s.sendMessage(sess, protocol.TypeChannelDeleted, &protocol.ChannelDeletedMessage{
+			Success:   false,
+			ChannelID: msg.ChannelID,
+			Message:   "Channel not found",
+		})
+	}
+
+	// Log admin action
+	sess.mu.RLock()
+	adminNickname := sess.Nickname
+	adminUserID := sess.UserID
+	sess.mu.RUnlock()
+
+	if adminUserID != nil {
+		if err := s.db.LogAdminAction(uint64(*adminUserID), adminNickname, "DELETE_CHANNEL",
+			fmt.Sprintf("channel_id=%d name=%s reason=%s", msg.ChannelID, channel.Name, msg.Reason)); err != nil {
+			log.Printf("Failed to log admin action: %v", err)
+		}
+	}
+
+	// Delete the channel (cascades to messages, subchannels, subscriptions)
+	if err := s.db.DeleteChannel(uint64(msg.ChannelID)); err != nil {
+		return s.sendMessage(sess, protocol.TypeChannelDeleted, &protocol.ChannelDeletedMessage{
+			Success:   false,
+			ChannelID: msg.ChannelID,
+			Message:   fmt.Sprintf("Failed to delete channel: %v", err),
+		})
+	}
+
+	// Send success response
+	resp := &protocol.ChannelDeletedMessage{
+		Success:   true,
+		ChannelID: msg.ChannelID,
+		Message:   fmt.Sprintf("Channel '%s' deleted successfully", channel.Name),
+	}
+
+	if err := s.sendMessage(sess, protocol.TypeChannelDeleted, resp); err != nil {
+		return err
+	}
+
+	// Broadcast to all connected clients
+	if err := s.broadcastToAll(protocol.TypeChannelDeleted, resp); err != nil {
+		log.Printf("Failed to broadcast channel deletion: %v", err)
+	}
+
+	return nil
 }

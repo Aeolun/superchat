@@ -255,54 +255,57 @@ const tests = [
   }
 ];
 
-// Run tests
-let passed = 0;
-let failed = 0;
+// Only run tests if this file is executed directly (not imported)
+if (import.meta.url === `file://${process.argv[1]}` || import.meta.url.endsWith(process.argv[1])) {
+  // Run tests
+  let passed = 0;
+  let failed = 0;
 
-console.log('Running wire format annotation tests...\n');
+  console.log('Running wire format annotation tests...\n');
 
-for (const test of tests) {
-  try {
-    const result = annotateWireFormat(test.bytes, test.typeName, test.schema as BinarySchema, test.decoded);
+  for (const test of tests) {
+    try {
+      const result = annotateWireFormat(test.bytes, test.typeName, test.schema as BinarySchema, test.decoded);
 
-    // Compare results
-    if (result.length !== test.expected.length) {
-      failed++;
-      console.log(`✗ ${test.name}`);
-      console.log(`  Expected ${test.expected.length} annotations, got ${result.length}`);
-      console.log(`  Expected:`, JSON.stringify(test.expected, null, 2));
-      console.log(`  Got:`, JSON.stringify(result, null, 2));
-      continue;
-    }
-
-    let testPassed = true;
-    for (let i = 0; i < result.length; i++) {
-      const r = result[i];
-      const e = test.expected[i];
-      if (r.offset !== e.offset || r.length !== e.length || r.description !== e.description) {
-        testPassed = false;
+      // Compare results
+      if (result.length !== test.expected.length) {
         failed++;
         console.log(`✗ ${test.name}`);
-        console.log(`  Annotation ${i} mismatch:`);
-        console.log(`    Expected: ${JSON.stringify(e)}`);
-        console.log(`    Got:      ${JSON.stringify(r)}`);
-        break;
+        console.log(`  Expected ${test.expected.length} annotations, got ${result.length}`);
+        console.log(`  Expected:`, JSON.stringify(test.expected, null, 2));
+        console.log(`  Got:`, JSON.stringify(result, null, 2));
+        continue;
       }
-    }
 
-    if (testPassed) {
-      passed++;
-      console.log(`✓ ${test.name}`);
+      let testPassed = true;
+      for (let i = 0; i < result.length; i++) {
+        const r = result[i];
+        const e = test.expected[i];
+        if (r.offset !== e.offset || r.length !== e.length || r.description !== e.description) {
+          testPassed = false;
+          failed++;
+          console.log(`✗ ${test.name}`);
+          console.log(`  Annotation ${i} mismatch:`);
+          console.log(`    Expected: ${JSON.stringify(e)}`);
+          console.log(`    Got:      ${JSON.stringify(r)}`);
+          break;
+        }
+      }
+
+      if (testPassed) {
+        passed++;
+        console.log(`✓ ${test.name}`);
+      }
+    } catch (error) {
+      failed++;
+      console.log(`✗ ${test.name} (threw error)`);
+      console.log(`  Error: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } catch (error) {
-    failed++;
-    console.log(`✗ ${test.name} (threw error)`);
-    console.log(`  Error: ${error instanceof Error ? error.message : String(error)}`);
   }
-}
 
-console.log(`\n${passed} passed, ${failed} failed`);
+  console.log(`\n${passed} passed, ${failed} failed`);
 
-if (failed > 0) {
-  process.exit(1);
+  if (failed > 0) {
+    process.exit(1);
+  }
 }

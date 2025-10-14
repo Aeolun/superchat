@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aeolun/superchat/pkg/client"
+	"github.com/aeolun/superchat/pkg/client/auth"
 	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -249,6 +250,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case modal.PushModalMsg:
+		// Push the modal onto the stack (for proper modal overlay)
+		m.modalStack.Push(msg.Modal)
+		return m, msg.Cmd
 
 	default:
 		// Always update spinner (it manages its own tick messages)
@@ -726,6 +732,8 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleServerList(frame)
 	case protocol.TypeChannelCreated:
 		return m.handleChannelCreated(frame)
+	case protocol.TypeChannelDeleted:
+		return m.handleChannelDeleted(frame)
 	case protocol.TypeJoinResponse:
 		return m.handleJoinResponse(frame)
 	case protocol.TypeMessageList:
@@ -750,6 +758,20 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleSSHKeyLabelUpdated(frame)
 	case protocol.TypeSSHKeyDeleted:
 		return m.handleSSHKeyDeleted(frame)
+	case protocol.TypeUserBanned:
+		return m.handleUserBanned(frame)
+	case protocol.TypeIPBanned:
+		return m.handleIPBanned(frame)
+	case protocol.TypeUserUnbanned:
+		return m.handleUserUnbanned(frame)
+	case protocol.TypeIPUnbanned:
+		return m.handleIPUnbanned(frame)
+	case protocol.TypeBanList:
+		return m.handleBanList(frame)
+	case protocol.TypeUserList:
+		return m.handleUserList(frame)
+	case protocol.TypeUserDeleted:
+		return m.handleUserDeleted(frame)
 	case protocol.TypeDisconnect:
 		return m.handleDisconnect(frame)
 	}
@@ -1064,6 +1086,45 @@ func (m Model) handleChannelCreated(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 		m.channels = append(m.channels, newChannel)
 
 		m.statusMessage = fmt.Sprintf("Channel '%s' created successfully", msg.Name)
+	} else {
+		// Keep modal open but show error
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+// handleChannelDeleted processes CHANNEL_DELETED (response + broadcast)
+func (m Model) handleChannelDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.ChannelDeletedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode channel deleted: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	if msg.Success {
+		// Close the delete channel modal if it's open
+		m.modalStack.RemoveByType(modal.ModalDeleteChannel)
+
+		// Remove the channel from the list
+		for i, ch := range m.channels {
+			if ch.ID == msg.ChannelID {
+				m.channels = append(m.channels[:i], m.channels[i+1:]...)
+
+				// If we were in the deleted channel, navigate to channel list
+				if m.currentChannel != nil && m.currentChannel.ID == msg.ChannelID {
+					m.currentChannel = nil
+					m.threads = nil
+					m.currentThread = nil
+					m.threadReplies = nil
+					m.currentView = ViewChannelList
+				}
+
+				break
+			}
+		}
+
+		m.statusMessage = msg.Message
 	} else {
 		// Keep modal open but show error
 		m.errorMessage = msg.Message
@@ -1539,9 +1600,12 @@ func (m Model) sendLogout() tea.Cmd {
 
 func (m Model) sendAuthRequest(password []byte) tea.Cmd {
 	return func() tea.Msg {
+		// Hash password client-side before sending
+		passwordHash := auth.HashPassword(string(password), m.nickname)
+
 		msg := &protocol.AuthRequestMessage{
 			Nickname: m.nickname,
-			Password: string(password),
+			Password: passwordHash,
 		}
 		if err := m.conn.SendMessage(protocol.TypeAuthRequest, msg); err != nil {
 			return ErrorMsg{Err: err}
@@ -1556,8 +1620,11 @@ func (m Model) sendAuthRequest(password []byte) tea.Cmd {
 
 func (m Model) sendRegisterUser(password []byte) tea.Cmd {
 	return func() tea.Msg {
+		// Hash password client-side before sending
+		passwordHash := auth.HashPassword(string(password), m.nickname)
+
 		msg := &protocol.RegisterUserMessage{
-			Password: string(password),
+			Password: passwordHash,
 		}
 		if err := m.conn.SendMessage(protocol.TypeRegisterUser, msg); err != nil {
 			return ErrorMsg{Err: err}
@@ -1576,6 +1643,29 @@ func (m Model) sendGetUserInfo(nickname string) tea.Cmd {
 			Nickname: nickname,
 		}
 		if err := m.conn.SendMessage(protocol.TypeGetUserInfo, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendChangePassword(oldPassword, newPassword []byte) tea.Cmd {
+	return func() tea.Msg {
+		// Hash passwords client-side before sending
+		// Note: Empty passwords remain empty (for password removal)
+		var oldHash, newHash string
+		if len(oldPassword) > 0 {
+			oldHash = auth.HashPassword(string(oldPassword), m.nickname)
+		}
+		if len(newPassword) > 0 {
+			newHash = auth.HashPassword(string(newPassword), m.nickname)
+		}
+
+		msg := &protocol.ChangePasswordRequest{
+			OldPassword: oldHash,
+			NewPassword: newHash,
+		}
+		if err := m.conn.SendMessage(protocol.TypeChangePassword, msg); err != nil {
 			return ErrorMsg{Err: err}
 		}
 		return nil
@@ -2567,4 +2657,247 @@ func (m Model) handleSSHKeyDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.errorMessage = msg.ErrorMessage
 		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
+}
+
+// Admin Functions
+
+func (m Model) sendBanUser(msg *protocol.BanUserMessage) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.conn.SendMessage(protocol.TypeBanUser, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendBanIP(msg *protocol.BanIPMessage) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.conn.SendMessage(protocol.TypeBanIP, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendUnbanUser(msg *protocol.UnbanUserMessage) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.conn.SendMessage(protocol.TypeUnbanUser, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendUnbanIP(msg *protocol.UnbanIPMessage) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.conn.SendMessage(protocol.TypeUnbanIP, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendDeleteUser(msg *protocol.DeleteUserMessage) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.conn.SendMessage(protocol.TypeDeleteUser, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendDeleteChannel(msg *protocol.DeleteChannelMessage) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.conn.SendMessage(protocol.TypeDeleteChannel, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendListBans(includeExpired bool) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.ListBansMessage{
+			IncludeExpired: includeExpired,
+		}
+		if err := m.conn.SendMessage(protocol.TypeListBans, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendListUsers(includeOffline bool) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.ListUsersMessage{
+			Limit:          500, // Max limit
+			IncludeOffline: includeOffline,
+		}
+		if err := m.conn.SendMessage(protocol.TypeListUsers, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+// Admin response handlers
+
+func (m Model) handleUserBanned(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.UserBannedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode USER_BANNED: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	if msg.Success {
+		m.statusMessage = msg.Message
+		// Close the ban user modal
+		m.modalStack.RemoveByType(modal.ModalBanUser)
+	} else {
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+func (m Model) handleIPBanned(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.IPBannedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode IP_BANNED: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	if msg.Success {
+		m.statusMessage = msg.Message
+		// Close the ban IP modal
+		m.modalStack.RemoveByType(modal.ModalBanIP)
+	} else {
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+func (m Model) handleUserUnbanned(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.UserUnbannedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode USER_UNBANNED: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	if msg.Success {
+		m.statusMessage = msg.Message
+		// Close the unban modal
+		m.modalStack.RemoveByType(modal.ModalUnban)
+	} else {
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+func (m Model) handleIPUnbanned(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.IPUnbannedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode IP_UNBANNED: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	if msg.Success {
+		m.statusMessage = msg.Message
+		// Close the unban modal
+		m.modalStack.RemoveByType(modal.ModalUnban)
+	} else {
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+func (m Model) handleBanList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.BanListMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode BAN_LIST: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	// Find and update the view bans modal directly on the stack
+	topModal := m.modalStack.Top()
+	if topModal != nil && topModal.Type() == modal.ModalViewBans {
+		if viewBansModal, ok := topModal.(*modal.ViewBansModal); ok {
+			// Convert protocol bans to modal.BanEntry
+			banEntries := make([]modal.BanEntry, len(msg.Bans))
+			for i, ban := range msg.Bans {
+				banEntries[i] = modal.BanEntry{
+					BanType:     ban.Type,
+					TargetID:    ban.UserID,
+					Nickname:    ban.Nickname,
+					IPCIDR:      ban.IPCIDR,
+					Reason:      ban.Reason,
+					BannedAt:    ban.BannedAt,
+					BannedUntil: ban.BannedUntil,
+					BannedBy:    ban.BannedBy,
+					IsShadowban: ban.Shadowban,
+				}
+			}
+			viewBansModal.SetBans(banEntries)
+		}
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+func (m Model) handleUserList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.UserListMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode USER_LIST: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	if m.logger != nil {
+		m.logger.Printf("[DEBUG] Received USER_LIST with %d users", len(msg.Users))
+	}
+
+	// Find and update the list users modal directly on the stack
+	topModal := m.modalStack.Top()
+	if topModal != nil && topModal.Type() == modal.ModalListUsers {
+		if listUsersModal, ok := topModal.(*modal.ListUsersModal); ok {
+			// Convert protocol user entries to modal.UserEntry
+			userEntries := make([]modal.UserEntry, len(msg.Users))
+			for i, user := range msg.Users {
+				userEntries[i] = modal.UserEntry{
+					Nickname:     user.Nickname,
+					IsRegistered: user.IsRegistered,
+					UserID:       user.UserID,
+					Online:       user.Online,
+				}
+			}
+			listUsersModal.SetUsers(userEntries)
+			if m.logger != nil {
+				m.logger.Printf("[DEBUG] Updated ListUsersModal with %d users", len(userEntries))
+			}
+		}
+	} else if m.logger != nil {
+		m.logger.Printf("[DEBUG] ListUsersModal not on top of stack (top=%v)", topModal)
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+func (m Model) handleUserDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.UserDeletedMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode USER_DELETED: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	if msg.Success {
+		m.statusMessage = msg.Message
+		// Close the delete user modal
+		m.modalStack.RemoveByType(modal.ModalDeleteUser)
+	} else {
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }

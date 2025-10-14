@@ -251,28 +251,21 @@ This document tracks needed improvements for server operations documentation and
 
 ### UX - User Experience
 
-#### 22. Add Accessibility Improvements
-- [ ] Screen reader support (test with Orca, NVDA)
-- [ ] Add `--screen-reader` flag for plain text output
-- [ ] Color scheme options for color-blind users
-- [ ] High-contrast mode
-- [ ] Font size configuration
+#### 22. Add Accessibility Improvements ⏭️
+- **Status**: SKIPPED
+- **Rationale**: Niche requirement; can be revisited based on user feedback
 
-#### 23. Add Bandwidth Indicator
-- [ ] If `--throttle` enabled, show in status bar: "⏱ Limited to X KB/s"
+#### 23. Add Bandwidth Indicator ✅
+- **Status**: COMPLETE
+- **Implementation**: Shows throttle speed in status bar when `--throttle` flag is used
 
-#### 24. Add Update Notifications
-- [ ] Show notification in footer when update available (not just welcome screen)
-- [ ] "Press U to update now" shortcut
+#### 24. Add Update Notifications ⏭️
+- **Status**: SKIPPED
+- **Rationale**: Update check already shows on welcome screen; footer notification would be too noisy
 
-#### 25. Add Session Statistics
-- [ ] Show in help or status:
-  ```
-  Connected for: 2h 34m
-  Messages read: 45
-  Messages posted: 12
-  Data transferred: 2.3 MB
-  ```
+#### 25. Add Session Statistics ⏭️
+- **Status**: SKIPPED
+- **Rationale**: Nice-to-have but not essential; metrics endpoint provides this data for admins
 
 ### Operations - Documentation
 
@@ -304,42 +297,40 @@ This document tracks needed improvements for server operations documentation and
 
 #### 28. Admin System (Protocol-Level) ✅
 - **Critical**: Server admin capabilities with audit logging
-- **Status**: PARTIALLY COMPLETE (protocol and server complete, client UI pending)
+- **Status**: COMPLETE
 - **Completed**:
   - [x] Admin permission system (config-based admin_users list)
   - [x] isAdmin() permission check for all admin operations
   - [x] Ban table with discriminated union (user bans vs IP bans)
   - [x] AdminAction table for complete audit trail
   - [x] Support for timed bans (duration_seconds) and permanent bans
-  - [x] Shadowban functionality (messages only visible to author)
+  - [x] Shadowban functionality (messages only visible to author + admins)
   - [x] CIDR range support for IP bans (e.g., "10.0.0.0/24")
-  - [x] Protocol messages (12 new types):
-    - Client→Server: BAN_USER (0x59), BAN_IP (0x5A), UNBAN_USER (0x5B), UNBAN_IP (0x5C), LIST_BANS (0x5D), DELETE_USER (0x5E)
-    - Server→Client: USER_BANNED (0x9F), IP_BANNED (0xA5), USER_UNBANNED (0xA6), IP_UNBANNED (0xA7), BAN_LIST (0xA8), USER_DELETED (0xA9)
-  - [x] Database layer: CreateUserBan, CreateIPBan, DeleteUserBan, DeleteIPBan, ListBans, GetActiveBanForUser, GetActiveBanForIP
-  - [x] Server handlers with admin permission checks
+  - [x] Protocol messages (14 new types):
+    - Client→Server: BAN_USER (0x59), BAN_IP (0x5A), UNBAN_USER (0x5B), UNBAN_IP (0x5C), LIST_BANS (0x5D), DELETE_USER (0x5E), DELETE_CHANNEL (0x5F)
+    - Server→Client: USER_BANNED (0x9F), IP_BANNED (0xA5), USER_UNBANNED (0xA6), IP_UNBANNED (0xA7), BAN_LIST (0xA8), USER_DELETED (0xA9), CHANNEL_DELETED (0xAA)
+  - [x] Database layer: CreateUserBan, CreateIPBan, DeleteUserBan, DeleteIPBan, ListBans, GetActiveBanForUser, GetActiveBanForIP, DeleteUser, DeleteChannel, LogAdminAction
+  - [x] Server handlers with admin permission checks (all 7 admin operations)
   - [x] Migration 007: Ban and AdminAction tables
   - [x] Complete protocol documentation in PROTOCOL.md
   - [x] Complete design documentation in ADMIN_SYSTEM_DESIGN.md
-- **Remaining Work**:
-  - [ ] Update DELETE_MESSAGE handler to allow admin override (admins can delete any message)
-  - [ ] Update DELETE_CHANNEL handler to allow admin override (admins can delete any channel)
-  - [ ] Update LIST_USERS to support include_offline flag for admins
-  - [ ] Implement ban checking in authentication flow (reject banned users, show ban reason/duration)
-  - [ ] Implement shadowban message filtering (filter messages from shadowbanned users)
-  - [ ] Create admin panel modal in client (press A key to open)
-  - [ ] Client UI for ban management (ban/unban users, ban/unban IPs, view ban list)
+  - [x] DELETE_MESSAGE admin override (admins can delete any message via AdminSoftDeleteMessage)
+  - [x] EDIT_MESSAGE admin override (admins can edit any message via AdminUpdateMessage)
+  - [x] DELETE_CHANNEL implementation (protocol message 0x5F, cascades to messages/subchannels)
+  - [x] DELETE_USER implementation (protocol message 0x5E, anonymizes messages, disconnects sessions)
+  - [x] Ban checking in authentication flow (both password and SSH auth, rejects regular bans, allows shadowbans)
+  - [x] Shadowban message filtering (broadcastNewMessage filters to author + admins only)
+  - [x] Admin panel modal in client (press A key to open)
+  - [x] Client UI for ban management (ban/unban users, ban/unban IPs, view ban list)
+  - [x] Client UI for user deletion (with confirmation)
+  - [x] Client UI for channel deletion (with confirmation)
+  - [x] Client handlers for CHANNEL_DELETED broadcast (remove from channel list)
+  - [x] Client handlers for USER_DELETED broadcast (update user lists if shown)
+  - [x] LIST_USERS include_offline flag for admins (shows all registered users with online status)
 - **Implementation**:
-  - pkg/protocol/messages.go (12 new message types)
-  - pkg/protocol/types.go (WriteOptionalInt64/ReadOptionalInt64)
-  - pkg/database/database.go (7 new ban methods)
-  - pkg/database/memdb.go (forwarding methods)
-  - pkg/database/migrations/007_add_admin_tables.sql
-  - pkg/server/config.go (admin_users config field)
-  - pkg/server/handlers.go (6 new admin handlers)
-  - pkg/server/server.go (isAdmin() check, message routing)
-  - docs/ADMIN_SYSTEM_DESIGN.md (complete design documentation)
-  - docs/PROTOCOL.md (wire format specifications)
+  - Server: pkg/protocol/messages.go, pkg/database/database.go, pkg/database/memdb.go, pkg/database/migrations/007_add_admin_tables.sql, pkg/server/handlers.go, pkg/server/server.go, pkg/server/session.go, pkg/server/ssh.go
+  - Client: pkg/client/ui/modal/{admin_panel,ban_user,ban_ip,unban,view_bans,delete_user,delete_channel}.go, pkg/client/ui/update.go (7 handlers), pkg/client/ui/model.go (A key binding)
+  - Documentation: docs/ADMIN_SYSTEM_DESIGN.md, docs/PROTOCOL.md
 
 #### 28a. Create superchat-admin CLI Tool
 - **Critical**: No way to admin without SQL or client

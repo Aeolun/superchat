@@ -7,7 +7,8 @@
     "build": "tsc",
     "test": "bun run src/run-tests.ts",
     "test:filter": "bun run src/run-tests.ts --filter",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "dns:query": "bun run src/examples/dns-query-simple.ts"
   },
   "keywords": [
     "binary",
@@ -19,6 +20,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^24.7.1",
+    "typedoc": "^0.28.13",
     "typescript": "^5.9.3"
   },
   "dependencies": {

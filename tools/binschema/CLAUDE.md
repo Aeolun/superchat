@@ -9,8 +9,8 @@ BinSchema is a bit-level binary serialization schema and code generator. It gene
 ## Testing
 
 ```bash
-# Run all tests (preferred - uses bun for speed)
-npm test
+# Run all tests with bun (fast, no compilation needed)
+bun run src/run-tests.ts
 
 # Run specific test category
 bun run src/run-tests.ts --filter=<pattern>
@@ -19,7 +19,10 @@ bun run src/run-tests.ts --filter=<pattern>
 bun run src/run-tests.ts --filter=uint16      # Only uint16 tests
 bun run src/run-tests.ts --filter=optional    # Only optional field tests
 bun run src/run-tests.ts --filter=bitfields   # Only bitfield tests
+bun run src/run-tests.ts --filter=string_type_reference  # Only string type reference tests
 ```
+
+**Important:** Always use bun to run tests directly from TypeScript source. The test runner automatically discovers all `*.test.ts` and `*.test.js` files recursively.
 
 Tests run fast (~0.15s for full suite with bun).
 

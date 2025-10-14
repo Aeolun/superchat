@@ -184,10 +184,22 @@ func (s *Server) handleSSHSession(channel ssh.Channel, permissions *ssh.Permissi
 
 	// Automatically send AUTH_RESPONSE for SSH-authenticated users (V2 feature)
 	if userID != nil {
-		// Update session with user flags (already has UserID and Nickname from CreateSession)
+		// Check if user is shadowbanned
+		ban, err := s.db.GetActiveBanForUser(userID, &nickname)
+		if err != nil {
+			log.Printf("Session %d: failed to check ban status for SSH user %s (ID: %d): %v", sess.ID, nickname, *userID, err)
+			// Continue - don't block on ban check failures
+		}
+
+		// Update session with user flags and shadowban status
 		sess.mu.Lock()
 		sess.UserFlags = userFlags
+		sess.Shadowbanned = ban != nil && ban.Shadowban
 		sess.mu.Unlock()
+
+		if sess.Shadowbanned {
+			debugLog.Printf("Session %d: SSH user %s (ID: %d) is shadowbanned", sess.ID, nickname, *userID)
+		}
 
 		authResp := &protocol.AuthResponseMessage{
 			Success:  true,
@@ -371,15 +383,37 @@ func (s *Server) authenticateSSHKey(conn ssh.ConnMetadata, pubKey ssh.PublicKey)
 			log.Printf("Failed to update SSH key last_used for %s: %v", fingerprint, err)
 		}
 
+		// Check if user is banned
+		ban, err := s.db.GetActiveBanForUser(&user.ID, &user.Nickname)
+		if err != nil {
+			log.Printf("SSH auth: failed to check ban status for user %s (ID: %d): %v", user.Nickname, user.ID, err)
+			// Continue with auth - don't block on ban check failures
+		}
+
+		if ban != nil && !ban.Shadowban {
+			// Regular ban - reject SSH authentication
+			bannedUntil := "permanently"
+			if ban.BannedUntil != nil {
+				bannedUntil = fmt.Sprintf("until %s", time.Unix(*ban.BannedUntil/1000, 0).Format(time.RFC3339))
+			}
+			log.Printf("SSH auth rejected: user %s (ID: %d) is banned %s. Reason: %s", user.Nickname, user.ID, bannedUntil, ban.Reason)
+			return nil, fmt.Errorf("account banned %s", bannedUntil)
+		}
+
+		if ban != nil && ban.Shadowban {
+			log.Printf("SSH auth: user %s (ID: %d) is shadowbanned", user.Nickname, user.ID)
+			// Continue with auth - shadowban is enforced during message broadcasting
+		}
+
 		log.Printf("SSH auth: user %s (ID: %d, fingerprint: %s)", user.Nickname, user.ID, fingerprint)
 
 		// Return permissions with user info
 		return &ssh.Permissions{
 			Extensions: map[string]string{
-				"user_id":   fmt.Sprintf("%d", user.ID),
-				"nickname":  user.Nickname,
+				"user_id":    fmt.Sprintf("%d", user.ID),
+				"nickname":   user.Nickname,
 				"user_flags": fmt.Sprintf("%d", user.UserFlags),
-				"pubkey_fp": fingerprint,
+				"pubkey_fp":  fingerprint,
 			},
 		}, nil
 	}

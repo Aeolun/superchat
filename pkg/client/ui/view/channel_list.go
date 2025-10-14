@@ -47,7 +47,7 @@ func RenderChannelList(
 	channelContent := buildChannelPaneContent(conn, channels, channelCursor, loadingChannels, spin, authState)
 
 	// Build main pane content (instructions)
-	mainContent := buildChannelListInstructions(updateAvailable, currentVersion, latestVersion, len(channels) == 0, authState)
+	mainContent := buildChannelListInstructions(conn, updateAvailable, currentVersion, latestVersion, len(channels) == 0, authState)
 
 	// Create horizontal layout for the content row
 	contentLayout := flexbox.NewHorizontal(width, contentHeight)
@@ -150,10 +150,25 @@ func buildChannelPaneContent(
 }
 
 // buildChannelListInstructions builds the welcome instructions for channel list view
-func buildChannelListInstructions(updateAvailable bool, currentVersion, latestVersion string, noChannels bool, authState int) string {
+func buildChannelListInstructions(conn client.ConnectionInterface, updateAvailable bool, currentVersion, latestVersion string, noChannels bool, authState int) string {
 	welcomeLines := []string{
 		"Welcome to SuperChat!",
 		"",
+	}
+
+	// Add security warning for TCP/WebSocket connections
+	connType := conn.GetConnectionType()
+	if connType == "TCP" || connType == "WebSocket" {
+		securityWarning := lipgloss.NewStyle().
+			Foreground(ui.WarningColor).
+			Bold(true).
+			Render("⚠ Insecure Connection")
+
+		securityInfo := lipgloss.NewStyle().
+			Foreground(ui.MutedColor).
+			Render("Passwords are hashed but connection is not encrypted.\nFor true security, use SSH connection instead.")
+
+		welcomeLines = append(welcomeLines, securityWarning, securityInfo, "", "")
 	}
 
 	// Add update notification if available

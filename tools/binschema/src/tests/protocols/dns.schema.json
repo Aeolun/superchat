@@ -181,6 +181,26 @@
       ],
       "description": "A record RDATA (TYPE=1, CLASS=1) - IPv4 address"
     },
+    "NSRdata": {
+      "sequence": [
+        {
+          "name": "nsdname",
+          "type": "CompressedDomain",
+          "description": "Name server domain name"
+        }
+      ],
+      "description": "NS record RDATA (TYPE=2) - Name server domain name"
+    },
+    "CNAMERdata": {
+      "sequence": [
+        {
+          "name": "cname",
+          "type": "CompressedDomain",
+          "description": "Canonical name (alias target)"
+        }
+      ],
+      "description": "CNAME record RDATA (TYPE=5) - Canonical name"
+    },
     "ResourceRecord": {
       "sequence": [
         {
@@ -219,6 +239,16 @@
               "type": "ARdata",
               "when": "value === 1",
               "description": "A record (IPv4 address)"
+            },
+            {
+              "type": "NSRdata",
+              "when": "value === 2",
+              "description": "NS record (name server)"
+            },
+            {
+              "type": "CNAMERdata",
+              "when": "value === 5",
+              "description": "CNAME record (canonical name)"
             }
           ],
           "description": "Resource data (format depends on TYPE)"

@@ -904,6 +904,36 @@ func (m *MemDB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, 
 	return msg, nil
 }
 
+// AdminSoftDeleteMessage marks a message as deleted (admin override - bypasses ownership check in DB layer)
+// In MemDB, this behaves identically to SoftDeleteMessage since ownership validation happens in the DB layer
+func (m *MemDB) AdminSoftDeleteMessage(messageID uint64, adminNickname string) (*Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	msg, exists := m.messages[int64(messageID)]
+	if !exists {
+		return nil, fmt.Errorf("message not found")
+	}
+
+	if msg.DeletedAt != nil {
+		return nil, fmt.Errorf("message already deleted")
+	}
+
+	// Mark as deleted
+	now := nowMillis()
+	msg.DeletedAt = &now
+	m.dirtyMessages[int64(messageID)] = true // Mark as dirty for next snapshot
+
+	// Decrement parent's reply count (if this is a reply, atomic)
+	if msg.ParentID != nil {
+		if parent := m.messages[*msg.ParentID]; parent != nil && parent.ReplyCount.Load() > 0 {
+			parent.ReplyCount.Add(^uint32(0)) // Atomic decrement (two's complement of 0 = -1)
+		}
+	}
+
+	return msg, nil
+}
+
 // UpdateMessage updates a message's content (for registered users only)
 func (m *MemDB) UpdateMessage(messageID uint64, userID uint64, newContent string) (*Message, error) {
 	m.mu.Lock()
@@ -921,6 +951,34 @@ func (m *MemDB) UpdateMessage(messageID uint64, userID uint64, newContent string
 	if *msg.AuthorUserID != int64(userID) {
 		return nil, ErrMessageNotOwned
 	}
+	if msg.DeletedAt != nil {
+		return nil, errors.New("cannot edit deleted message")
+	}
+
+	// Update content and edited_at timestamp
+	now := nowMillis()
+	msg.Content = newContent
+	msg.EditedAt = &now
+	m.dirtyMessages[int64(messageID)] = true // Mark as dirty for next snapshot
+
+	return msg, nil
+}
+
+// AdminUpdateMessage updates a message's content (admin override - bypasses ownership check)
+func (m *MemDB) AdminUpdateMessage(messageID uint64, userID uint64, newContent string) (*Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	msg, exists := m.messages[int64(messageID)]
+	if !exists {
+		return nil, ErrMessageNotFound
+	}
+
+	// Validate message is editable
+	if msg.AuthorUserID == nil {
+		return nil, errors.New("cannot edit anonymous messages")
+	}
+	// Admin override: skip ownership check
 	if msg.DeletedAt != nil {
 		return nil, errors.New("cannot edit deleted message")
 	}
@@ -964,6 +1022,11 @@ func (m *MemDB) GetUserByNickname(nickname string) (*User, error) {
 // GetUserByID retrieves a user by ID
 func (m *MemDB) GetUserByID(userID int64) (*User, error) {
 	return m.sqliteDB.GetUserByID(userID)
+}
+
+// ListAllUsers retrieves all registered users
+func (m *MemDB) ListAllUsers(limit int) ([]*User, error) {
+	return m.sqliteDB.ListAllUsers(limit)
 }
 
 // UpdateUserLastSeen updates the last_seen timestamp for a user
@@ -1102,4 +1165,71 @@ func (m *MemDB) GetActiveBanForIP(ipAddress string) (*Ban, error) {
 
 func (m *MemDB) ListBans(includeExpired bool) ([]*Ban, error) {
 	return m.sqliteDB.ListBans(includeExpired)
+}
+
+// ===== Admin Action Logging =====
+
+func (m *MemDB) LogAdminAction(adminUserID uint64, adminNickname, actionType, details string) error {
+	return m.sqliteDB.LogAdminAction(adminUserID, adminNickname, actionType, details)
+}
+
+// ===== Channel Deletion =====
+
+// DeleteChannel deletes a channel from both SQLite and in-memory cache
+func (m *MemDB) DeleteChannel(channelID uint64) error {
+	// Delete from SQLite first (with cascade)
+	if err := m.sqliteDB.DeleteChannel(channelID); err != nil {
+		return err
+	}
+
+	// Remove from in-memory cache
+	m.mu.Lock()
+	delete(m.channels, int64(channelID))
+
+	// Clean up message indexes for this channel
+	if messageIDs, exists := m.messagesByChannel[int64(channelID)]; exists {
+		// Mark all messages as dirty so they get deleted from SQLite
+		for _, msgID := range messageIDs {
+			delete(m.messages, msgID)
+		}
+		delete(m.messagesByChannel, int64(channelID))
+	}
+	m.mu.Unlock()
+
+	log.Printf("MemDB: removed channel from cache: id=%d", channelID)
+	return nil
+}
+
+// DeleteUser deletes a user account and anonymizes their messages
+// Also removes all in-memory sessions for this user
+// Returns the nickname of the deleted user
+func (m *MemDB) DeleteUser(userID uint64) (string, error) {
+	// Delete from SQLite first (anonymizes messages, deletes user record)
+	nickname, err := m.sqliteDB.DeleteUser(userID)
+	if err != nil {
+		return "", err
+	}
+
+	// Remove all in-memory sessions for this user
+	m.mu.Lock()
+	if sessionsSet, exists := m.sessionsByUserID[int64(userID)]; exists {
+		for sessionID := range sessionsSet {
+			delete(m.sessions, sessionID)
+		}
+		delete(m.sessionsByUserID, int64(userID))
+		log.Printf("MemDB: removed %d sessions for deleted user: id=%d, nickname=%s", len(sessionsSet), userID, nickname)
+	}
+
+	// Update all messages in memory: set author_user_id=NULL for this user's messages
+	for _, msg := range m.messages {
+		if msg.AuthorUserID != nil && uint64(*msg.AuthorUserID) == userID {
+			msg.AuthorUserID = nil
+			msg.AuthorNickname = nickname // Preserve nickname for anonymized messages
+			m.dirtyMessages[msg.ID] = true
+		}
+	}
+	m.mu.Unlock()
+
+	log.Printf("MemDB: deleted user and anonymized messages: id=%d, nickname=%s", userID, nickname)
+	return nickname, nil
 }

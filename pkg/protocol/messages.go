@@ -55,7 +55,8 @@ const (
 	TypeUnbanUser  = 0x5B
 	TypeUnbanIP    = 0x5C
 	TypeListBans   = 0x5D
-	TypeDeleteUser = 0x5E
+	TypeDeleteUser    = 0x5E
+	TypeDeleteChannel = 0x5F
 )
 
 // Message type constants (Server → Client)
@@ -95,7 +96,8 @@ const (
 	TypeUserUnbanned  = 0xA6
 	TypeIPUnbanned    = 0xA7
 	TypeBanList       = 0xA8
-	TypeUserDeleted   = 0xA9
+	TypeUserDeleted     = 0xA9
+	TypeChannelDeleted  = 0xAA
 )
 
 // Error codes
@@ -1966,13 +1968,18 @@ func (m *UserInfoMessage) Decode(payload []byte) error {
 	return nil
 }
 
-// ListUsersMessage (0x16) - Request list of online users
+// ListUsersMessage (0x16) - Request list of online or all users
 type ListUsersMessage struct {
-	Limit uint16
+	Limit          uint16
+	IncludeOffline bool // Optional field - admin only
 }
 
 func (m *ListUsersMessage) EncodeTo(w io.Writer) error {
-	return WriteUint16(w, m.Limit)
+	if err := WriteUint16(w, m.Limit); err != nil {
+		return err
+	}
+	// Write include_offline flag (optional, defaults to false)
+	return WriteBool(w, m.IncludeOffline)
 }
 
 func (m *ListUsersMessage) Encode() ([]byte, error) {
@@ -1990,6 +1997,19 @@ func (m *ListUsersMessage) Decode(payload []byte) error {
 		return err
 	}
 	m.Limit = limit
+
+	// IncludeOffline is optional - if not present, defaults to false
+	includeOffline, err := ReadBool(buf)
+	if err != nil && err != io.EOF {
+		return err
+	}
+	if err == io.EOF {
+		// Field not present (backwards compatible with older clients)
+		m.IncludeOffline = false
+	} else {
+		m.IncludeOffline = includeOffline
+	}
+
 	return nil
 }
 
@@ -1998,6 +2018,7 @@ type UserListEntry struct {
 	Nickname     string
 	IsRegistered bool
 	UserID       *uint64 // Only present if IsRegistered = true
+	Online       bool    // True if user has an active session
 }
 
 // UserListMessage (0x9A) - List of online users response
@@ -2017,6 +2038,9 @@ func (m *UserListMessage) EncodeTo(w io.Writer) error {
 			return err
 		}
 		if err := WriteOptionalUint64(w, user.UserID); err != nil {
+			return err
+		}
+		if err := WriteBool(w, user.Online); err != nil {
 			return err
 		}
 	}
@@ -2052,10 +2076,15 @@ func (m *UserListMessage) Decode(payload []byte) error {
 		if err != nil {
 			return err
 		}
+		online, err := ReadBool(buf)
+		if err != nil {
+			return err
+		}
 		users[i] = UserListEntry{
 			Nickname:     nickname,
 			IsRegistered: isRegistered,
 			UserID:       userID,
+			Online:       online,
 		}
 	}
 
@@ -3517,6 +3546,89 @@ func (m *UserDeletedMessage) Decode(payload []byte) error {
 	}
 
 	m.Success = success
+	m.Message = message
+	return nil
+}
+
+// DeleteChannelMessage (0x5F) - Delete a channel (admin only)
+type DeleteChannelMessage struct {
+	ChannelID uint64
+	Reason    string
+}
+
+func (m *DeleteChannelMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	return WriteString(w, m.Reason)
+}
+
+func (m *DeleteChannelMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *DeleteChannelMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	reason, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.ChannelID = channelID
+	m.Reason = reason
+	return nil
+}
+
+// ChannelDeletedMessage (0xAA) - Response to DELETE_CHANNEL + broadcast
+type ChannelDeletedMessage struct {
+	Success   bool
+	ChannelID uint64
+	Message   string
+}
+
+func (m *ChannelDeletedMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *ChannelDeletedMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ChannelDeletedMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+	m.ChannelID = channelID
 	m.Message = message
 	return nil
 }

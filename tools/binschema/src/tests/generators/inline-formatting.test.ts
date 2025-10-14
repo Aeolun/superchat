@@ -210,34 +210,37 @@ const tests = [
   },
 ];
 
-// Run tests
-let passed = 0;
-let failed = 0;
+// Only run tests if this file is executed directly (not imported)
+if (import.meta.url === `file://${process.argv[1]}` || import.meta.url.endsWith(process.argv[1])) {
+  // Run tests
+  let passed = 0;
+  let failed = 0;
 
-console.log('Running inline formatting tests...\n');
+  console.log('Running inline formatting tests...\n');
 
-for (const test of tests) {
-  try {
-    const result = formatInlineMarkup(test.input);
-    if (result === test.expected) {
-      passed++;
-      console.log(`✓ ${test.name}`);
-    } else {
+  for (const test of tests) {
+    try {
+      const result = formatInlineMarkup(test.input);
+      if (result === test.expected) {
+        passed++;
+        console.log(`✓ ${test.name}`);
+      } else {
+        failed++;
+        console.log(`✗ ${test.name}`);
+        console.log(`  Input:    "${test.input}"`);
+        console.log(`  Expected: "${test.expected}"`);
+        console.log(`  Got:      "${result}"`);
+      }
+    } catch (error) {
       failed++;
-      console.log(`✗ ${test.name}`);
-      console.log(`  Input:    "${test.input}"`);
-      console.log(`  Expected: "${test.expected}"`);
-      console.log(`  Got:      "${result}"`);
+      console.log(`✗ ${test.name} (threw error)`);
+      console.log(`  Error: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } catch (error) {
-    failed++;
-    console.log(`✗ ${test.name} (threw error)`);
-    console.log(`  Error: ${error instanceof Error ? error.message : String(error)}`);
   }
-}
 
-console.log(`\n${passed} passed, ${failed} failed`);
+  console.log(`\n${passed} passed, ${failed} failed`);
 
-if (failed > 0) {
-  process.exit(1);
+  if (failed > 0) {
+    process.exit(1);
+  }
 }

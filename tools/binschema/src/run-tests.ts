@@ -22,7 +22,7 @@ interface TestSuite {
 }
 
 /**
- * Recursively find all *.test.ts files in a directory
+ * Recursively find all *.test.ts and *.test.js files in a directory
  */
 function findTestFiles(dir: string): string[] {
   const files: string[] = [];
@@ -37,7 +37,7 @@ function findTestFiles(dir: string): string[] {
       if (stat.isDirectory()) {
         // Recursively search subdirectories
         files.push(...findTestFiles(fullPath));
-      } else if (entry.endsWith('.test.ts')) {
+      } else if (entry.endsWith('.test.ts') || entry.endsWith('.test.js')) {
         files.push(fullPath);
       }
     }

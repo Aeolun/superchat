@@ -809,6 +809,96 @@ func (db *DB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, er
 	return msg, nil
 }
 
+// AdminSoftDeleteMessage performs a soft delete on any message (admin override).
+// Unlike SoftDeleteMessage, this bypasses ownership validation.
+func (db *DB) AdminSoftDeleteMessage(messageID uint64, adminNickname string) (*Message, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Load message row
+	msg := &Message{}
+	var subchannelID, parentID, authorUserID, editedAt, deletedAt sql.NullInt64
+
+	err = tx.QueryRow(`
+		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+		       content, created_at, edited_at, deleted_at
+		FROM Message
+		WHERE id = ?
+	`, messageID).Scan(
+		&msg.ID,
+		&msg.ChannelID,
+		&subchannelID,
+		&parentID,
+		&authorUserID,
+		&msg.AuthorNickname,
+		&msg.Content,
+		&msg.CreatedAt,
+		&editedAt,
+		&deletedAt,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrMessageNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if subchannelID.Valid {
+		msg.SubchannelID = &subchannelID.Int64
+	}
+	if parentID.Valid {
+		msg.ParentID = &parentID.Int64
+	}
+	if authorUserID.Valid {
+		msg.AuthorUserID = &authorUserID.Int64
+	}
+	if editedAt.Valid {
+		msg.EditedAt = &editedAt.Int64
+	}
+	if deletedAt.Valid {
+		msg.DeletedAt = &deletedAt.Int64
+	}
+
+	// Admin override: skip ownership check
+	// Still check if already deleted
+	if msg.DeletedAt != nil {
+		return nil, ErrMessageAlreadyDeleted
+	}
+
+	deletedAtMillis := nowMillis()
+	deletedContent := fmt.Sprintf("[deleted by ~%s]", adminNickname)
+
+	// Update message content and deleted_at
+	if _, err := tx.Exec(`
+		UPDATE Message
+		SET content = ?, deleted_at = ?
+		WHERE id = ?
+	`, deletedContent, deletedAtMillis, messageID); err != nil {
+		return nil, err
+	}
+
+	// Record deletion version with original content
+	if _, err := tx.Exec(`
+		INSERT INTO MessageVersion (message_id, content, author_nickname, created_at, version_type)
+		VALUES (?, ?, ?, ?, 'deleted')
+	`, messageID, msg.Content, msg.AuthorNickname, deletedAtMillis); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	msg.Content = deletedContent
+	msg.DeletedAt = &deletedAtMillis
+
+	return msg, nil
+}
+
 // UpdateMessage updates a message's content (for registered users only)
 // Returns the updated message with edited_at timestamp set
 func (db *DB) UpdateMessage(messageID uint64, userID uint64, newContent string) (*Message, error) {
@@ -870,6 +960,98 @@ func (db *DB) UpdateMessage(messageID uint64, userID uint64, newContent string) 
 	if *msg.AuthorUserID != int64(userID) {
 		return nil, ErrMessageNotOwned
 	}
+	if msg.DeletedAt != nil {
+		return nil, errors.New("cannot edit deleted message")
+	}
+
+	editedAtMillis := nowMillis()
+
+	// Record edit version with original content
+	if _, err := tx.Exec(`
+		INSERT INTO MessageVersion (message_id, content, author_nickname, created_at, version_type)
+		VALUES (?, ?, ?, ?, 'edited')
+	`, messageID, msg.Content, msg.AuthorNickname, editedAtMillis); err != nil {
+		return nil, err
+	}
+
+	// Update message content and edited_at
+	if _, err := tx.Exec(`
+		UPDATE Message
+		SET content = ?, edited_at = ?
+		WHERE id = ?
+	`, newContent, editedAtMillis, messageID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	msg.Content = newContent
+	msg.EditedAt = &editedAtMillis
+
+	return msg, nil
+}
+
+// AdminUpdateMessage updates a message's content (admin override - bypasses ownership check)
+// Returns the updated message with edited_at timestamp set
+func (db *DB) AdminUpdateMessage(messageID uint64, userID uint64, newContent string) (*Message, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Load message row
+	msg := &Message{}
+	var subchannelID, parentID, authorUserID, editedAt, deletedAt sql.NullInt64
+
+	err = tx.QueryRow(`
+		SELECT id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname,
+		       content, created_at, edited_at, deleted_at
+		FROM Message
+		WHERE id = ?
+	`, messageID).Scan(
+		&msg.ID,
+		&msg.ChannelID,
+		&subchannelID,
+		&parentID,
+		&authorUserID,
+		&msg.AuthorNickname,
+		&msg.Content,
+		&msg.CreatedAt,
+		&editedAt,
+		&deletedAt,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrMessageNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if subchannelID.Valid {
+		msg.SubchannelID = &subchannelID.Int64
+	}
+	if parentID.Valid {
+		msg.ParentID = &parentID.Int64
+	}
+	if authorUserID.Valid {
+		msg.AuthorUserID = &authorUserID.Int64
+	}
+	if editedAt.Valid {
+		msg.EditedAt = &editedAt.Int64
+	}
+	if deletedAt.Valid {
+		msg.DeletedAt = &deletedAt.Int64
+	}
+
+	// Validate message is editable
+	if msg.AuthorUserID == nil {
+		return nil, errors.New("cannot edit anonymous messages")
+	}
+	// Admin override: skip ownership check
 	if msg.DeletedAt != nil {
 		return nil, errors.New("cannot edit deleted message")
 	}
@@ -1091,6 +1273,37 @@ func (db *DB) GetUserByID(userID int64) (*User, error) {
 	}
 
 	return &user, nil
+}
+
+// ListAllUsers retrieves all registered users, sorted by nickname
+// Used by admins with LIST_USERS include_offline flag
+func (db *DB) ListAllUsers(limit int) ([]*User, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, nickname, user_flags, password_hash, created_at, last_seen
+		FROM User
+		ORDER BY nickname ASC
+		LIMIT ?
+	`, limit)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*User
+	for rows.Next() {
+		var user User
+		if err := rows.Scan(&user.ID, &user.Nickname, &user.UserFlags, &user.PasswordHash, &user.CreatedAt, &user.LastSeen); err != nil {
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
 }
 
 // UpdateUserNickname updates a user's nickname
@@ -1830,4 +2043,78 @@ func (db *DB) ListBans(includeExpired bool) ([]*Ban, error) {
 	}
 
 	return bans, rows.Err()
+}
+
+// ===== Admin Action Logging =====
+
+// AdminAction represents an admin action audit log entry
+type AdminAction struct {
+	ID               int64
+	AdminNickname    string
+	ActionType       string  // "ban_user", "unban_user", "ban_ip", "unban_ip", "delete_message", "edit_message", "delete_channel", "delete_user"
+	TargetType       string  // "user", "ip", "message", "channel"
+	TargetID         *int64  // ID of the target (NULL for IP bans)
+	TargetIdentifier string  // Human-readable identifier (nickname, IP, channel name, etc.)
+	Details          string  // Additional context (reason, etc.)
+	PerformedAt      int64   // Unix timestamp in milliseconds
+	IPAddress        *string // Admin's IP address (for audit trail)
+}
+
+// LogAdminAction logs an admin action to the AdminAction table
+func (db *DB) LogAdminAction(adminUserID uint64, adminNickname, actionType, details string) error {
+	now := nowMillis()
+	_, err := db.writeConn.Exec(`
+		INSERT INTO AdminAction (admin_user_id, admin_nickname, action_type, details, performed_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, adminUserID, adminNickname, actionType, details, now)
+	return err
+}
+
+// DeleteChannel deletes a channel and all associated data (cascades to messages, subchannels, subscriptions)
+func (db *DB) DeleteChannel(channelID uint64) error {
+	_, err := db.writeConn.Exec(`DELETE FROM Channel WHERE id = ?`, channelID)
+	return err
+}
+
+// DeleteUser deletes a user account and anonymizes their messages
+// Messages are preserved but author_user_id is set to NULL (becomes anonymous)
+// Returns the nickname of the deleted user
+func (db *DB) DeleteUser(userID uint64) (string, error) {
+	tx, err := db.writeConn.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	// Get user nickname before deletion (for logging and broadcast)
+	var nickname string
+	err = tx.QueryRow(`SELECT nickname FROM User WHERE id = ?`, userID).Scan(&nickname)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("user not found")
+	}
+	if err != nil {
+		return "", err
+	}
+
+	// Anonymize all messages by this user (set author_user_id=NULL, preserve content)
+	_, err = tx.Exec(`
+		UPDATE Message
+		SET author_user_id = NULL, author_nickname = ?
+		WHERE author_user_id = ?
+	`, nickname, userID)
+	if err != nil {
+		return "", fmt.Errorf("failed to anonymize messages: %w", err)
+	}
+
+	// Delete user (CASCADE will delete SSH keys, sessions, bans, etc.)
+	_, err = tx.Exec(`DELETE FROM User WHERE id = ?`, userID)
+	if err != nil {
+		return "", fmt.Errorf("failed to delete user: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+
+	return nickname, nil
 }

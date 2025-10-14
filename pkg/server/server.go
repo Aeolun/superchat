@@ -609,6 +609,8 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleListBans(sess, frame)
 	case protocol.TypeDeleteUser:
 		return s.handleDeleteUser(sess, frame)
+	case protocol.TypeDeleteChannel:
+		return s.handleDeleteChannel(sess, frame)
 	default:
 		// Unknown or unimplemented message type
 		return s.sendError(sess, 1001, "Unsupported message type")

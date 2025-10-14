@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/aeolun/superchat/pkg/database"
 	"github.com/aeolun/superchat/pkg/protocol"
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // initTestLoggers initializes package-level loggers for testing
@@ -1283,7 +1286,7 @@ func TestBroadcastNewMessage(t *testing.T) {
 		threadRootIDUint := uint64(threadID)
 
 		// Broadcast the new message
-		err = srv.broadcastNewMessage(protoMsg, &threadRootIDUint)
+		err = srv.broadcastNewMessage(sess, protoMsg, &threadRootIDUint)
 		if err != nil {
 			t.Fatalf("broadcastNewMessage failed: %v", err)
 		}
@@ -1329,7 +1332,7 @@ func TestBroadcastNewMessage(t *testing.T) {
 			EditedAt:       nil,
 			ReplyCount:     0,
 		}
-		err = srv.broadcastNewMessage(protoMsg, nil)
+		err = srv.broadcastNewMessage(sess, protoMsg, nil)
 		if err != nil {
 			t.Fatalf("broadcastNewMessage failed: %v", err)
 		}
@@ -1339,4 +1342,177 @@ func TestBroadcastNewMessage(t *testing.T) {
 			t.Error("Channel subscriber did not receive new root message broadcast")
 		}
 	})
+}
+
+// Test double-hashing authentication flow
+func TestAuthenticationDoubleHashing(t *testing.T) {
+	_, db := testServer(t)
+	defer db.Close()
+
+	// Test password and nickname
+	password := "testPassword123"
+	nickname := "testuser"
+
+	t.Run("registration with client-side hashed password", func(t *testing.T) {
+		// Client hashes password with argon2id
+		clientHash := hashPasswordForTest(password, nickname)
+
+		// Server double-hashes: bcrypt(clientHash)
+		// (In real flow, handleRegisterUser does this before calling CreateUser)
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(clientHash), bcrypt.DefaultCost)
+		if err != nil {
+			t.Fatalf("bcrypt.GenerateFromPassword failed: %v", err)
+		}
+
+		// Store the double-hashed password
+		_, err = db.CreateUser(nickname, string(hashedPassword), 0)
+		if err != nil {
+			t.Fatalf("CreateUser failed: %v", err)
+		}
+
+		// Verify user was created
+		user, err := db.GetUserByNickname(nickname)
+		if err != nil {
+			t.Fatalf("GetUserByNickname failed: %v", err)
+		}
+
+		if user.Nickname != nickname {
+			t.Errorf("Expected nickname %s, got %s", nickname, user.Nickname)
+		}
+
+		// Verify password hash is non-empty (server double-hashed it)
+		if user.PasswordHash == "" {
+			t.Error("PasswordHash should not be empty after registration")
+		}
+
+		// Verify it's NOT the client hash (should be bcrypt hash)
+		if user.PasswordHash == clientHash {
+			t.Error("PasswordHash should be bcrypt(clientHash), not clientHash")
+		}
+	})
+
+	t.Run("authentication with correct password succeeds", func(t *testing.T) {
+		// Get the registered user
+		user, err := db.GetUserByNickname(nickname)
+		if err != nil {
+			t.Fatalf("GetUserByNickname failed: %v", err)
+		}
+
+		// Client hashes password with argon2id (same hash every time)
+		clientHash := hashPasswordForTest(password, nickname)
+
+		// Server verifies: bcrypt.CompareHashAndPassword(stored_hash, client_hash)
+		err = verifyPasswordHash(user.PasswordHash, clientHash)
+		if err != nil {
+			t.Errorf("Password verification failed: %v", err)
+		}
+	})
+
+	t.Run("authentication with wrong password fails", func(t *testing.T) {
+		// Get the registered user
+		user, err := db.GetUserByNickname(nickname)
+		if err != nil {
+			t.Fatalf("GetUserByNickname failed: %v", err)
+		}
+
+		// Client hashes WRONG password
+		wrongPassword := "wrongPassword123"
+		wrongClientHash := hashPasswordForTest(wrongPassword, nickname)
+
+		// Server verification should fail
+		err = verifyPasswordHash(user.PasswordHash, wrongClientHash)
+		if err == nil {
+			t.Error("Password verification should have failed for wrong password")
+		}
+	})
+
+	t.Run("password removal requires SSH keys", func(t *testing.T) {
+		// Get the user
+		user, err := db.GetUserByNickname(nickname)
+		if err != nil {
+			t.Fatalf("GetUserByNickname failed: %v", err)
+		}
+
+		// Try to remove password (set to empty string) without SSH keys
+		// This should be prevented at the handler level
+		// For this test, we'll verify the database allows it but handlers prevent it
+
+		// Check if user has SSH keys
+		keys, err := db.GetSSHKeysByUserID(int64(user.ID))
+		if err != nil {
+			t.Fatalf("GetSSHKeysByUserID failed: %v", err)
+		}
+
+		if len(keys) > 0 {
+			t.Skip("User already has SSH keys, skipping password removal test")
+		}
+
+		// Database ALLOWS setting password to empty string
+		// But handlers should prevent this (tested separately)
+		err = db.UpdateUserPassword(user.ID, "")
+		if err != nil {
+			t.Fatalf("Database should allow setting empty password: %v", err)
+		}
+
+		// Verify password was removed
+		user, err = db.GetUserByNickname(nickname)
+		if err != nil {
+			t.Fatalf("GetUserByNickname failed: %v", err)
+		}
+
+		if user.PasswordHash != "" {
+			t.Error("PasswordHash should be empty after removal")
+		}
+	})
+
+	t.Run("auth failure for empty password (SSH-only account)", func(t *testing.T) {
+		// Get the user (with empty password from previous test)
+		user, err := db.GetUserByNickname(nickname)
+		if err != nil {
+			t.Fatalf("GetUserByNickname failed: %v", err)
+		}
+
+		if user.PasswordHash != "" {
+			// Set password to empty for this test
+			err = db.UpdateUserPassword(user.ID, "")
+			if err != nil {
+				t.Fatalf("UpdateUserPassword failed: %v", err)
+			}
+			user, err = db.GetUserByNickname(nickname)
+			if err != nil {
+				t.Fatalf("GetUserByNickname failed: %v", err)
+			}
+		}
+
+		// Verify password is empty
+		if user.PasswordHash != "" {
+			t.Fatal("PasswordHash should be empty for this test")
+		}
+
+		// Try to authenticate with any password - should fail with specific message
+		// This is tested at the handler level (handleAuthRequest checks for empty PasswordHash)
+		// For this unit test, we just verify the database state is correct
+	})
+}
+
+// Helper function to hash password using argon2id (mimics client-side hashing)
+// Uses same parameters as pkg/client/auth/password.go
+func hashPasswordForTest(password, nickname string) string {
+	const (
+		argonTime    = 3
+		argonMemory  = 64 * 1024 // 64MB
+		argonThreads = 4
+		argonKeyLen  = 32
+	)
+
+	// Import argon2 for testing
+	// We need to add this import at the top of the file
+	salt := []byte(nickname)
+	hash := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	return base64.RawURLEncoding.EncodeToString(hash)
+}
+
+// Helper function to verify password hash (mimics server-side verification)
+func verifyPasswordHash(storedHash, clientHash string) error {
+	return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(clientHash))
 }

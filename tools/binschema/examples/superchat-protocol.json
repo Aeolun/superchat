@@ -123,6 +123,62 @@
         ]
       },
       {
+        "code": "0x03",
+        "name": "REGISTER_USER",
+        "direction": "client_to_server",
+        "payload_type": "RegisterUser",
+        "description": "Register current nickname with password"
+      },
+      {
+        "code": "0x83",
+        "name": "REGISTER_RESPONSE",
+        "direction": "server_to_client",
+        "payload_type": "RegisterResponse",
+        "description": "Registration result"
+      },
+      {
+        "code": "0x04",
+        "name": "LIST_CHANNELS",
+        "direction": "client_to_server",
+        "payload_type": "ListChannels",
+        "description": "Request channel list"
+      },
+      {
+        "code": "0x84",
+        "name": "CHANNEL_LIST",
+        "direction": "server_to_client",
+        "payload_type": "ChannelList",
+        "description": "List of channels"
+      },
+      {
+        "code": "0x05",
+        "name": "JOIN_CHANNEL",
+        "direction": "client_to_server",
+        "payload_type": "JoinChannel",
+        "description": "Join a channel/subchannel"
+      },
+      {
+        "code": "0x85",
+        "name": "JOIN_RESPONSE",
+        "direction": "server_to_client",
+        "payload_type": "JoinResponse",
+        "description": "Join result with channel data"
+      },
+      {
+        "code": "0x09",
+        "name": "LIST_MESSAGES",
+        "direction": "client_to_server",
+        "payload_type": "ListMessages",
+        "description": "Request messages from channel/subchannel"
+      },
+      {
+        "code": "0x89",
+        "name": "MESSAGE_LIST",
+        "direction": "server_to_client",
+        "payload_type": "MessageList",
+        "description": "List of messages"
+      },
+      {
         "code": "0x0A",
         "name": "POST_MESSAGE",
         "direction": "client_to_server",
@@ -159,6 +215,34 @@
           "**thread_depth:** 0=root, 1+=nested.",
           "**reply_count:** Total number of replies (all descendants)."
         ]
+      },
+      {
+        "code": "0x10",
+        "name": "PING",
+        "direction": "client_to_server",
+        "payload_type": "Ping",
+        "description": "Keepalive heartbeat"
+      },
+      {
+        "code": "0x90",
+        "name": "PONG",
+        "direction": "server_to_client",
+        "payload_type": "Pong",
+        "description": "Ping response"
+      },
+      {
+        "code": "0x91",
+        "name": "ERROR",
+        "direction": "server_to_client",
+        "payload_type": "Error",
+        "description": "Generic error response"
+      },
+      {
+        "code": "0x98",
+        "name": "SERVER_CONFIG",
+        "direction": "server_to_client",
+        "payload_type": "ServerConfig",
+        "description": "Server configuration and limits"
       }
     ],
 

@@ -26,6 +26,14 @@ const (
 	ModalRegistrationWarning
 	ModalConfigError
 	ModalCommandPalette
+	ModalAdminPanel
+	ModalBanUser
+	ModalBanIP
+	ModalUnban
+	ModalViewBans
+	ModalDeleteUser
+	ModalDeleteChannel
+	ModalListUsers
 )
 
 // String returns the string representation of the modal type
@@ -67,6 +75,22 @@ func (m ModalType) String() string {
 		return "ConfigError"
 	case ModalCommandPalette:
 		return "CommandPalette"
+	case ModalAdminPanel:
+		return "AdminPanel"
+	case ModalBanUser:
+		return "BanUser"
+	case ModalBanIP:
+		return "BanIP"
+	case ModalUnban:
+		return "Unban"
+	case ModalViewBans:
+		return "ViewBans"
+	case ModalDeleteUser:
+		return "DeleteUser"
+	case ModalDeleteChannel:
+		return "DeleteChannel"
+	case ModalListUsers:
+		return "ListUsers"
 	default:
 		return "Unknown"
 	}
@@ -177,4 +201,11 @@ func (ms *ModalStack) ForEach(fn func(Modal)) {
 	for _, m := range ms.stack {
 		fn(m)
 	}
+}
+
+// PushModalMsg is sent when a modal should be pushed onto the stack
+// Used to properly overlay modals instead of replacing them
+type PushModalMsg struct {
+	Modal Modal
+	Cmd   tea.Cmd
 }

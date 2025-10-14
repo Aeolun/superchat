@@ -901,6 +901,21 @@ func (m *Model) registerCommands() {
 		Priority(10).
 		Build())
 
+	// Admin panel with A key
+	m.commands.Register(commands.NewCommand().
+		Keys("A").
+		Name("Admin Panel").
+		Help("Open admin panel").
+		Global().
+		InModals(modal.ModalNone). // Only available when no modal is open
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			model.showAdminPanel()
+			return model, nil
+		}).
+		Priority(910).
+		Build())
+
 	// Command palette with / (IRC-style)
 	m.commands.Register(commands.NewCommand().
 		Keys("/").
@@ -1121,6 +1136,10 @@ func (m *Model) showSSHKeyManagerModal(keys []modal.SSHKeyInfo) {
 			return m.sendDeleteSSHKey(keyID)
 		},
 		func() tea.Cmd {
+			// Remove password (send CHANGE_PASSWORD with empty new password)
+			return m.sendChangePassword([]byte{}, []byte{})
+		},
+		func() tea.Cmd {
 			// Close modal
 			return nil
 		},
@@ -1197,6 +1216,135 @@ func (m *Model) shouldShowRegistrationWarning() bool {
 	}
 
 	return true
+}
+
+// Admin modal helper methods
+
+// showAdminPanel displays the admin panel modal
+func (m *Model) showAdminPanel() {
+	m.modalStack.Push(m.createConfiguredAdminPanel())
+}
+
+// createConfiguredAdminPanel creates a fully configured admin panel
+// This is used both when initially opening the panel and when returning from sub-modals
+func (m *Model) createConfiguredAdminPanel() modal.Modal {
+	adminPanel := modal.NewAdminPanelModal()
+
+	// Wire up menu item actions to create modals with handlers
+	adminPanel.SetMenuActions(
+		func() (modal.Modal, tea.Cmd) { return m.createBanUserModal() },
+		func() (modal.Modal, tea.Cmd) { return m.createBanIPModal() },
+		func() (modal.Modal, tea.Cmd) { return m.createListUsersModal() },
+		func() (modal.Modal, tea.Cmd) { return m.createUnbanModal() },
+		func() (modal.Modal, tea.Cmd) { return m.createViewBansModal() },
+		func() (modal.Modal, tea.Cmd) { return m.createDeleteUserModal() },
+		func() (modal.Modal, tea.Cmd) { return m.createDeleteChannelModal() },
+	)
+
+	return adminPanel
+}
+
+// createBanUserModal creates a ban user modal with submit handler
+func (m *Model) createBanUserModal() (modal.Modal, tea.Cmd) {
+	banUserModal := modal.NewBanUserModal()
+	banUserModal.SetSubmitHandler(func(msg *protocol.BanUserMessage) tea.Cmd {
+		m.statusMessage = "Banning user..."
+		return m.sendBanUser(msg)
+	})
+	return banUserModal, nil
+}
+
+// createBanIPModal creates a ban IP modal with submit handler
+func (m *Model) createBanIPModal() (modal.Modal, tea.Cmd) {
+	banIPModal := modal.NewBanIPModal()
+	banIPModal.SetSubmitHandler(func(msg *protocol.BanIPMessage) tea.Cmd {
+		m.statusMessage = "Banning IP..."
+		return m.sendBanIP(msg)
+	})
+	return banIPModal, nil
+}
+
+// createUnbanModal creates an unban modal with submit handlers
+func (m *Model) createUnbanModal() (modal.Modal, tea.Cmd) {
+	unbanModal := modal.NewUnbanModal()
+	unbanModal.SetSubmitHandlers(
+		func(msg *protocol.UnbanUserMessage) tea.Cmd {
+			m.statusMessage = "Unbanning user..."
+			return m.sendUnbanUser(msg)
+		},
+		func(msg *protocol.UnbanIPMessage) tea.Cmd {
+			m.statusMessage = "Unbanning IP..."
+			return m.sendUnbanIP(msg)
+		},
+	)
+	return unbanModal, nil
+}
+
+// createViewBansModal creates a view bans modal with refresh handler
+func (m *Model) createViewBansModal() (modal.Modal, tea.Cmd) {
+	viewBansModal := modal.NewViewBansModal()
+	viewBansModal.SetRefreshHandler(func(includeExpired bool) tea.Cmd {
+		return m.sendListBans(includeExpired)
+	})
+	// Return the modal with initial load command
+	return viewBansModal, m.sendListBans(false)
+}
+
+// createListUsersModal creates a list users modal with handlers
+func (m *Model) createListUsersModal() (modal.Modal, tea.Cmd) {
+	listUsersModal := modal.NewListUsersModal()
+	listUsersModal.SetRefreshHandler(func(includeOffline bool) tea.Cmd {
+		return m.sendListUsers(includeOffline)
+	})
+	listUsersModal.SetBanUserHandler(func(nickname string) {
+		// Create and push ban user modal with pre-filled nickname
+		banModal, _ := m.createBanUserModal()
+		if banUserModal, ok := banModal.(*modal.BanUserModal); ok {
+			banUserModal.SetNickname(nickname)
+		}
+		m.modalStack.Push(banModal)
+	})
+	listUsersModal.SetDeleteUserHandler(func(nickname string) {
+		// Create and push delete user modal with pre-filled nickname
+		deleteModal, _ := m.createDeleteUserModal()
+		if deleteUserModal, ok := deleteModal.(*modal.DeleteUserModal); ok {
+			deleteUserModal.SetNickname(nickname)
+		}
+		m.modalStack.Push(deleteModal)
+	})
+	// Return the modal with initial load command (show all users by default)
+	return listUsersModal, m.sendListUsers(true)
+}
+
+// createDeleteUserModal creates a delete user modal with submit handler
+func (m *Model) createDeleteUserModal() (modal.Modal, tea.Cmd) {
+	deleteUserModal := modal.NewDeleteUserModal()
+	deleteUserModal.SetSubmitHandler(func(msg *protocol.DeleteUserMessage) tea.Cmd {
+		m.statusMessage = "Deleting user..."
+		return m.sendDeleteUser(msg)
+	})
+	return deleteUserModal, nil
+}
+
+// createDeleteChannelModal creates a delete channel modal with submit handler
+func (m *Model) createDeleteChannelModal() (modal.Modal, tea.Cmd) {
+	deleteChannelModal := modal.NewDeleteChannelModal()
+
+	// Convert protocol.Channel to modal.ChannelInfo
+	channels := make([]modal.ChannelInfo, len(m.channels))
+	for i, ch := range m.channels {
+		channels[i] = modal.ChannelInfo{
+			ID:   ch.ID,
+			Name: ch.Name,
+		}
+	}
+	deleteChannelModal.SetChannels(channels)
+
+	deleteChannelModal.SetSubmitHandler(func(msg *protocol.DeleteChannelMessage) tea.Cmd {
+		m.statusMessage = "Deleting channel..."
+		return m.sendDeleteChannel(msg)
+	})
+	return deleteChannelModal, nil
 }
 
 // showComposeWithWarning shows the compose modal, potentially with registration warning first

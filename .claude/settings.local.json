@@ -27,7 +27,8 @@
       "Bash(bun:*)",
       "Bash(git stash:*)",
       "Bash(git -C /home/bart/Projects/superchat add .claude/settings.local.json)",
-      "Bash(git -C /home/bart/Projects/superchat commit -m \"chore: allow git stash commands\")"
+      "Bash(git -C /home/bart/Projects/superchat commit -m \"chore: allow git stash commands\")",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []

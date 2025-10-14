@@ -55,28 +55,52 @@ func (w *failOnPayloadWriter) Write(p []byte) (n int, err error) {
 // ============================================================================
 
 func TestDisconnectMessage(t *testing.T) {
-	msg := &DisconnectMessage{}
+	t.Run("nil reason", func(t *testing.T) {
+		msg := &DisconnectMessage{Reason: nil}
 
-	// Test Encode
-	payload, err := msg.Encode()
-	require.NoError(t, err)
-	assert.Equal(t, []byte{}, payload)
+		// Test Encode - nil optional string encodes as [0x00] (false boolean)
+		payload, err := msg.Encode()
+		require.NoError(t, err)
+		assert.Equal(t, []byte{0x00}, payload)
 
-	// Test EncodeTo
-	buf := new(bytes.Buffer)
-	err = msg.EncodeTo(buf)
-	require.NoError(t, err)
-	assert.Equal(t, 0, buf.Len())
+		// Test EncodeTo
+		buf := new(bytes.Buffer)
+		err = msg.EncodeTo(buf)
+		require.NoError(t, err)
+		assert.Equal(t, 1, buf.Len())
 
-	// Test Decode
-	decoded := &DisconnectMessage{}
-	err = decoded.Decode([]byte{})
-	require.NoError(t, err)
+		// Test Decode
+		decoded := &DisconnectMessage{}
+		err = decoded.Decode(payload)
+		require.NoError(t, err)
+		assert.Nil(t, decoded.Reason)
 
-	// Round-trip test
-	payload2, err := decoded.Encode()
-	require.NoError(t, err)
-	assert.Equal(t, payload, payload2)
+		// Round-trip test
+		payload2, err := decoded.Encode()
+		require.NoError(t, err)
+		assert.Equal(t, payload, payload2)
+	})
+
+	t.Run("with reason", func(t *testing.T) {
+		reason := "Server shutting down"
+		msg := &DisconnectMessage{Reason: &reason}
+
+		// Test Encode
+		payload, err := msg.Encode()
+		require.NoError(t, err)
+
+		// Test Decode
+		decoded := &DisconnectMessage{}
+		err = decoded.Decode(payload)
+		require.NoError(t, err)
+		require.NotNil(t, decoded.Reason)
+		assert.Equal(t, reason, *decoded.Reason)
+
+		// Round-trip test
+		payload2, err := decoded.Encode()
+		require.NoError(t, err)
+		assert.Equal(t, payload, payload2)
+	})
 }
 
 func TestSubscribeThreadMessage(t *testing.T) {

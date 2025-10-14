@@ -39,7 +39,7 @@ type SSHKeyManagerModal struct {
 	height int
 
 	// View state
-	view string // "list", "add", "edit_label", "delete_confirm"
+	view string // "list", "add", "edit_label", "delete_confirm", "remove_password_confirm"
 
 	// List view
 	keys          []SSHKeyInfo
@@ -66,11 +66,15 @@ type SSHKeyManagerModal struct {
 	deleteErrorMsg string
 	deleteFocusYes bool
 
+	// Remove password confirm view
+	removePasswordFocusYes bool
+
 	// Callbacks
-	onAddKey    func(publicKey, label string) tea.Cmd
-	onEditLabel func(keyID uint64, newLabel string) tea.Cmd
-	onDeleteKey func(keyID uint64) tea.Cmd
-	onClose     func() tea.Cmd
+	onAddKey        func(publicKey, label string) tea.Cmd
+	onEditLabel     func(keyID uint64, newLabel string) tea.Cmd
+	onDeleteKey     func(keyID uint64) tea.Cmd
+	onRemovePassword func() tea.Cmd
+	onClose         func() tea.Cmd
 }
 
 func NewSSHKeyManagerModal(
@@ -78,6 +82,7 @@ func NewSSHKeyManagerModal(
 	onAddKey func(publicKey, label string) tea.Cmd,
 	onEditLabel func(keyID uint64, newLabel string) tea.Cmd,
 	onDeleteKey func(keyID uint64) tea.Cmd,
+	onRemovePassword func() tea.Cmd,
 	onClose func() tea.Cmd,
 ) *SSHKeyManagerModal {
 	addKeyInput := textinput.New()
@@ -96,18 +101,19 @@ func NewSSHKeyManagerModal(
 	pubKeyFiles := findPublicKeyFiles()
 
 	return &SSHKeyManagerModal{
-		view:           "list",
-		keys:           keys,
-		selectedIndex:  0,
-		loading:        keys == nil, // Loading if keys not provided yet
-		addKeyInput:    addKeyInput,
-		addLabelInput:  addLabelInput,
-		editLabelInput: editLabelInput,
-		pubKeyFiles:    pubKeyFiles,
-		onAddKey:       onAddKey,
-		onEditLabel:    onEditLabel,
-		onDeleteKey:    onDeleteKey,
-		onClose:        onClose,
+		view:             "list",
+		keys:             keys,
+		selectedIndex:    0,
+		loading:          keys == nil, // Loading if keys not provided yet
+		addKeyInput:      addKeyInput,
+		addLabelInput:    addLabelInput,
+		editLabelInput:   editLabelInput,
+		pubKeyFiles:      pubKeyFiles,
+		onAddKey:         onAddKey,
+		onEditLabel:      onEditLabel,
+		onDeleteKey:      onDeleteKey,
+		onRemovePassword: onRemovePassword,
+		onClose:          onClose,
 	}
 }
 
@@ -128,6 +134,8 @@ func (m *SSHKeyManagerModal) Render(width, height int) string {
 		return m.renderEditLabel()
 	case "delete_confirm":
 		return m.renderDeleteConfirm()
+	case "remove_password_confirm":
+		return m.renderRemovePasswordConfirm()
 	default:
 		return m.renderList()
 	}
@@ -224,10 +232,15 @@ func (m *SSHKeyManagerModal) renderList() string {
 	)
 
 	// Row 4: Footer with help text
+	var footerText string
+	if len(m.keys) > 0 {
+		footerText = "[a] Add key  [r] Rename  [d] Delete  [p] Remove password  [Esc] Close"
+	} else {
+		footerText = "[a] Add key  [Esc] Close"
+	}
 	footerRow := layout.NewRow().AddCells(
 		flexbox.NewCell(1, 1).SetContent(
-			mutedTextStyle.Align(lipgloss.Center).
-				Render("[a] Add key  [r] Rename  [d] Delete  [Esc] Close"),
+			mutedTextStyle.Align(lipgloss.Center).Render(footerText),
 		),
 	)
 
@@ -503,6 +516,8 @@ func (m *SSHKeyManagerModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
 		return m.handleKeyEditLabel(msg)
 	case "delete_confirm":
 		return m.handleKeyDeleteConfirm(msg)
+	case "remove_password_confirm":
+		return m.handleKeyRemovePasswordConfirm(msg)
 	}
 	return true, m, nil
 }
@@ -568,6 +583,12 @@ func (m *SSHKeyManagerModal) handleKeyList(msg tea.KeyMsg) (bool, Modal, tea.Cmd
 			m.deleteKeyLabel = key.Label
 			m.deleteErrorMsg = ""
 			m.deleteFocusYes = false
+		}
+	case "p":
+		// Switch to remove password confirm view
+		if len(m.keys) > 0 {
+			m.view = "remove_password_confirm"
+			m.removePasswordFocusYes = false
 		}
 	}
 	return true, m, nil
@@ -664,6 +685,102 @@ func (m *SSHKeyManagerModal) handleKeyDeleteConfirm(msg tea.KeyMsg) (bool, Modal
 		}
 	}
 	return true, m, nil
+}
+
+func (m *SSHKeyManagerModal) handleKeyRemovePasswordConfirm(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
+	switch msg.String() {
+	case "tab", "left", "right":
+		m.removePasswordFocusYes = !m.removePasswordFocusYes
+	case "enter":
+		if m.removePasswordFocusYes {
+			m.view = "list"
+			return true, m, m.onRemovePassword()
+		} else {
+			m.view = "list"
+		}
+	}
+	return true, m, nil
+}
+
+func (m *SSHKeyManagerModal) renderRemovePasswordConfirm() string {
+	// Responsive to terminal size
+	modalWidth := min(60, m.width-4)
+	modalHeight := min(16, m.height-4)
+	layout := flexbox.New(modalWidth, modalHeight)
+
+	// Row 1: Title
+	titleRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			lipgloss.NewStyle().Bold(true).Foreground(primaryColor).
+				Align(lipgloss.Center).Render("Remove Password"),
+		),
+	)
+
+	// Build content items
+	warningStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Bold(true)
+
+	contentItems := []string{
+		"Remove your password from this account?",
+		"",
+		warningStyle.Render("⚠ WARNING:"),
+		"",
+		mutedTextStyle.Render("After removing your password, you will ONLY be"),
+		mutedTextStyle.Render("able to authenticate via SSH."),
+		"",
+		mutedTextStyle.Render("TCP and WebSocket connections will require SSH"),
+		mutedTextStyle.Render("key authentication."),
+		"",
+		mutedTextStyle.Render("This action cannot be undone."),
+	}
+
+	// Yes/No buttons
+	yesButton := "[Yes]"
+	noButton := "[No]"
+	if m.removePasswordFocusYes {
+		yesButton = highlightStyle.Render(yesButton)
+	} else {
+		noButton = highlightStyle.Render(noButton)
+	}
+
+	buttons := lipgloss.JoinHorizontal(lipgloss.Left,
+		yesButton,
+		"  ",
+		noButton,
+	)
+	contentItems = append(contentItems, "", buttons)
+
+	// Row 2: Content
+	contentHeight := modalHeight - 4
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, contentHeight).SetContent(
+			lipgloss.JoinVertical(lipgloss.Left, contentItems...),
+		),
+	)
+
+	// Row 3: Separator
+	separatorRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Render(strings.Repeat("─", modalWidth-4)),
+		),
+	)
+
+	// Row 4: Footer
+	footerRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(
+			mutedTextStyle.Align(lipgloss.Center).
+				Render("[Tab] Switch  [Enter] Confirm  [Esc] Cancel"),
+		),
+	)
+
+	layout.AddRows([]*flexbox.Row{titleRow, contentRow, separatorRow, footerRow})
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(primaryColor).
+		Padding(1, 1).
+		Render(layout.Render())
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 // Helper functions

@@ -1435,31 +1435,57 @@ func TestUserInfoMessage(t *testing.T) {
 
 func TestListUsersMessage(t *testing.T) {
 	tests := []struct {
-		name  string
-		limit uint16
+		name           string
+		limit          uint16
+		includeOffline bool
 	}{
 		{
-			name:  "default limit",
-			limit: 100,
+			name:           "default limit, online only",
+			limit:          100,
+			includeOffline: false,
 		},
 		{
-			name:  "small limit",
-			limit: 10,
+			name:           "default limit, include offline",
+			limit:          100,
+			includeOffline: true,
 		},
 		{
-			name:  "max limit",
-			limit: 500,
+			name:           "small limit, online only",
+			limit:          10,
+			includeOffline: false,
 		},
 		{
-			name:  "zero limit",
-			limit: 0,
+			name:           "small limit, include offline",
+			limit:          10,
+			includeOffline: true,
+		},
+		{
+			name:           "max limit, online only",
+			limit:          500,
+			includeOffline: false,
+		},
+		{
+			name:           "max limit, include offline",
+			limit:          500,
+			includeOffline: true,
+		},
+		{
+			name:           "zero limit, online only",
+			limit:          0,
+			includeOffline: false,
+		},
+		{
+			name:           "zero limit, include offline",
+			limit:          0,
+			includeOffline: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := &ListUsersMessage{
-				Limit: tt.limit,
+				Limit:          tt.limit,
+				IncludeOffline: tt.includeOffline,
 			}
 
 			payload, err := msg.Encode()
@@ -1469,6 +1495,43 @@ func TestListUsersMessage(t *testing.T) {
 			err = decoded.Decode(payload)
 			require.NoError(t, err)
 			assert.Equal(t, tt.limit, decoded.Limit)
+			assert.Equal(t, tt.includeOffline, decoded.IncludeOffline)
+		})
+	}
+}
+
+func TestListUsersMessageBackwardsCompatibility(t *testing.T) {
+	// Test that messages without the include_offline flag (older clients)
+	// default to false when decoded
+	tests := []struct {
+		name    string
+		payload []byte // Manually constructed payload without include_offline field
+		limit   uint16
+	}{
+		{
+			name:    "limit 100, no include_offline field",
+			payload: []byte{0x00, 0x64}, // uint16(100) in big endian
+			limit:   100,
+		},
+		{
+			name:    "limit 10, no include_offline field",
+			payload: []byte{0x00, 0x0A}, // uint16(10) in big endian
+			limit:   10,
+		},
+		{
+			name:    "limit 500, no include_offline field",
+			payload: []byte{0x01, 0xF4}, // uint16(500) in big endian
+			limit:   500,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decoded := &ListUsersMessage{}
+			err := decoded.Decode(tt.payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.limit, decoded.Limit)
+			assert.False(t, decoded.IncludeOffline, "include_offline should default to false for backwards compatibility")
 		})
 	}
 }
@@ -1488,47 +1551,65 @@ func TestUserListMessage(t *testing.T) {
 			},
 		},
 		{
-			name: "single registered user",
+			name: "single registered user online",
 			msg: UserListMessage{
 				Users: []UserListEntry{
 					{
 						Nickname:     "alice",
 						IsRegistered: true,
 						UserID:       &userID1,
+						Online:       true,
 					},
 				},
 			},
 		},
 		{
-			name: "single anonymous user",
-			msg: UserListMessage{
-				Users: []UserListEntry{
-					{
-						Nickname:     "bob",
-						IsRegistered: false,
-						UserID:       nil,
-					},
-				},
-			},
-		},
-		{
-			name: "mixed users",
+			name: "single registered user offline",
 			msg: UserListMessage{
 				Users: []UserListEntry{
 					{
 						Nickname:     "alice",
 						IsRegistered: true,
 						UserID:       &userID1,
+						Online:       false,
+					},
+				},
+			},
+		},
+		{
+			name: "single anonymous user (always online)",
+			msg: UserListMessage{
+				Users: []UserListEntry{
+					{
+						Nickname:     "bob",
+						IsRegistered: false,
+						UserID:       nil,
+						Online:       true,
+					},
+				},
+			},
+		},
+		{
+			name: "mixed users with varied online status",
+			msg: UserListMessage{
+				Users: []UserListEntry{
+					{
+						Nickname:     "alice",
+						IsRegistered: true,
+						UserID:       &userID1,
+						Online:       true,
 					},
 					{
 						Nickname:     "bob",
 						IsRegistered: false,
 						UserID:       nil,
+						Online:       true,
 					},
 					{
 						Nickname:     "charlie",
 						IsRegistered: true,
 						UserID:       &userID2,
+						Online:       false,
 					},
 				},
 			},
@@ -1548,6 +1629,7 @@ func TestUserListMessage(t *testing.T) {
 			for i, user := range tt.msg.Users {
 				assert.Equal(t, user.Nickname, decoded.Users[i].Nickname)
 				assert.Equal(t, user.IsRegistered, decoded.Users[i].IsRegistered)
+				assert.Equal(t, user.Online, decoded.Users[i].Online)
 
 				if user.UserID == nil {
 					assert.Nil(t, decoded.Users[i].UserID)

@@ -75,6 +75,58 @@ All messages use a simple frame-based format:
 - Used for private/DM channels with end-to-end encryption
 - Encryption details covered in DM section below
 
+## Password Security
+
+SuperChat uses a **client-side hashing with server-side double-hashing** approach for password authentication over TCP/WebSocket connections.
+
+### Hashing Algorithm
+
+**Client-side hash:**
+```
+password_hash = argon2id(password, salt=nickname, time=3, memory=64MB, threads=4, keyLen=32)
+```
+
+**Server-side hash:**
+```
+stored_hash = bcrypt(password_hash, cost=10)
+```
+
+### Security Properties
+
+**Protection against network sniffing:**
+- Password never transmitted in plaintext
+- Attacker observing network traffic sees `password_hash`, not the original password
+- `password_hash` cannot be used to derive the original password (Argon2id is one-way)
+
+**Protection against password reuse:**
+- If attacker obtains `password_hash` from network capture, they can authenticate to SuperChat
+- However, they still cannot discover the original password
+- Original password remains safe for use on other sites
+
+**Protection against database breach:**
+- Database stores `stored_hash = bcrypt(password_hash)`
+- Attacker must crack bcrypt to get `password_hash`
+- Even with `password_hash`, they still don't have the original password
+- Double-hashing provides defense-in-depth
+
+**Limitations (TCP/WebSocket connections):**
+- ❌ Vulnerable to replay attacks (captured `password_hash` can be replayed)
+- ❌ Vulnerable to MITM attacks (no connection-level encryption)
+- ❌ Database breach + network capture = authentication credential compromised
+
+**Recommendation:**
+- **Use SSH connections for security-sensitive deployments**
+- SSH provides connection-level encryption and eliminates all the above vulnerabilities
+- TCP/WebSocket are acceptable for convenience, but SSH is recommended for security
+
+### Why Not Challenge-Response?
+
+Challenge-response authentication was considered but rejected because:
+1. Adds protocol complexity (extra round-trip, challenge state management)
+2. Doesn't protect against MITM attacks (TCP/WebSocket are unencrypted anyway)
+3. SSH already provides proper encrypted authentication
+4. Current approach is simpler and provides adequate protection for password reuse
+
 ## Data Types
 
 ### Primitive Types
@@ -176,6 +228,7 @@ All messages use a simple frame-based format:
 | 0x5C | UNBAN_IP | Remove IP ban (admin only) |
 | 0x5D | LIST_BANS | Request list of all bans (admin only) |
 | 0x5E | DELETE_USER | Delete a user account (admin only) |
+| 0x5F | DELETE_CHANNEL | Delete a channel (admin only) |
 
 ### Server → Client Messages
 
@@ -222,6 +275,7 @@ All messages use a simple frame-based format:
 | 0xA7 | IP_UNBANNED | IP unban result (admin response) |
 | 0xA8 | BAN_LIST | List of bans response (admin) |
 | 0xA9 | USER_DELETED | User deletion result (admin response) |
+| 0xAA | CHANNEL_DELETED | Channel deletion result (admin response) |
 
 ## Message Payloads
 
@@ -230,10 +284,19 @@ All messages use a simple frame-based format:
 Used when connecting to use a registered nickname.
 
 ```
-+-------------------+-------------------+
-| nickname (String) | password (String) |
-+-------------------+-------------------+
++-------------------+----------------------+
+| nickname (String) | password_hash (String) |
++-------------------+----------------------+
 ```
+
+**Security Note:**
+- Client sends `password_hash = argon2id(password, nickname_as_salt)`
+- Server performs additional hashing: `stored_hash = bcrypt(password_hash)`
+- This double-hashing approach:
+  - Protects password from network sniffing (password never transmitted)
+  - Protects password reuse across sites (attacker with hash can't derive original password)
+  - Database breach requires cracking bcrypt to get client hash (and client hash still isn't the original password)
+- For true connection-level security (protection against MITM), use SSH connection instead of TCP/WebSocket
 
 ### 0x81 - AUTH_RESPONSE (Server → Client)
 
@@ -299,10 +362,16 @@ Used to set or change nickname.
 Register current nickname with a password.
 
 ```
-+-------------------+
-| password (String) |
-+-------------------+
++----------------------+
+| password_hash (String) |
++----------------------+
 ```
+
+**Security Note:**
+- Client sends `password_hash = argon2id(password, nickname_as_salt)`
+- Server performs additional hashing: `stored_hash = bcrypt(password_hash)` and stores in database
+- Same double-hashing approach as AUTH_REQUEST (see 0x01 for details)
+- Password never transmitted over the wire
 
 ### 0x83 - REGISTER_RESPONSE (Server → Client)
 
@@ -524,18 +593,17 @@ If `parent_id` is set, this is a reply. Otherwise, it's a root message.
 
 ### 0x8A - MESSAGE_POSTED (Server → Client)
 
-Confirmation that message was posted.
+Confirmation that message was posted successfully.
 
 ```
 +-------------------+-------------------+
 | success (bool)    | message_id (u64)  |
-|                   | (only if success) |
 +-------------------+-------------------+
 | message (String)  |
 +-------------------+
 ```
 
-If failed, `message` contains error description.
+**Note:** The server always sends `success=true` with this message type. If message posting fails (no nickname, invalid format, message too long, etc.), the server sends an ERROR (0x91) message instead. Therefore, `message_id` is always present and valid.
 
 ### 0x8D - NEW_MESSAGE (Server → Client)
 
@@ -566,7 +634,7 @@ Uses the same format as a single message in MESSAGE_LIST:
 +-------------------+-------------------+
 ```
 
-Only the original author can edit a message.
+Only the original author can edit a message. Admins can edit any message.
 
 ### 0x8B - MESSAGE_EDITED (Server → Client)
 
@@ -590,7 +658,7 @@ Confirmation of edit + real-time notification to all users.
 +-------------------+
 ```
 
-Only the original author can delete a message. This performs a soft-delete (sets `deleted_at`),
+Only the original author can delete a message. Admins can delete any message. This performs a soft-delete (sets `deleted_at`),
 preserving thread structure. Original content is saved in MessageVersion for moderation.
 
 ### 0x8C - MESSAGE_DELETED (Server → Client)
@@ -664,19 +732,23 @@ Update last read position (registered users only).
 
 ### 0x0E - CHANGE_PASSWORD (Client → Server)
 
-Change the authenticated user's password.
+Change the authenticated user's password, or remove password for SSH-only authentication.
 
 ```
-+------------------------+------------------------+
-| old_password (String)  | new_password (String)  |
-+------------------------+------------------------+
++-----------------------------+-----------------------------+
+| old_password_hash (String)  | new_password_hash (String)  |
++-----------------------------+-----------------------------+
 ```
 
 **Notes:**
 - User must be authenticated
-- `old_password`: Current password (empty string for SSH-registered users changing password for first time)
-- `new_password`: New password (minimum 8 characters)
-- Server validates old password with bcrypt, hashes new password
+- `old_password_hash`: Current password hash via `argon2id(password, nickname)` (empty string for SSH-registered users changing password for first time)
+- `new_password_hash`: New password hash via `argon2id(password, nickname)` (minimum 8 characters plaintext before hashing)
+- **Password Removal:** Send empty string for `new_password_hash` to remove password and use SSH-only authentication
+  - Only allowed if user has at least one SSH key registered
+  - Once removed, user can ONLY authenticate via SSH
+  - If user loses SSH keys, they will be permanently locked out (admin intervention required)
+- Server validates old password hash with bcrypt, double-hashes new password hash with bcrypt for storage
 
 ### 0x8E - PASSWORD_CHANGED (Server → Client)
 
@@ -843,23 +915,30 @@ Response with user information.
 
 ### 0x16 - LIST_USERS (Client → Server)
 
-Request list of currently online users.
+Request list of online or all users.
 
 ```
-+-------------------+
-| limit (u16)       |
-+-------------------+
++-------------------+-------------------+
+| limit (u16)       | include_offline   |
+|                   | (optional bool)   |
++-------------------+-------------------+
 ```
+
+**Fields:**
+- `limit`: Maximum number of users to return (default: 100, max: 500)
+- `include_offline`: (Optional) If present and true, include offline registered users. Admin-only feature. If absent or false, only online users are returned.
 
 **Notes:**
-- `limit`: Maximum number of users to return (default: 100, max: 500)
-- Returns only currently connected users (active sessions)
-- Includes both registered and anonymous users
-- Results sorted by connection time (most recent first)
+- By default (or when `include_offline` is false), returns only currently connected users (active sessions)
+- Includes both registered and anonymous users when online-only
+- When `include_offline` is true (admin only), returns all registered users regardless of online status
+- Anonymous users are never included when `include_offline` is true (they have no persistent identity)
+- Results sorted by connection time for online users (most recent first)
+- Server returns ERROR 1005 (permission denied) if non-admin requests with `include_offline = true`
 
 ### 0x9A - USER_LIST (Server → Client)
 
-Response with list of online users.
+Response with list of users (online or all registered users if admin requested with include_offline).
 
 ```
 +-------------------+----------------+
@@ -867,22 +946,25 @@ Response with list of online users.
 +-------------------+----------------+
 
 Each user:
-+-------------------+---------------------+-------------------+
-| nickname (String) | is_registered(bool) | user_id           |
-|                   |                     | (Optional u64)    |
-+-------------------+---------------------+-------------------+
++-------------------+---------------------+-------------------+-------------+
+| nickname (String) | is_registered(bool) | user_id           | online(bool)|
+|                   |                     | (Optional u64)    |             |
++-------------------+---------------------+-------------------+-------------+
 ```
 
 **Fields (per user):**
 - `nickname`: The user's current nickname (includes ~ prefix for anonymous users in display)
 - `is_registered`: True if registered user, false if anonymous
 - `user_id`: Only present if `is_registered = true`
+- `online`: True if user has an active session (connected)
 
 **Notes:**
-- Shows all currently connected users (sessions with active connections)
-- Anonymous users appear with their session nickname
-- Same user_id may appear multiple times if user has multiple sessions
-- Useful for seeing who's currently online
+- By default (when LIST_USERS has `include_offline = false`), shows only currently connected users
+- Anonymous users appear with their session nickname and `online = true`
+- When admin requests with `include_offline = true`, includes all registered users with their online status
+- Offline registered users appear with `is_registered = true`, `online = false`
+- Same user_id may appear multiple times if user has multiple sessions (all with `online = true`)
+- Useful for admin features to show all users, not just online ones
 
 ### 0x1C - LOGOUT (Client → Server)
 
@@ -1632,26 +1714,33 @@ Each ban:
 
 ### 0x5E - DELETE_USER (Client → Server)
 
-Delete a user account permanently (admin only).
+Delete a user account permanently (admin only). Messages by the deleted user are anonymized (author_user_id set to NULL).
 
 ```
-+-------------------+----------------------+
-| user_id (u64)     | reason (String)      |
-+-------------------+----------------------+
++-------------------+
+| user_id (u64)     |
++-------------------+
 ```
 
 **Fields:**
 - `user_id`: User ID to delete
-- `reason`: Admin-provided reason for deletion
 
 **Notes:**
-- **STUB IMPLEMENTATION**: Currently returns success=false with "Not implemented" message
-- Planned behavior: Permanently delete user account and associated data
+- Admin-only operation (requires user_flags = 1)
+- All messages by the user are anonymized (preserves content, sets author_user_id=NULL)
+- All active sessions for the user are disconnected
+- Cascades to delete SSH keys, sessions, and bans
 - All admin actions are logged in the AdminAction table
+- Admins cannot delete their own account
+
+**Error cases:**
+- Non-admin user: ERROR 1003 (Permission denied)
+- User not found: `success = false`, `message = "User not found"`
+- Self-deletion attempt: `success = false`, `message = "Cannot delete your own account"`
 
 ### 0xA9 - USER_DELETED (Server → Client)
 
-Response to DELETE_USER request.
+Response to DELETE_USER request + broadcast to all connected clients.
 
 ```
 +-------------------+-------------------+
@@ -1664,13 +1753,63 @@ Response to DELETE_USER request.
 - `message`: Success message or error description
 
 **Response cases:**
-- Not implemented: `success = false`, `message = "Not implemented"`
+- Success: `success = true`, `message = "User '<nickname>' deleted successfully (messages anonymized, N sessions disconnected)"`
 - Permission denied: `success = false`, `message = "Permission denied: admin access required"`
-- (Future) Success: `success = true`, `message = "User <nickname> deleted successfully"`
+- User not found: `success = false`, `message = "User not found"`
+- Self-deletion: `success = false`, `message = "Cannot delete your own account"`
 
 **Notes:**
-- Currently a stub implementation that always returns failure
-- Future implementation will cascade delete user data (messages, sessions, keys, etc.)
+- Broadcast to all connected clients so they can update their user lists
+- Clients should handle the user being removed from their local cache
+
+### 0x5F - DELETE_CHANNEL (Client → Server)
+
+Delete a channel permanently (admin only). This will cascade delete all associated messages and subchannels.
+
+```
++-------------------+----------------------+
+| channel_id (u64)  | reason (String)      |
++-------------------+----------------------+
+```
+
+**Fields:**
+- `channel_id`: Channel ID to delete
+- `reason`: Admin-provided reason for deletion
+
+**Notes:**
+- Admin-only operation (requires user_flags = 1)
+- Cascades to delete all messages, subchannels, and subscriptions
+- All admin actions are logged in the AdminAction table
+- Users currently in the deleted channel will receive an error on their next action
+
+**Error cases:**
+- Non-admin user: ERROR 1003 (Permission denied)
+- Channel not found: ERROR 1004 (Channel not found)
+- Invalid channel ID: ERROR 1002 (Invalid format)
+
+### 0xAA - CHANNEL_DELETED (Server → Client)
+
+Response to DELETE_CHANNEL request + broadcast to all connected clients.
+
+```
++-------------------+-------------------+-------------------+
+| success (bool)    | channel_id (u64)  | message (String)  |
++-------------------+-------------------+-------------------+
+```
+
+**Fields:**
+- `success`: Whether the deletion was successful
+- `channel_id`: ID of the deleted channel
+- `message`: Success message or error description
+
+**Response cases:**
+- Success: `success = true`, `message = "Channel <name> deleted successfully"`
+- Permission denied: `success = false`, `message = "Permission denied: admin access required"`
+- Channel not found: `success = false`, `message = "Channel not found"`
+
+**Notes:**
+- Broadcast to all connected clients so they can update their channel lists
+- Clients should remove the channel from their local cache
 
 ### 0x91 - ERROR (Server → Client)
 

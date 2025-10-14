@@ -22,10 +22,11 @@ type Session struct {
 	UserID                 *int64       // Registered user ID (nil for anonymous)
 	Nickname               string       // Current nickname
 	UserFlags              uint8        // Cached user flags (0 for anonymous, updated on login/register)
+	Shadowbanned           bool         // True if user is shadowbanned (messages hidden from other users)
 	Conn                   *SafeConn    // TCP connection with automatic write synchronization
 	RemoteAddr             string       // Remote address (for rate limiting)
 	JoinedChannel          *int64       // Currently joined channel ID
-	mu                     sync.RWMutex // Protects Nickname, UserFlags, and JoinedChannel
+	mu                     sync.RWMutex // Protects Nickname, UserFlags, Shadowbanned, and JoinedChannel
 	lastActivityUpdateTime int64        // Last time we wrote activity to DB (milliseconds, atomic)
 
 	// Subscriptions for selective message broadcasting

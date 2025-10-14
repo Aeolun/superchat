@@ -29,11 +29,14 @@ type ServerSection struct {
 }
 
 type LimitsSection struct {
-	MaxConnectionsPerIP   int `toml:"max_connections_per_ip"`
-	MessageRateLimit      int `toml:"message_rate_limit"`
-	MaxMessageLength      int `toml:"max_message_length"`
-	MaxNicknameLength     int `toml:"max_nickname_length"`
-	SessionTimeoutSeconds int `toml:"session_timeout_seconds"`
+	MaxConnectionsPerIP     int `toml:"max_connections_per_ip"`
+	MessageRateLimit        int `toml:"message_rate_limit"`
+	MaxChannelCreates       int `toml:"max_channel_creates"`
+	MaxMessageLength        int `toml:"max_message_length"`
+	MaxNicknameLength       int `toml:"max_nickname_length"`
+	SessionTimeoutSeconds   int `toml:"session_timeout_seconds"`
+	MaxThreadSubscriptions  int `toml:"max_thread_subscriptions"`
+	MaxChannelSubscriptions int `toml:"max_channel_subscriptions"`
 }
 
 type RetentionSection struct {
@@ -69,11 +72,14 @@ func DefaultTOMLConfig() TOMLConfig {
 			DatabasePath: "~/.superchat/superchat.db",
 		},
 		Limits: LimitsSection{
-			MaxConnectionsPerIP:   10,
-			MessageRateLimit:      10,
-			MaxMessageLength:      4096,
-			MaxNicknameLength:     20,
-			SessionTimeoutSeconds: 120,
+			MaxConnectionsPerIP:     10,
+			MessageRateLimit:        10,
+			MaxChannelCreates:       5,
+			MaxMessageLength:        4096,
+			MaxNicknameLength:       20,
+			SessionTimeoutSeconds:   120,
+			MaxThreadSubscriptions:  50,
+			MaxChannelSubscriptions: 10,
 		},
 		Retention: RetentionSection{
 			DefaultRetentionHours:  168, // 7 days
@@ -177,6 +183,11 @@ func applyEnvOverrides(config TOMLConfig) TOMLConfig {
 			config.Limits.MessageRateLimit = limit
 		}
 	}
+	if val := os.Getenv("SUPERCHAT_LIMITS_MAX_CHANNEL_CREATES"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			config.Limits.MaxChannelCreates = limit
+		}
+	}
 	if val := os.Getenv("SUPERCHAT_LIMITS_MAX_MESSAGE_LENGTH"); val != "" {
 		if limit, err := strconv.Atoi(val); err == nil {
 			config.Limits.MaxMessageLength = limit
@@ -190,6 +201,16 @@ func applyEnvOverrides(config TOMLConfig) TOMLConfig {
 	if val := os.Getenv("SUPERCHAT_LIMITS_SESSION_TIMEOUT_SECONDS"); val != "" {
 		if timeout, err := strconv.Atoi(val); err == nil {
 			config.Limits.SessionTimeoutSeconds = timeout
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_LIMITS_MAX_THREAD_SUBSCRIPTIONS"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			config.Limits.MaxThreadSubscriptions = limit
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_LIMITS_MAX_CHANNEL_SUBSCRIPTIONS"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			config.Limits.MaxChannelSubscriptions = limit
 		}
 	}
 
@@ -229,7 +250,7 @@ func applyEnvOverrides(config TOMLConfig) TOMLConfig {
 	return config
 }
 
-// writeDefaultConfig writes the default config to a file
+// writeDefaultConfig writes the default config to a file with all options documented
 func writeDefaultConfig(path string, config TOMLConfig) error {
 	// Ensure directory exists
 	dir := filepath.Dir(path)
@@ -244,19 +265,105 @@ func writeDefaultConfig(path string, config TOMLConfig) error {
 	}
 	defer f.Close()
 
-	// Write header comment
-	header := `# SuperChat Server Configuration
+	// Build comprehensive config file manually
+	// Active settings use defaults, commented settings show available options
+	content := `# SuperChat Server Configuration
 # This file was auto-generated with default values
-# Edit as needed and restart the server for changes to take effect
+# Settings below are active - modify them to change server behavior
+# Commented settings show available options with their defaults
+# Restart the server for changes to take effect
+#
+# Environment variables can override these settings:
+# SUPERCHAT_SECTION_KEY (e.g., SUPERCHAT_SERVER_TCP_PORT=8080)
 
+[server]
+# Port for TCP connections
+tcp_port = 6465
+
+# Port for SSH connections
+ssh_port = 6466
+
+# Port for public HTTP server (/servers.json, /ws endpoints)
+# Set to 0 to disable
+http_port = 8080
+
+# Path to SSH host key file
+ssh_host_key = "~/.superchat/ssh_host_key"
+
+# Path to SQLite database file
+database_path = "~/.superchat/superchat.db"
+
+# List of admin user nicknames (admins can ban users, delete channels, etc.)
+# Uncomment and add nicknames to grant admin privileges:
+# admin_users = ["alice", "bob"]
+
+[limits]
+# Maximum concurrent connections per IP address
+max_connections_per_ip = 10
+
+# Maximum messages per minute per user
+message_rate_limit = 10
+
+# Maximum channels a user can create per hour
+max_channel_creates = 5
+
+# Maximum message length in bytes
+max_message_length = 4096
+
+# Maximum nickname length in characters (default: 20)
+# Uncomment to change:
+# max_nickname_length = 20
+
+# Session timeout in seconds (sessions idle longer than this are disconnected)
+session_timeout_seconds = 120
+
+# Maximum thread subscriptions per session (for real-time NEW_MESSAGE broadcasts)
+# Uncomment to change from default (50):
+# max_thread_subscriptions = 50
+
+# Maximum channel subscriptions per session (for real-time NEW_MESSAGE broadcasts)
+# Uncomment to change from default (10):
+# max_channel_subscriptions = 10
+
+[retention]
+# Default message retention in hours (messages older than this are deleted)
+default_retention_hours = 168  # 7 days
+
+# How often to run cleanup job in minutes
+# Uncomment to change from default (60 minutes):
+# cleanup_interval_minutes = 60
+
+[channels]
+# Seed channels created on first startup if database is empty
+# Modify this list to customize your server's default channels
+seed_channels = [
+  { name = "general", description = "General discussion" },
+  { name = "tech", description = "Technical topics" },
+  { name = "random", description = "Off-topic chat" },
+  { name = "feedback", description = "Bug reports and feature requests" },
+]
+
+[discovery]
+# Enable server directory mode (when enabled, server can register with directories
+# and accept incoming server registrations)
+directory_enabled = true
+
+# Public hostname for client connections (leave empty to auto-detect)
+# Uncomment and set your public IP/hostname:
+# public_hostname = "chat.example.com"
+
+# Display name shown in server lists
+server_name = "SuperChat Server"
+
+# Description shown in server lists
+server_description = "A SuperChat community server"
+
+# Maximum concurrent users (0 = unlimited)
+# Uncomment to set a limit:
+# max_users = 100
 `
-	if _, err := f.WriteString(header); err != nil {
-		return err
-	}
 
-	// Encode config as TOML
-	encoder := toml.NewEncoder(f)
-	if err := encoder.Encode(config); err != nil {
+	if _, err := f.WriteString(content); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
@@ -291,12 +398,24 @@ func (c *TOMLConfig) ToServerConfig() ServerConfig {
 		cfg.MessageRateLimit = uint16(c.Limits.MessageRateLimit)
 	}
 
+	if c.Limits.MaxChannelCreates != 0 {
+		cfg.MaxChannelCreates = uint16(c.Limits.MaxChannelCreates)
+	}
+
 	if c.Limits.MaxMessageLength != 0 {
 		cfg.MaxMessageLength = uint32(c.Limits.MaxMessageLength)
 	}
 
 	if c.Limits.SessionTimeoutSeconds != 0 {
 		cfg.SessionTimeoutSeconds = c.Limits.SessionTimeoutSeconds
+	}
+
+	if c.Limits.MaxThreadSubscriptions != 0 {
+		cfg.MaxThreadSubscriptions = uint16(c.Limits.MaxThreadSubscriptions)
+	}
+
+	if c.Limits.MaxChannelSubscriptions != 0 {
+		cfg.MaxChannelSubscriptions = uint16(c.Limits.MaxChannelSubscriptions)
 	}
 
 	// Discovery section
