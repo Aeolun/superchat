@@ -348,6 +348,38 @@ function generateExamplesSection(
 }
 
 /**
+ * Format type name with element/variant information
+ */
+function formatTypeName(field: any): string {
+  // For union types with options, extract element types
+  if (field.type === "union" && field.unionOptions && field.unionOptions.length > 0) {
+    // Get unique types from union options
+    const types = new Set<string>();
+    for (const option of field.unionOptions) {
+      for (const subField of option.fields) {
+        types.add(subField.type);
+      }
+    }
+
+    // If this is an array items field (based on field name), format as Array<T>
+    if (field.name === "items" && types.size > 0) {
+      // For single type, use Array<Type>
+      if (types.size === 1) {
+        return `Array<${Array.from(types)[0]}>`;
+      }
+      // For multiple types, use Array<Type1 | Type2 | ...>
+      return `Array<${Array.from(types).join(" | ")}>`;
+    }
+
+    if (types.size > 0) {
+      return `union (${Array.from(types).join(" | ")})`;
+    }
+  }
+
+  return field.type;
+}
+
+/**
  * Format constraints for display
  */
 function formatConstraints(constraints: any[] | undefined): string {
@@ -419,10 +451,11 @@ function generateFieldsTable(fields: NonNullable<ExtractedMetadata["fields"]>): 
       : '<span class="badge badge-optional">optional</span>';
 
     // Regular field row
+    const typeName = formatTypeName(field);
     const constraints = formatConstraints((field as any).constraints);
     html += `                    <tr>
                       <td><code>${escapeHtml(field.name)}</code></td>
-                      <td><code>${escapeHtml(field.type)}</code>${constraints}</td>
+                      <td><code>${escapeHtml(typeName)}</code>${constraints}</td>
                       <td>${requiredBadge}</td>
                       <td>${field.description ? formatInlineMarkup(field.description) : ''}${field.default ? ` <em>(default: ${escapeHtml(field.default)})</em>` : ''}</td>
                     </tr>
