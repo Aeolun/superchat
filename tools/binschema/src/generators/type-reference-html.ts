@@ -348,6 +348,54 @@ function generateExamplesSection(
 }
 
 /**
+ * Format constraints for display
+ */
+function formatConstraints(constraints: any[] | undefined): string {
+  if (!constraints || constraints.length === 0) {
+    return "";
+  }
+
+  const parts: string[] = [];
+
+  for (const c of constraints) {
+    switch (c.type) {
+      case "min_length":
+        parts.push(`min length: ${c.value}`);
+        break;
+      case "max_length":
+        parts.push(`max length: ${c.value}`);
+        break;
+      case "exact_length":
+        parts.push(`length: ${c.value}`);
+        break;
+      case "min":
+        parts.push(c.inclusive ? `min: ${c.value}` : `> ${c.value}`);
+        break;
+      case "max":
+        parts.push(c.inclusive ? `max: ${c.value}` : `< ${c.value}`);
+        break;
+      case "greater_than":
+        parts.push(`> ${c.value}`);
+        break;
+      case "less_than":
+        parts.push(`< ${c.value}`);
+        break;
+      case "format":
+        parts.push(`format: ${c.format}`);
+        break;
+      case "pattern":
+        parts.push(`pattern: ${c.pattern}`);
+        break;
+      case "multiple_of":
+        parts.push(`multiple of: ${c.value}`);
+        break;
+    }
+  }
+
+  return parts.length > 0 ? ` <span class="constraints">(${parts.join(", ")})</span>` : "";
+}
+
+/**
  * Generate fields/properties table
  */
 function generateFieldsTable(fields: NonNullable<ExtractedMetadata["fields"]>): string {
@@ -371,17 +419,18 @@ function generateFieldsTable(fields: NonNullable<ExtractedMetadata["fields"]>): 
       : '<span class="badge badge-optional">optional</span>';
 
     // Regular field row
+    const constraints = formatConstraints((field as any).constraints);
     html += `                    <tr>
                       <td><code>${escapeHtml(field.name)}</code></td>
-                      <td><code>${escapeHtml(field.type)}</code></td>
+                      <td><code>${escapeHtml(field.type)}</code>${constraints}</td>
                       <td>${requiredBadge}</td>
-                      <td>${formatInlineMarkup(field.description)}${field.default ? ` <em>(default: ${escapeHtml(field.default)})</em>` : ''}</td>
+                      <td>${field.description ? formatInlineMarkup(field.description) : ''}${field.default ? ` <em>(default: ${escapeHtml(field.default)})</em>` : ''}</td>
                     </tr>
 `;
 
     // If this field has union options, display them as sub-rows
-    if (field.union_options && field.union_options.length > 0) {
-      field.union_options.forEach((option, optionIdx) => {
+    if (field.unionOptions && field.unionOptions.length > 0) {
+      field.unionOptions.forEach((option, optionIdx) => {
         // Header row for this option
         html += `                    <tr class="union-option-header">
                       <td colspan="4"><strong>Option ${optionIdx + 1}:</strong></td>
@@ -1031,6 +1080,13 @@ function generateCSS(): string {
     .badge-optional {
       background: #e0e7ff;
       color: #3730a3;
+    }
+
+    .constraints {
+      color: #6b7280;
+      font-size: 0.85em;
+      font-weight: normal;
+      font-style: italic;
     }
 
     /* Union option styles */

@@ -114,12 +114,7 @@ const Uint8FieldSchema = z.object({
   description: "Fixed-width 8-bit unsigned integer (0-255). Single byte, no endianness concerns.",
   use_for: "Message type codes, flags, single-byte counters, status codes",
   wire_format: "1 byte (0x00-0xFF)",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"uint8\"", required: true, description: "Must be \"uint8\"" },
-    { name: "endianness", type: "enum", required: false, description: "Byte order (not applicable for single-byte types, included for consistency)" },
-    { name: "description", type: "string", required: false, description: "Optional documentation string" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "number",
@@ -168,12 +163,7 @@ const Uint16FieldSchema = z.object({
   description: "Fixed-width 16-bit unsigned integer (0-65535). Respects endianness configuration (big-endian or little-endian).",
   use_for: "Port numbers, message lengths, medium-range counters, message IDs",
   wire_format: "2 bytes, byte order depends on endianness setting",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"uint16\"", required: true, description: "Must be \"uint16\"" },
-    { name: "endianness", type: "enum (\"big_endian\" | \"little_endian\")", required: false, description: "Byte order (overrides global config if specified)" },
-    { name: "description", type: "string", required: false, description: "Optional documentation string" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "number",
@@ -210,12 +200,7 @@ const Uint32FieldSchema = z.object({
   description: "Fixed-width 32-bit unsigned integer (0-4294967295). Respects endianness configuration.",
   use_for: "Timestamps, large counters, IP addresses, file sizes, CRCs",
   wire_format: "4 bytes, byte order depends on endianness setting",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"uint32\"", required: true, description: "Must be \"uint32\"" },
-    { name: "endianness", type: "enum (\"big_endian\" | \"little_endian\")", required: false, description: "Byte order (overrides global config if specified)" },
-    { name: "description", type: "string", required: false, description: "Optional documentation string" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "number",
@@ -649,12 +634,7 @@ const OptionalFieldSchema = z.object({
   description: "Field that may or may not be present. Uses a presence indicator (byte or bit) followed by the value if present.",
   use_for: "Optional data fields, nullable values, feature flags with associated data",
   wire_format: "Presence indicator (1 byte or 1 bit) + value (if present=1)",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"optional\"", required: true, description: "Must be \"optional\"" },
-    { name: "value_type", type: "string", required: true, description: "Type of the wrapped value (primitive or type reference)" },
-    { name: "presence_type", type: "enum (\"uint8\" | \"bit\")", required: false, description: "Type of presence indicator (defaults to uint8)", default: "uint8" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "T | undefined",
@@ -857,16 +837,7 @@ const ArrayFieldSchema = z.object({
   description: "Collection of elements of the same type. Supports fixed-length, length-prefixed, field-referenced, and null-terminated arrays.",
   use_for: "Lists of items, message batches, repeated structures, variable-length data",
   wire_format: "Depends on kind: fixed (N items), length_prefixed (count + items), length_prefixed_items (count + per-item lengths + items), null_terminated (items + terminator), field_referenced (length from earlier field)",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"array\"", required: true, description: "Must be \"array\"" },
-    { name: "kind", type: "enum (\"fixed\" | \"length_prefixed\" | \"length_prefixed_items\" | \"null_terminated\" | \"field_referenced\")", required: true, description: "How array length is determined" },
-    { name: "items", type: "ElementType", required: true, description: "Type of array elements (primitive, struct, or type reference)" },
-    { name: "length", type: "number", required: false, description: "Fixed array size (required for kind=fixed)" },
-    { name: "length_type", type: "enum (\"uint8\" | \"uint16\" | \"uint32\" | \"uint64\")", required: false, description: "Type of length prefix (required for kind=length_prefixed and length_prefixed_items)" },
-    { name: "item_length_type", type: "enum (\"uint8\" | \"uint16\" | \"uint32\" | \"uint64\")", required: false, description: "Type of per-item length prefix (required for kind=length_prefixed_items)" },
-    { name: "length_field", type: "string", required: false, description: "Field name to read length from (required for kind=field_referenced, supports dot notation)" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "Array<T>",
@@ -919,14 +890,7 @@ const StringFieldSchema = z.object({
   description: "Variable or fixed-length text field with UTF-8 or ASCII encoding. Can be length-prefixed, fixed-length, or null-terminated.",
   use_for: "Usernames, messages, labels, text data, identifiers",
   wire_format: "Depends on kind: length-prefixed (length prefix + bytes), fixed (N bytes), or null-terminated (bytes + 0x00)",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"string\"", required: true, description: "Must be \"string\"" },
-    { name: "kind", type: "enum (\"fixed\" | \"length_prefixed\" | \"null_terminated\")", required: true, description: "How the string length is determined" },
-    { name: "encoding", type: "enum (\"utf8\" | \"ascii\")", required: false, description: "Character encoding (defaults to utf8)" },
-    { name: "length", type: "number", required: false, description: "Fixed length in bytes (required for kind=fixed)" },
-    { name: "length_type", type: "enum (\"uint8\" | \"uint16\" | \"uint32\" | \"uint64\")", required: false, description: "Type of length prefix (required for kind=length_prefixed)" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "string",
@@ -968,15 +932,7 @@ const DiscriminatedUnionFieldSchema = z.object({
   description: "Type that can be one of several variants, chosen based on a discriminator value. Supports peek-based (read ahead) or field-based (reference earlier field) discrimination.",
   use_for: "Protocol messages, polymorphic data, variant types, message envelopes",
   wire_format: "Discriminator determines which variant type to parse. No additional type tag on wire (discriminator serves this purpose).",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"discriminated_union\"", required: true, description: "Must be \"discriminated_union\"" },
-    { name: "discriminator", type: "union", required: true, description: "How to determine which variant to use - EITHER peek-based OR field-based (mutually exclusive)" },
-    { name: "discriminator.peek", type: "enum (\"uint8\" | \"uint16\" | \"uint32\")", required: true, description: "Peek-based discriminator: Read next bytes without consuming them (use this OR field, not both)" },
-    { name: "discriminator.field", type: "string", required: true, description: "Field-based discriminator: Reference to earlier field with supports dot notation (use this OR peek, not both)" },
-    { name: "discriminator.endianness", type: "enum (\"big_endian\" | \"little_endian\")", required: false, description: "Byte order for uint16/uint32 peek (only valid with peek, not with field)" },
-    { name: "variants", type: "array", required: true, description: "List of possible variants with conditions" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "V1 | V2 | ...",
@@ -1026,15 +982,7 @@ const PointerFieldSchema = z.object({
   description: "Reference to data at another position in the message. Used for compression via backwards references (like DNS name compression).",
   use_for: "Message compression, duplicate data elimination, backwards references",
   wire_format: "Storage integer with offset bits (extracted via mask). Points to earlier data in message.",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"pointer\"", required: true, description: "Must be \"pointer\"" },
-    { name: "storage", type: "enum (\"uint8\" | \"uint16\" | \"uint32\")", required: true, description: "How the pointer value is stored on wire" },
-    { name: "offset_mask", type: "string", required: true, description: "Bit mask to extract offset from storage value (e.g., '0x3FFF')" },
-    { name: "offset_from", type: "enum (\"message_start\" | \"current_position\")", required: true, description: "Where offset is calculated from" },
-    { name: "target_type", type: "string", required: true, description: "Type to parse at the target offset" },
-    { name: "endianness", type: "enum (\"big_endian\" | \"little_endian\")", required: false, description: "Byte order for uint16/uint32 storage" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "T (resolved value)",
@@ -1088,13 +1036,7 @@ const BitfieldFieldSchema = z.object({
   description: "Container for packing multiple bit-level fields into a compact byte-aligned structure. Allows precise bit-level control.",
   use_for: "Flags, compact headers, protocol opcodes, bit-packed data",
   wire_format: "Packed bits stored in bytes (size determines total bytes). Bit order (MSB/LSB first) determined by config.",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "literal \"bitfield\"", required: true, description: "Must be \"bitfield\"" },
-    { name: "size", type: "number", required: true, description: "Total size in bits (determines byte count)" },
-    { name: "bit_order", type: "enum (\"msb_first\" | \"lsb_first\")", required: false, description: "Bit ordering within bytes (overrides global config)" },
-    { name: "fields", type: "array", required: true, description: "Array of bit fields with offset and size" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "object with number fields",
@@ -1119,11 +1061,7 @@ const BitfieldFieldSchema = z.object({
       name: "flags",
       type: "bitfield",
       size: 8,
-      fields: [
-        { name: "version", offset: 0, size: 4 },
-        { name: "type", offset: 4, size: 3 },
-        { name: "reserved", offset: 7, size: 1 }
-      ]
+      
     }
   ]
 });
@@ -1151,11 +1089,7 @@ const ConditionalFieldSchema = z.object({
   description: "Field that is only present on the wire if a condition evaluates to true. Condition references earlier fields.",
   use_for: "Protocol extensions, optional sections, feature-flagged data",
   wire_format: "Field is only encoded/decoded if condition is true. No presence indicator on wire.",
-  fields: [
-    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
-    { name: "type", type: "string", required: true, description: "Type of the field (primitive or type reference)" },
-    { name: "conditional", type: "string", required: true, description: "Boolean expression referencing earlier fields (e.g., 'flags.extended == 1')" }
-  ],
+  
   code_generation: {
     typescript: {
       type: "T | undefined",

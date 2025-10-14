@@ -9,6 +9,7 @@ import type {
   UnionOption,
   ExtractionOptions,
   UnionWalkResult,
+  Constraint,
 } from "./types.js";
 
 /**
@@ -109,11 +110,15 @@ function extractFieldInfo(
     unionOptions = extractUnionOptions(unwrappedSchema);
   }
 
+  // Extract validation constraints
+  const constraints = extractConstraints(fieldDef);
+
   return {
     name,
     type: typeName,
     required,
     description,
+    constraints,
     unionOptions,
   };
 }
@@ -151,6 +156,83 @@ function getTypeName(fieldDef: any): string {
   }
 
   return type;
+}
+
+/**
+ * Extract validation constraints from Zod checks array
+ *
+ * @param fieldDef - Zod field definition
+ * @returns Array of constraints or undefined if none exist
+ */
+function extractConstraints(fieldDef: any): Constraint[] | undefined {
+  const checks = fieldDef?.checks;
+  if (!checks || !Array.isArray(checks) || checks.length === 0) {
+    return undefined;
+  }
+
+  const constraints: Constraint[] = [];
+
+  for (const check of checks) {
+    const checkDef = check._zod?.def;
+    if (!checkDef) continue;
+
+    switch (checkDef.check) {
+      case "min_length":
+        constraints.push({ type: "min_length", value: checkDef.minimum });
+        break;
+
+      case "max_length":
+        constraints.push({ type: "max_length", value: checkDef.maximum });
+        break;
+
+      case "length_equals":
+        constraints.push({ type: "exact_length", value: checkDef.length });
+        break;
+
+      case "greater_than":
+        constraints.push({
+          type: checkDef.inclusive ? "min" : "greater_than",
+          value: checkDef.value,
+          inclusive: checkDef.inclusive,
+        });
+        break;
+
+      case "less_than":
+        constraints.push({
+          type: checkDef.inclusive ? "max" : "less_than",
+          value: checkDef.value,
+          inclusive: checkDef.inclusive,
+        });
+        break;
+
+      case "string_format":
+        // Distinguish between regex and other formats (email, url, uuid)
+        if (checkDef.format === "regex") {
+          constraints.push({
+            type: "pattern",
+            pattern: checkDef.pattern,
+          });
+        } else {
+          constraints.push({
+            type: "format",
+            format: checkDef.format,
+            pattern: checkDef.pattern,
+          });
+        }
+        break;
+
+      case "multiple_of":
+        constraints.push({
+          type: "multiple_of",
+          value: checkDef.value,
+        });
+        break;
+
+      // Add more constraint types as needed
+    }
+  }
+
+  return constraints.length > 0 ? constraints : undefined;
 }
 
 /**

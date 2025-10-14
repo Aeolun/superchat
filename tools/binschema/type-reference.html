@@ -546,6 +546,13 @@
       color: #3730a3;
     }
 
+    .constraints {
+      color: #6b7280;
+      font-size: 0.85em;
+      font-weight: normal;
+      font-style: italic;
+    }
+
     /* Union option styles */
     .union-option-header td {
       background: #f0f9ff;
@@ -704,25 +711,25 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;uint8&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;uint8&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Byte order (not applicable for single-byte types, included for consistency)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Optional documentation string</td>
+                      <td></td>
                     </tr>
                   </tbody>
                 </table>
@@ -902,25 +909,25 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;uint16&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;uint16&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Byte order (overrides global config if specified)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Optional documentation string</td>
+                      <td></td>
                     </tr>
                   </tbody>
                 </table>
@@ -1016,25 +1023,25 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;uint32&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;uint32&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Byte order (overrides global config if specified)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Optional documentation string</td>
+                      <td></td>
                     </tr>
                   </tbody>
                 </table>
@@ -1227,19 +1234,19 @@
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;uint64&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -1438,19 +1445,19 @@
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;int8&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -1539,19 +1546,19 @@
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;int16&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -1640,19 +1647,19 @@
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;int32&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -1742,19 +1749,19 @@
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;int64&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -1854,19 +1861,19 @@
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;float32&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -1963,19 +1970,19 @@
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;float64&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2081,41 +2088,41 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;string&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;string&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>kind</code></td>
                       <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;null_terminated&quot; | &quot;field_referenced&quot;)</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>How the string length is determined</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>encoding</code></td>
                       <td><code>default</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Character encoding (defaults to utf8)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>length</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>number</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Fixed length in bytes (required for kind=fixed)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>length_type</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Type of length prefix (required for kind=length_prefixed)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2227,25 +2234,25 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;array&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;array&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>kind</code></td>
                       <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;null_terminated&quot; | &quot;field_referenced&quot;)</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>How array length is determined</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>items</code></td>
                       <td><code>union</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Type of array elements (primitive, struct, or type reference)</td>
+                      <td></td>
                     </tr>
                     <tr class="union-option-header">
                       <td colspan="4"><strong>Option 1:</strong></td>
@@ -2264,49 +2271,49 @@
                     </tr>
                     <tr>
                       <td><code>length</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>number</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Fixed array size (required for kind=fixed)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>length_type</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Type of length prefix (required for kind=length_prefixed and length_prefixed_items)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>item_length_type</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Type of per-item length prefix (required for kind=length_prefixed_items)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>length_field</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Field name to read length from (required for kind=field_referenced, supports dot notation)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>variants</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>array</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>notes</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>array</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>terminal_variants</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>array</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2420,29 +2427,29 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;optional&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;optional&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>value_type</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Type of the wrapped value (primitive or type reference)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>presence_type</code></td>
                       <td><code>default</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Type of presence indicator (defaults to uint8)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2546,19 +2553,19 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;discriminated_union&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;discriminated_union&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>discriminator</code></td>
                       <td><code>union</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>How to determine which variant to use - EITHER peek-based OR field-based (mutually exclusive)</td>
+                      <td></td>
                     </tr>
                     <tr class="union-option-header">
                       <td colspan="4"><strong>Option 1:</strong></td>
@@ -2588,11 +2595,11 @@
                       <td><code>variants</code></td>
                       <td><code>array</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>List of possible variants with conditions</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2698,35 +2705,35 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;bitfield&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;bitfield&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>size</code></td>
                       <td><code>number</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Total size in bits (determines byte count)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>bit_order</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;msb_first&quot; | &quot;lsb_first&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Bit ordering within bytes (overrides global config)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>fields</code></td>
                       <td><code>array</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Array of bit fields with offset and size</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2783,24 +2790,7 @@
   {
     &quot;name&quot;: &quot;flags&quot;,
     &quot;type&quot;: &quot;bitfield&quot;,
-    &quot;size&quot;: 8,
-    &quot;fields&quot;: [
-      {
-        &quot;name&quot;: &quot;version&quot;,
-        &quot;offset&quot;: 0,
-        &quot;size&quot;: 4
-      },
-      {
-        &quot;name&quot;: &quot;type&quot;,
-        &quot;offset&quot;: 4,
-        &quot;size&quot;: 3
-      },
-      {
-        &quot;name&quot;: &quot;reserved&quot;,
-        &quot;offset&quot;: 7,
-        &quot;size&quot;: 1
-      }
-    ]
+    &quot;size&quot;: 8
   }
 ]</code></pre>
               </div>
@@ -2835,47 +2825,47 @@
                       <td><code>name</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Field name in the generated struct/type</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>type</code></td>
-                      <td><code>literal</code></td>
+                      <td><code>literal &quot;pointer&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Must be &quot;pointer&quot;</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>storage</code></td>
                       <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot;)</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>How the pointer value is stored on wire</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>offset_mask</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Bit mask to extract offset from storage value (e.g., &#039;0x3FFF&#039;)</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>offset_from</code></td>
                       <td><code>enum (&quot;message_start&quot; | &quot;current_position&quot;)</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Where offset is calculated from</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>target_type</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
-                      <td>Type to parse at the target offset</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
-                      <td>Byte order for uint16/uint32 storage</td>
+                      <td></td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
-                      <td><code>optional</code></td>
+                      <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
