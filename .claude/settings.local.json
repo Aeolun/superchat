@@ -31,7 +31,9 @@
       "Bash(git log:*)",
       "Bash(pnpm list:*)",
       "WebSearch",
-      "Bash(npm run export:*)"
+      "Bash(npm run export:*)",
+      "Bash(node debug-schema.js)",
+      "Bash(node debug-schema.cjs)"
     ],
     "deny": [],
     "ask": []

@@ -8,6 +8,50 @@ import { z } from "zod";
  */
 
 // ============================================================================
+// Metadata Extension for Self-Documentation
+// ============================================================================
+
+declare module "zod" {
+  interface GlobalMeta {
+    title?: string;           // Human-readable type name
+    description?: string;     // Brief description (supports **bold** and *italic*)
+    examples?: unknown[];     // Code examples showing usage
+    use_for?: string;        // "Use for: X, Y, Z"
+    wire_format?: string;    // Binary representation (for binary schemas)
+    fields?: Array<{         // Properties/fields that can be used with this type
+      name: string;          // Field name (e.g., "name", "type", "endianness")
+      type: string;          // Field type (e.g., "string", "literal", "enum")
+      required: boolean;     // Whether this field is required
+      description: string;   // Description of what this field does
+      default?: string;      // Default value if omitted
+    }>;
+    code_generation?: {      // How this type is represented in generated code (for tabbed view per language)
+      typescript?: {
+        type: string;        // TypeScript type (e.g., "number", "bigint")
+        notes?: string[];    // TypeScript-specific notes
+      };
+      go?: {
+        type: string;        // Go type (e.g., "uint8", "uint64")
+        notes?: string[];    // Go-specific notes
+      };
+      rust?: {
+        type: string;        // Rust type (e.g., "u8", "u64")
+        notes?: string[];    // Rust-specific notes
+      };
+    };
+    examples_values?: {      // Language-specific example values (what the data looks like)
+      typescript?: string;   // TypeScript value example
+      go?: string;           // Go value example
+      rust?: string;         // Rust value example
+    };
+    notes?: string[];        // General notes (not language-specific)
+    see_also?: string[];     // Related type names/links
+    since?: string;          // Version when added
+    deprecated?: string;     // Deprecation notice
+  }
+}
+
+// ============================================================================
 // Primitives and Basic Types
 // ============================================================================
 
@@ -65,6 +109,53 @@ const Uint8FieldSchema = z.object({
   type: z.literal("uint8"),
   endianness: EndiannessSchema.optional(), // Override global
   description: z.string().optional(),
+}).meta({
+  title: "8-bit Unsigned Integer",
+  description: "Fixed-width 8-bit unsigned integer (0-255). Single byte, no endianness concerns.",
+  use_for: "Message type codes, flags, single-byte counters, status codes",
+  wire_format: "1 byte (0x00-0xFF)",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"uint8\"", required: true, description: "Must be \"uint8\"" },
+    { name: "endianness", type: "enum", required: false, description: "Byte order (not applicable for single-byte types, included for consistency)" },
+    { name: "description", type: "string", required: false, description: "Optional documentation string" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "number",
+      notes: ["JavaScript Number type", "Safe for all uint8 values"]
+    },
+    go: {
+      type: "uint8",
+      notes: ["Native Go uint8 type", "Also known as byte"]
+    },
+    rust: {
+      type: "u8",
+      notes: ["Native Rust u8 type"]
+    }
+  },
+  examples: [
+    { name: "version", type: "uint8" },
+    { name: "flags", type: "uint8", description: "Feature flags" },
+    { name: "message_type", type: "uint8" }
+  ],
+  examples_values: {
+    typescript: `{
+  version: 1,
+  flags: 0x01,
+  message_type: 0x20
+}`,
+    go: `Message{
+  Version:     1,
+  Flags:       0x01,
+  MessageType: 0x20,
+}`,
+    rust: `Message {
+  version: 1,
+  flags: 0x01,
+  message_type: 0x20,
+}`
+  }
 });
 
 const Uint16FieldSchema = z.object({
@@ -72,6 +163,41 @@ const Uint16FieldSchema = z.object({
   type: z.literal("uint16"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "16-bit Unsigned Integer",
+  description: "Fixed-width 16-bit unsigned integer (0-65535). Respects endianness configuration (big-endian or little-endian).",
+  use_for: "Port numbers, message lengths, medium-range counters, message IDs",
+  wire_format: "2 bytes, byte order depends on endianness setting",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"uint16\"", required: true, description: "Must be \"uint16\"" },
+    { name: "endianness", type: "enum (\"big_endian\" | \"little_endian\")", required: false, description: "Byte order (overrides global config if specified)" },
+    { name: "description", type: "string", required: false, description: "Optional documentation string" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "number",
+      notes: ["JavaScript Number type", "Safe for all uint16 values"]
+    },
+    go: {
+      type: "uint16",
+      notes: ["Native Go uint16 type"]
+    },
+    rust: {
+      type: "u16",
+      notes: ["Native Rust u16 type"]
+    }
+  },
+  notes: [
+    "Default endianness is inherited from global config",
+    "Can override with field-level `endianness` property",
+    "Network protocols typically use big-endian"
+  ],
+  examples: [
+    { name: "port", type: "uint16", endianness: "big_endian" },
+    { name: "content_length", type: "uint16" },
+    { name: "message_id", type: "uint16", endianness: "little_endian" }
+  ]
 });
 
 const Uint32FieldSchema = z.object({
@@ -79,6 +205,57 @@ const Uint32FieldSchema = z.object({
   type: z.literal("uint32"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "32-bit Unsigned Integer",
+  description: "Fixed-width 32-bit unsigned integer (0-4294967295). Respects endianness configuration.",
+  use_for: "Timestamps, large counters, IP addresses, file sizes, CRCs",
+  wire_format: "4 bytes, byte order depends on endianness setting",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"uint32\"", required: true, description: "Must be \"uint32\"" },
+    { name: "endianness", type: "enum (\"big_endian\" | \"little_endian\")", required: false, description: "Byte order (overrides global config if specified)" },
+    { name: "description", type: "string", required: false, description: "Optional documentation string" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "number",
+      notes: ["JavaScript Number type", "Safe for all uint32 values"]
+    },
+    go: {
+      type: "uint32",
+      notes: ["Native Go uint32 type"]
+    },
+    rust: {
+      type: "u32",
+      notes: ["Native Rust u32 type"]
+    }
+  },
+  notes: [
+    "Common choice for Unix timestamps (seconds since epoch)",
+    "IPv4 addresses are typically stored as uint32"
+  ],
+  examples: [
+    { name: "timestamp", type: "uint32", endianness: "big_endian" },
+    { name: "file_size", type: "uint32" },
+    { name: "crc32", type: "uint32", endianness: "little_endian" }
+  ],
+  examples_values: {
+    typescript: `{
+  timestamp: 1704067200,
+  file_size: 1048576,
+  crc32: 0xDEADBEEF
+}`,
+    go: `Message{
+  Timestamp: 1704067200,
+  FileSize:  1048576,
+  Crc32:     0xDEADBEEF,
+}`,
+    rust: `Message {
+  timestamp: 1704067200,
+  file_size: 1048576,
+  crc32: 0xDEADBEEF,
+}`
+  }
 });
 
 const Uint64FieldSchema = z.object({
@@ -86,6 +263,55 @@ const Uint64FieldSchema = z.object({
   type: z.literal("uint64"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "64-bit Unsigned Integer",
+  description: "Fixed-width 64-bit unsigned integer (0-18446744073709551615). Respects endianness configuration.",
+  use_for: "High-precision timestamps, very large counters, database IDs, file offsets",
+  wire_format: "8 bytes, byte order depends on endianness setting",
+  code_generation: {
+    typescript: {
+      type: "bigint",
+      notes: [
+        "JavaScript BigInt type (not Number!)",
+        "Number can only safely represent up to 2^53-1",
+        "Literal syntax: 123n"
+      ]
+    },
+    go: {
+      type: "uint64",
+      notes: ["Native Go uint64 type"]
+    },
+    rust: {
+      type: "u64",
+      notes: ["Native Rust u64 type"]
+    }
+  },
+  notes: [
+    "Use for millisecond/microsecond timestamps",
+    "Exceeds JavaScript Number's safe integer range"
+  ],
+  examples: [
+    { name: "user_id", type: "uint64" },
+    { name: "timestamp_ms", type: "uint64", endianness: "big_endian", description: "Milliseconds since epoch" },
+    { name: "byte_offset", type: "uint64" }
+  ],
+  examples_values: {
+    typescript: `{
+  user_id: 123456789012345n,  // BigInt literal!
+  timestamp_ms: 1704067200000n,
+  byte_offset: 0n
+}`,
+    go: `Message{
+  UserId:      123456789012345,
+  TimestampMs: 1704067200000,
+  ByteOffset:  0,
+}`,
+    rust: `Message {
+  user_id: 123456789012345,
+  timestamp_ms: 1704067200000,
+  byte_offset: 0,
+}`
+  }
 });
 
 /**
@@ -96,6 +322,29 @@ const Int8FieldSchema = z.object({
   type: z.literal("int8"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "8-bit Signed Integer",
+  description: "Fixed-width 8-bit signed integer (-128 to 127). Uses two's complement representation.",
+  use_for: "Small signed values, temperature readings, coordinate offsets",
+  wire_format: "1 byte, two's complement encoding",
+  code_generation: {
+    typescript: {
+      type: "number",
+      notes: ["JavaScript Number type", "Safe for all int8 values"]
+    },
+    go: {
+      type: "int8",
+      notes: ["Native Go int8 type"]
+    },
+    rust: {
+      type: "i8",
+      notes: ["Native Rust i8 type"]
+    }
+  },
+  examples: [
+    { name: "temperature", type: "int8", description: "Temperature in Celsius" },
+    { name: "offset", type: "int8" }
+  ]
 });
 
 const Int16FieldSchema = z.object({
@@ -103,6 +352,29 @@ const Int16FieldSchema = z.object({
   type: z.literal("int16"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "16-bit Signed Integer",
+  description: "Fixed-width 16-bit signed integer (-32768 to 32767). Respects endianness configuration.",
+  use_for: "Signed coordinates, altitude values, timezone offsets",
+  wire_format: "2 bytes, two's complement encoding, byte order depends on endianness",
+  code_generation: {
+    typescript: {
+      type: "number",
+      notes: ["JavaScript Number type", "Safe for all int16 values"]
+    },
+    go: {
+      type: "int16",
+      notes: ["Native Go int16 type"]
+    },
+    rust: {
+      type: "i16",
+      notes: ["Native Rust i16 type"]
+    }
+  },
+  examples: [
+    { name: "altitude", type: "int16", endianness: "big_endian" },
+    { name: "x_coord", type: "int16" }
+  ]
 });
 
 const Int32FieldSchema = z.object({
@@ -110,6 +382,29 @@ const Int32FieldSchema = z.object({
   type: z.literal("int32"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "32-bit Signed Integer",
+  description: "Fixed-width 32-bit signed integer (-2147483648 to 2147483647). Respects endianness configuration.",
+  use_for: "Large signed values, geographic coordinates, time differences",
+  wire_format: "4 bytes, two's complement encoding, byte order depends on endianness",
+  code_generation: {
+    typescript: {
+      type: "number",
+      notes: ["JavaScript Number type", "Safe for all int32 values"]
+    },
+    go: {
+      type: "int32",
+      notes: ["Native Go int32 type", "Also known as rune"]
+    },
+    rust: {
+      type: "i32",
+      notes: ["Native Rust i32 type"]
+    }
+  },
+  examples: [
+    { name: "latitude", type: "int32", endianness: "big_endian" },
+    { name: "time_delta", type: "int32" }
+  ]
 });
 
 const Int64FieldSchema = z.object({
@@ -117,6 +412,36 @@ const Int64FieldSchema = z.object({
   type: z.literal("int64"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "64-bit Signed Integer",
+  description: "Fixed-width 64-bit signed integer (-9223372036854775808 to 9223372036854775807). Respects endianness configuration.",
+  use_for: "High-precision signed timestamps, large signed offsets, financial calculations",
+  wire_format: "8 bytes, two's complement encoding, byte order depends on endianness",
+  code_generation: {
+    typescript: {
+      type: "bigint",
+      notes: [
+        "JavaScript BigInt type (not Number!)",
+        "Number can only safely represent -(2^53-1) to (2^53-1)",
+        "Literal syntax: -123n"
+      ]
+    },
+    go: {
+      type: "int64",
+      notes: ["Native Go int64 type"]
+    },
+    rust: {
+      type: "i64",
+      notes: ["Native Rust i64 type"]
+    }
+  },
+  notes: [
+    "Exceeds JavaScript Number's safe integer range"
+  ],
+  examples: [
+    { name: "account_balance", type: "int64", description: "Balance in cents" },
+    { name: "time_offset_us", type: "int64", description: "Microsecond offset" }
+  ]
 });
 
 /**
@@ -127,6 +452,37 @@ const Float32FieldSchema = z.object({
   type: z.literal("float32"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "32-bit Floating Point",
+  description: "IEEE 754 single-precision floating point (32-bit). Provides ~7 decimal digits of precision.",
+  use_for: "Measurements, sensor data, graphics coordinates, scientific values",
+  wire_format: "4 bytes, IEEE 754 format, byte order depends on endianness",
+  code_generation: {
+    typescript: {
+      type: "number",
+      notes: [
+        "JavaScript Number type",
+        "Stored internally as float64, but represents float32 wire value"
+      ]
+    },
+    go: {
+      type: "float32",
+      notes: ["Native Go float32 type"]
+    },
+    rust: {
+      type: "f32",
+      notes: ["Native Rust f32 type"]
+    }
+  },
+  notes: [
+    "Range: ±1.4E-45 to ±3.4E38",
+    "Special values: NaN, +Infinity, -Infinity, -0",
+    "Not all decimal values can be represented exactly"
+  ],
+  examples: [
+    { name: "temperature", type: "float32", endianness: "big_endian" },
+    { name: "sensor_value", type: "float32" }
+  ]
 });
 
 const Float64FieldSchema = z.object({
@@ -134,6 +490,36 @@ const Float64FieldSchema = z.object({
   type: z.literal("float64"),
   endianness: EndiannessSchema.optional(),
   description: z.string().optional(),
+}).meta({
+  title: "64-bit Floating Point",
+  description: "IEEE 754 double-precision floating point (64-bit). Provides ~15 decimal digits of precision.",
+  use_for: "High-precision measurements, geographic coordinates, scientific calculations",
+  wire_format: "8 bytes, IEEE 754 format, byte order depends on endianness",
+  code_generation: {
+    typescript: {
+      type: "number",
+      notes: [
+        "JavaScript Number type (native representation)",
+        "This is the default numeric type in JavaScript"
+      ]
+    },
+    go: {
+      type: "float64",
+      notes: ["Native Go float64 type"]
+    },
+    rust: {
+      type: "f64",
+      notes: ["Native Rust f64 type"]
+    }
+  },
+  notes: [
+    "Range: ±5.0E-324 to ±1.7E308",
+    "Special values: NaN, +Infinity, -Infinity, -0"
+  ],
+  examples: [
+    { name: "latitude", type: "float64", endianness: "big_endian" },
+    { name: "precise_measurement", type: "float64" }
+  ]
 });
 
 /**
@@ -240,6 +626,62 @@ const Float64ElementSchema = z.object({
 });
 
 /**
+ * Optional element schema (optional without name - for array items)
+ */
+const OptionalElementSchema = z.object({
+  type: z.literal("optional"),
+  value_type: z.string(), // The wrapped type (can be primitive or type reference)
+  presence_type: z.enum(["uint8", "bit"]).optional().default("uint8"), // Type of presence indicator (uint8 = 1 byte, bit = 1 bit)
+  description: z.string().optional(),
+});
+
+/**
+ * Optional field schema (optional with name - for struct fields)
+ */
+const OptionalFieldSchema = z.object({
+  name: z.string(),
+  type: z.literal("optional"),
+  value_type: z.string(), // The wrapped type (can be primitive or type reference)
+  presence_type: z.enum(["uint8", "bit"]).optional().default("uint8"), // Type of presence indicator (uint8 = 1 byte, bit = 1 bit)
+  description: z.string().optional(),
+}).meta({
+  title: "Optional",
+  description: "Field that may or may not be present. Uses a presence indicator (byte or bit) followed by the value if present.",
+  use_for: "Optional data fields, nullable values, feature flags with associated data",
+  wire_format: "Presence indicator (1 byte or 1 bit) + value (if present=1)",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"optional\"", required: true, description: "Must be \"optional\"" },
+    { name: "value_type", type: "string", required: true, description: "Type of the wrapped value (primitive or type reference)" },
+    { name: "presence_type", type: "enum (\"uint8\" | \"bit\")", required: false, description: "Type of presence indicator (defaults to uint8)", default: "uint8" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "T | undefined",
+      notes: ["TypeScript union with undefined", "Clean optional types", "Type T depends on value_type field"]
+    },
+    go: {
+      type: "*T",
+      notes: ["Go pointer type (nil for absent)", "Type T depends on value_type field"]
+    },
+    rust: {
+      type: "Option<T>",
+      notes: ["Rust Option enum", "Type T depends on value_type field"]
+    }
+  },
+  notes: [
+    "presence_type=uint8 uses 1 full byte (0=absent, 1=present)",
+    "presence_type=bit uses 1 bit (more compact for multiple optional fields)",
+    "Value is only encoded/decoded if presence indicator is 1"
+  ],
+  examples: [
+    { name: "user_id", type: "optional", value_type: "uint64" },
+    { name: "nickname", type: "optional", value_type: "String", presence_type: "uint8" },
+    { name: "flags", type: "optional", value_type: "uint8", presence_type: "bit" }
+  ]
+});
+
+/**
  * Type reference without name (for array items)
  */
 const TypeRefElementSchema = z.object({
@@ -257,15 +699,32 @@ const DiscriminatedUnionVariantSchema = z.object({
 });
 
 /**
+ * Discriminator - either peek-based or field-based (mutually exclusive)
+ */
+const DiscriminatorSchema = z.union([
+  // Peek-based: Read discriminator value at current position without consuming
+  z.object({
+    peek: z.enum(["uint8", "uint16", "uint32"]).meta({
+      description: "Type of integer to peek (read without consuming bytes)"
+    }),
+    endianness: EndiannessSchema.optional().meta({
+      description: "Byte order for uint16/uint32 (required for multi-byte types)"
+    }),
+  }),
+  // Field-based: Reference an earlier field's value
+  z.object({
+    field: z.string().meta({
+      description: "Name of earlier field to use as discriminator (supports dot notation like 'flags.type')"
+    }),
+  }),
+]);
+
+/**
  * Discriminated union element (without name - for type aliases)
  */
 const DiscriminatedUnionElementSchema = z.object({
   type: z.literal("discriminated_union"),
-  discriminator: z.object({
-    peek: z.enum(["uint8", "uint16", "uint32"]).optional(),
-    field: z.string().optional(),
-    endianness: EndiannessSchema.optional(),
-  }),
+  discriminator: DiscriminatorSchema,
   variants: z.array(DiscriminatedUnionVariantSchema).min(1),
   description: z.string().optional(),
 });
@@ -353,6 +812,7 @@ const ElementTypeSchema: z.ZodType<any> = z.union([
     Int64ElementSchema,
     Float32ElementSchema,
     Float64ElementSchema,
+    OptionalElementSchema, // Support optional elements
     ArrayElementSchema, // Support nested arrays
     StringElementSchema, // Support strings
     DiscriminatedUnionElementSchema, // Support discriminated unions
@@ -392,7 +852,47 @@ const ArrayFieldSchema = z.object({
   {
     message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field'",
   }
-);
+).meta({
+  title: "Array",
+  description: "Collection of elements of the same type. Supports fixed-length, length-prefixed, field-referenced, and null-terminated arrays.",
+  use_for: "Lists of items, message batches, repeated structures, variable-length data",
+  wire_format: "Depends on kind: fixed (N items), length_prefixed (count + items), length_prefixed_items (count + per-item lengths + items), null_terminated (items + terminator), field_referenced (length from earlier field)",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"array\"", required: true, description: "Must be \"array\"" },
+    { name: "kind", type: "enum (\"fixed\" | \"length_prefixed\" | \"length_prefixed_items\" | \"null_terminated\" | \"field_referenced\")", required: true, description: "How array length is determined" },
+    { name: "items", type: "ElementType", required: true, description: "Type of array elements (primitive, struct, or type reference)" },
+    { name: "length", type: "number", required: false, description: "Fixed array size (required for kind=fixed)" },
+    { name: "length_type", type: "enum (\"uint8\" | \"uint16\" | \"uint32\" | \"uint64\")", required: false, description: "Type of length prefix (required for kind=length_prefixed and length_prefixed_items)" },
+    { name: "item_length_type", type: "enum (\"uint8\" | \"uint16\" | \"uint32\" | \"uint64\")", required: false, description: "Type of per-item length prefix (required for kind=length_prefixed_items)" },
+    { name: "length_field", type: "string", required: false, description: "Field name to read length from (required for kind=field_referenced, supports dot notation)" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "Array<T>",
+      notes: ["JavaScript array", "Elements type T depends on items field"]
+    },
+    go: {
+      type: "[]T",
+      notes: ["Go slice", "Elements type T depends on items field"]
+    },
+    rust: {
+      type: "Vec<T>",
+      notes: ["Rust vector (heap-allocated)", "Elements type T depends on items field"]
+    }
+  },
+  notes: [
+    "length_prefixed is most common for variable-length arrays",
+    "field_referenced allows dynamic sizing based on earlier fields",
+    "null_terminated useful for variable-length lists with terminator value",
+    "length_prefixed_items used when each item has individual length prefix (e.g., array of strings)"
+  ],
+  examples: [
+    { name: "values", type: "array", kind: "fixed", items: { type: "uint32" }, length: 4 },
+    { name: "items", type: "array", kind: "length_prefixed", items: { type: "uint64" }, length_type: "uint16" },
+    { name: "data", type: "array", kind: "field_referenced", items: { type: "uint8" }, length_field: "data_length" }
+  ]
+});
 
 /**
  * String field (variable or fixed length)
@@ -414,7 +914,44 @@ const StringFieldSchema = z.object({
   {
     message: "Fixed strings require 'length', length_prefixed strings require 'length_type'",
   }
-);
+).meta({
+  title: "String",
+  description: "Variable or fixed-length text field with UTF-8 or ASCII encoding. Can be length-prefixed, fixed-length, or null-terminated.",
+  use_for: "Usernames, messages, labels, text data, identifiers",
+  wire_format: "Depends on kind: length-prefixed (length prefix + bytes), fixed (N bytes), or null-terminated (bytes + 0x00)",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"string\"", required: true, description: "Must be \"string\"" },
+    { name: "kind", type: "enum (\"fixed\" | \"length_prefixed\" | \"null_terminated\")", required: true, description: "How the string length is determined" },
+    { name: "encoding", type: "enum (\"utf8\" | \"ascii\")", required: false, description: "Character encoding (defaults to utf8)" },
+    { name: "length", type: "number", required: false, description: "Fixed length in bytes (required for kind=fixed)" },
+    { name: "length_type", type: "enum (\"uint8\" | \"uint16\" | \"uint32\" | \"uint64\")", required: false, description: "Type of length prefix (required for kind=length_prefixed)" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "string",
+      notes: ["JavaScript string type", "Automatically handles UTF-8 encoding"]
+    },
+    go: {
+      type: "string",
+      notes: ["Native Go string type", "UTF-8 by default"]
+    },
+    rust: {
+      type: "String",
+      notes: ["Rust String type (heap-allocated)", "Always UTF-8"]
+    }
+  },
+  notes: [
+    "Length-prefixed is most common for variable-length strings",
+    "Fixed-length strings are padded/truncated to exact size",
+    "Null-terminated strings read until 0x00 byte"
+  ],
+  examples: [
+    { name: "nickname", type: "string", kind: "length_prefixed", length_type: "uint8" },
+    { name: "username", type: "string", kind: "length_prefixed", length_type: "uint16", encoding: "utf8" },
+    { name: "code", type: "string", kind: "fixed", length: 8, encoding: "ascii" }
+  ]
+});
 
 /**
  * Discriminated union field
@@ -423,13 +960,53 @@ const StringFieldSchema = z.object({
 const DiscriminatedUnionFieldSchema = z.object({
   name: z.string(),
   type: z.literal("discriminated_union"),
-  discriminator: z.object({
-    peek: z.enum(["uint8", "uint16", "uint32"]).optional(), // Peek at current position
-    field: z.string().optional(), // Reference to earlier field in same struct
-    endianness: EndiannessSchema.optional(), // Required for uint16/uint32 peek
-  }),
+  discriminator: DiscriminatorSchema,
   variants: z.array(DiscriminatedUnionVariantSchema).min(1),
   description: z.string().optional(),
+}).meta({
+  title: "Discriminated Union",
+  description: "Type that can be one of several variants, chosen based on a discriminator value. Supports peek-based (read ahead) or field-based (reference earlier field) discrimination.",
+  use_for: "Protocol messages, polymorphic data, variant types, message envelopes",
+  wire_format: "Discriminator determines which variant type to parse. No additional type tag on wire (discriminator serves this purpose).",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"discriminated_union\"", required: true, description: "Must be \"discriminated_union\"" },
+    { name: "discriminator", type: "union", required: true, description: "How to determine which variant to use - EITHER peek-based OR field-based (mutually exclusive)" },
+    { name: "discriminator.peek", type: "enum (\"uint8\" | \"uint16\" | \"uint32\")", required: true, description: "Peek-based discriminator: Read next bytes without consuming them (use this OR field, not both)" },
+    { name: "discriminator.field", type: "string", required: true, description: "Field-based discriminator: Reference to earlier field with supports dot notation (use this OR peek, not both)" },
+    { name: "discriminator.endianness", type: "enum (\"big_endian\" | \"little_endian\")", required: false, description: "Byte order for uint16/uint32 peek (only valid with peek, not with field)" },
+    { name: "variants", type: "array", required: true, description: "List of possible variants with conditions" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "V1 | V2 | ...",
+      notes: ["TypeScript union of variant types", "Requires type guards for access", "Variant types depend on variants array"]
+    },
+    go: {
+      type: "interface{} (with type assertion)",
+      notes: ["Go interface with concrete variant types", "Type assertion required for access", "Variant types depend on variants array"]
+    },
+    rust: {
+      type: "enum { V1(...), V2(...), ... }",
+      notes: ["Rust enum with named variants", "Pattern matching for access", "Variant types depend on variants array"]
+    }
+  },
+  notes: [
+    "Peek-based: Reads discriminator without consuming bytes (useful for tag-first protocols)",
+    "Field-based: Uses value from earlier field (useful for header-based protocols)",
+    "Each variant has a 'when' condition (e.g., 'value == 0x01') that determines if it matches"
+  ],
+  examples: [
+    {
+      name: "message",
+      type: "discriminated_union",
+      discriminator: { peek: "uint8" },
+      variants: [
+        { when: "value == 0x01", type: "QueryMessage" },
+        { when: "value == 0x02", type: "ResponseMessage" }
+      ]
+    }
+  ]
 });
 
 /**
@@ -444,6 +1021,51 @@ const PointerFieldSchema = z.object({
   target_type: z.string(), // Type to parse at offset
   endianness: EndiannessSchema.optional(), // Required for uint16/uint32
   description: z.string().optional(),
+}).meta({
+  title: "Pointer",
+  description: "Reference to data at another position in the message. Used for compression via backwards references (like DNS name compression).",
+  use_for: "Message compression, duplicate data elimination, backwards references",
+  wire_format: "Storage integer with offset bits (extracted via mask). Points to earlier data in message.",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"pointer\"", required: true, description: "Must be \"pointer\"" },
+    { name: "storage", type: "enum (\"uint8\" | \"uint16\" | \"uint32\")", required: true, description: "How the pointer value is stored on wire" },
+    { name: "offset_mask", type: "string", required: true, description: "Bit mask to extract offset from storage value (e.g., '0x3FFF')" },
+    { name: "offset_from", type: "enum (\"message_start\" | \"current_position\")", required: true, description: "Where offset is calculated from" },
+    { name: "target_type", type: "string", required: true, description: "Type to parse at the target offset" },
+    { name: "endianness", type: "enum (\"big_endian\" | \"little_endian\")", required: false, description: "Byte order for uint16/uint32 storage" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "T (resolved value)",
+      notes: ["TypeScript uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
+    },
+    go: {
+      type: "T (resolved value)",
+      notes: ["Go uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
+    },
+    rust: {
+      type: "T (resolved value)",
+      notes: ["Rust uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
+    }
+  },
+  notes: [
+    "offset_mask extracts offset bits (allows packing flags in unused bits)",
+    "offset_from=message_start: offset is from beginning of message",
+    "offset_from=current_position: offset is relative to current position",
+    "Common in DNS (name compression) and other protocols with repeated data"
+  ],
+  examples: [
+    {
+      name: "name_ref",
+      type: "pointer",
+      storage: "uint16",
+      offset_mask: "0x3FFF",
+      offset_from: "message_start",
+      target_type: "DomainName",
+      endianness: "big_endian"
+    }
+  ]
 });
 
 /**
@@ -461,6 +1083,49 @@ const BitfieldFieldSchema = z.object({
     description: z.string().optional(),
   })),
   description: z.string().optional(),
+}).meta({
+  title: "Bitfield",
+  description: "Container for packing multiple bit-level fields into a compact byte-aligned structure. Allows precise bit-level control.",
+  use_for: "Flags, compact headers, protocol opcodes, bit-packed data",
+  wire_format: "Packed bits stored in bytes (size determines total bytes). Bit order (MSB/LSB first) determined by config.",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "literal \"bitfield\"", required: true, description: "Must be \"bitfield\"" },
+    { name: "size", type: "number", required: true, description: "Total size in bits (determines byte count)" },
+    { name: "bit_order", type: "enum (\"msb_first\" | \"lsb_first\")", required: false, description: "Bit ordering within bytes (overrides global config)" },
+    { name: "fields", type: "array", required: true, description: "Array of bit fields with offset and size" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "object with number fields",
+      notes: ["TypeScript object with numeric properties", "Each field is a number", "Bit manipulation handled by encoder/decoder"]
+    },
+    go: {
+      type: "struct with uintN fields",
+      notes: ["Go struct with appropriate uint types", "Bit manipulation handled by encoder/decoder"]
+    },
+    rust: {
+      type: "struct with uN fields",
+      notes: ["Rust struct with appropriate uint types", "Bit manipulation handled by encoder/decoder"]
+    }
+  },
+  notes: [
+    "Size must be multiple of 8 for byte alignment",
+    "Field offsets specify bit position within the bitfield",
+    "Bit order (MSB first vs LSB first) affects how bits are numbered"
+  ],
+  examples: [
+    {
+      name: "flags",
+      type: "bitfield",
+      size: 8,
+      fields: [
+        { name: "version", offset: 0, size: 4 },
+        { name: "type", offset: 4, size: 3 },
+        { name: "reserved", offset: 7, size: 1 }
+      ]
+    }
+  ]
 });
 
 /**
@@ -481,6 +1146,47 @@ const ConditionalFieldSchema = z.object({
   type: z.string(),
   conditional: z.string(), // Expression like "flags.present == 1"
   description: z.string().optional(),
+}).meta({
+  title: "Conditional Field",
+  description: "Field that is only present on the wire if a condition evaluates to true. Condition references earlier fields.",
+  use_for: "Protocol extensions, optional sections, feature-flagged data",
+  wire_format: "Field is only encoded/decoded if condition is true. No presence indicator on wire.",
+  fields: [
+    { name: "name", type: "string", required: true, description: "Field name in the generated struct/type" },
+    { name: "type", type: "string", required: true, description: "Type of the field (primitive or type reference)" },
+    { name: "conditional", type: "string", required: true, description: "Boolean expression referencing earlier fields (e.g., 'flags.extended == 1')" }
+  ],
+  code_generation: {
+    typescript: {
+      type: "T | undefined",
+      notes: ["TypeScript union with undefined", "Undefined if condition false", "Type T depends on type field"]
+    },
+    go: {
+      type: "*T or separate bool",
+      notes: ["Go pointer (nil if absent) or separate present flag", "Type T depends on type field"]
+    },
+    rust: {
+      type: "Option<T>",
+      notes: ["Rust Option enum", "None if condition false", "Type T depends on type field"]
+    }
+  },
+  notes: [
+    "Condition is evaluated during encoding/decoding",
+    "Supports dot notation for nested field access (e.g., 'header.flags.extended')",
+    "Unlike optional type, no presence indicator is stored on wire"
+  ],
+  examples: [
+    {
+      name: "extended_data",
+      type: "uint32",
+      conditional: "flags.has_extended == 1"
+    },
+    {
+      name: "metadata",
+      type: "Metadata",
+      conditional: "version >= 2"
+    }
+  ]
 });
 
 /**
@@ -509,6 +1215,7 @@ const FieldTypeRefSchema: z.ZodType<any> = z.union([
     Int64FieldSchema,
     Float32FieldSchema,
     Float64FieldSchema,
+    OptionalFieldSchema,
     ArrayFieldSchema,
     StringFieldSchema,
     BitfieldFieldSchema,

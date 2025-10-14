@@ -1,0 +1,1063 @@
+// ABOUTME: Generate HTML documentation for BinSchema type reference
+// ABOUTME: Creates beautiful docs from metadata extracted from Zod schemas
+
+import { ExtractedMetadata } from "../schema/extract-metadata.js";
+import { formatInlineMarkup } from "./inline-formatting.js";
+import { generateWireFormatDiagram } from "./wire-format-diagram.js";
+
+export interface TypeReferenceOptions {
+  /** Include CSS inline (default: true) */
+  inlineCSS?: boolean;
+  /** Title override */
+  title?: string;
+  /** Description text for overview section */
+  description?: string;
+}
+
+/**
+ * Generate HTML documentation from extracted metadata
+ */
+export function generateTypeReferenceHTML(
+  metadata: Map<string, ExtractedMetadata>,
+  options: TypeReferenceOptions = {},
+): string {
+  const { inlineCSS = true } = options;
+  const title = options.title || "BinSchema Type Reference";
+  const description = options.description || "Binary schema type definitions with wire format specifications and code generation mappings.";
+
+  let html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(title)}</title>
+`;
+
+  if (inlineCSS) {
+    html += `  <style>\n${generateCSS()}\n  </style>\n`;
+  } else {
+    html += `  <link rel="stylesheet" href="type-reference.css">\n`;
+  }
+
+  // Add JavaScript for synchronized tab switching
+  html += `  <script>
+    // Synchronized tab switching across all code generation views
+    document.addEventListener('DOMContentLoaded', () => {
+      // Handle tab clicks - synchronize across all tabs on the page
+      document.querySelectorAll('.tab-button').forEach(button => {
+        button.addEventListener('click', (e) => {
+          const btn = e.target;
+          const lang = btn.dataset.lang;
+
+          // Update ALL tab buttons and content across the entire page
+          document.querySelectorAll('.tab-button').forEach(b => {
+            if (b.dataset.lang === lang) {
+              b.classList.add('active');
+            } else {
+              b.classList.remove('active');
+            }
+          });
+
+          document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.toggle('active', content.dataset.lang === lang);
+          });
+        });
+      });
+    });
+  </script>
+</head>
+<body>
+  <header class="protocol-header">
+    <h1>${escapeHtml(title)}</h1>
+    <div class="protocol-version">BinSchema Type System</div>
+  </header>
+
+  <nav class="toc">
+    <h2>Table of Contents</h2>
+    <ul>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#primitive-types">Primitive Types</a></li>
+    </ul>
+  </nav>
+
+  <main>
+`;
+
+  // Overview section
+  html += `    <section id="overview" class="section">
+      <h2>Overview</h2>
+      <p>${escapeHtml(description)}</p>
+      <p>This reference documents all built-in types supported by BinSchema, including their wire format representation and how they map to different programming languages.</p>
+
+      <h3>Global Configuration</h3>
+      <p>BinSchema schemas can include an optional global <code>config</code> object that sets defaults for all fields. These can be overridden at the field level.</p>
+
+      <div class="fields-table">
+        <h5>Config Properties</h5>
+        <table>
+          <thead>
+            <tr>
+              <th>Property</th>
+              <th>Type</th>
+              <th>Required</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>endianness</code></td>
+              <td><code>enum ("big_endian" | "little_endian")</code></td>
+              <td><span class="badge badge-optional">optional</span></td>
+              <td>Default byte order for multi-byte numeric types. Fields can override this with their own <code>endianness</code> property.</td>
+            </tr>
+            <tr>
+              <td><code>bit_order</code></td>
+              <td><code>enum ("msb_first" | "lsb_first")</code></td>
+              <td><span class="badge badge-optional">optional</span></td>
+              <td>Default bit ordering within bytes for bitfield operations. Most significant bit first (msb_first) or least significant bit first (lsb_first).</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="examples">
+        <h5>Example Schema with Config</h5>
+        <pre><code>{
+  "config": {
+    "endianness": "big_endian",
+    "bit_order": "msb_first"
+  },
+  "types": {
+    "Header": {
+      "sequence": [
+        { "name": "version", "type": "uint8" },
+        { "name": "length", "type": "uint16" }
+      ]
+    }
+  }
+}</code></pre>
+      </div>
+    </section>
+
+`;
+
+  // Primitive types section
+  html += generateTypesSection(metadata);
+
+  html += `  </main>
+
+  <footer>
+    <p>Generated by BinSchema Type Reference Generator</p>
+  </footer>
+</body>
+</html>`;
+
+  return html;
+}
+
+/**
+ * Generate types section with all documented types
+ */
+function generateTypesSection(metadata: Map<string, ExtractedMetadata>): string {
+  let html = `    <section id="primitive-types" class="section">
+      <h2>Primitive Types</h2>
+      <div class="type-list">
+`;
+
+  // Group types by category
+  const categories = {
+    "Unsigned Integers": ["uint8", "uint16", "uint32", "uint64"],
+    "Signed Integers": ["int8", "int16", "int32", "int64"],
+    "Floating Point": ["float32", "float64"],
+    "Complex Types": ["string", "array", "optional", "discriminated_union", "bitfield", "pointer"],
+  };
+
+  for (const [categoryName, typeNames] of Object.entries(categories)) {
+    html += `        <div class="type-category">
+          <h3>${escapeHtml(categoryName)}</h3>
+`;
+
+    for (const typeName of typeNames) {
+      const meta = metadata.get(typeName);
+      if (meta) {
+        html += generateTypeSection(typeName, meta);
+      }
+    }
+
+    html += `        </div>
+`;
+  }
+
+  html += `      </div>
+    </section>
+
+`;
+
+  return html;
+}
+
+/**
+ * Generate section for a single type
+ */
+function generateTypeSection(typeName: string, meta: ExtractedMetadata): string {
+  let html = `          <details class="type-details" id="type-${typeName}">
+            <summary>
+              <h4><code>${escapeHtml(typeName)}</code></h4>
+              ${meta.title ? `<span class="type-title">${escapeHtml(meta.title)}</span>` : ""}
+            </summary>
+            <div class="type-content">
+`;
+
+  // Description
+  if (meta.description) {
+    html += `              <p class="type-description">${formatInlineMarkup(meta.description)}</p>
+`;
+  }
+
+  // Use cases
+  if (meta.use_for) {
+    html += `              <div class="use-for">
+                <strong>Use for:</strong> ${escapeHtml(meta.use_for)}
+              </div>
+`;
+  }
+
+  // Wire format - show diagram for complex types, text for primitives
+  if (meta.wire_format) {
+    const wireFormatDiagram = generateWireFormatDiagram(typeName, meta);
+    if (wireFormatDiagram) {
+      html += wireFormatDiagram;
+    } else {
+      html += `              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>${escapeHtml(meta.wire_format)}</code>
+              </div>
+`;
+    }
+  }
+
+  // Fields/Properties table
+  if (meta.fields && meta.fields.length > 0) {
+    html += generateFieldsTable(meta.fields);
+  }
+
+  // Code generation section with tabs
+  if (meta.code_generation) {
+    html += generateCodeGenerationTabs(meta.code_generation);
+  }
+
+  // General notes (not language-specific)
+  if (meta.notes && meta.notes.length > 0) {
+    html += `              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+`;
+    for (const note of meta.notes) {
+      html += `                  <li>${formatInlineMarkup(note)}</li>
+`;
+    }
+    html += `                </ul>
+              </div>
+`;
+  }
+
+  // Examples section - schema definitions + tabbed values
+  if (meta.examples && meta.examples.length > 0) {
+    html += generateExamplesSection(meta.examples, meta.examples_values);
+  }
+
+  html += `            </div>
+          </details>
+`;
+
+  return html;
+}
+
+/**
+ * Generate examples section with schema + value table per language
+ */
+function generateExamplesSection(
+  examples: unknown[],
+  examplesValues?: ExtractedMetadata["examples_values"]
+): string {
+  const schemaJson = JSON.stringify(examples, null, 2);
+
+  // If no value examples, just show schema
+  if (!examplesValues) {
+    return `              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>${escapeHtml(schemaJson)}</code></pre>
+              </div>
+`;
+  }
+
+  const languages = Object.keys(examplesValues).filter(lang => examplesValues[lang as keyof typeof examplesValues]);
+
+  if (languages.length === 0) {
+    return `              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>${escapeHtml(schemaJson)}</code></pre>
+              </div>
+`;
+  }
+
+  // Generate tabbed table view
+  let html = `              <div class="examples-table">
+                <h5>Examples</h5>
+                <div class="tabs">
+`;
+
+  // Tab buttons
+  languages.forEach((lang, idx) => {
+    const active = idx === 0 ? " active" : "";
+    const displayName = lang.charAt(0).toUpperCase() + lang.slice(1);
+    html += `                  <button class="tab-button${active}" data-lang="${lang}">${escapeHtml(displayName)}</button>
+`;
+  });
+
+  html += `                </div>
+`;
+
+  // Tab contents - each is a table with Schema | Value columns
+  languages.forEach((lang, idx) => {
+    const active = idx === 0 ? " active" : "";
+    const valueCode = examplesValues[lang as keyof typeof examplesValues];
+
+    html += `                <div class="tab-content${active}" data-lang="${lang}">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>${escapeHtml(schemaJson)}</code></pre></td>
+                        <td><pre><code>${escapeHtml(valueCode!)}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+`;
+  });
+
+  html += `              </div>
+`;
+
+  return html;
+}
+
+/**
+ * Generate fields/properties table
+ */
+function generateFieldsTable(fields: NonNullable<ExtractedMetadata["fields"]>): string {
+  let html = `              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+`;
+
+  for (const field of fields) {
+    const requiredBadge = field.required
+      ? '<span class="badge badge-required">required</span>'
+      : '<span class="badge badge-optional">optional</span>';
+
+    // Regular field row
+    html += `                    <tr>
+                      <td><code>${escapeHtml(field.name)}</code></td>
+                      <td><code>${escapeHtml(field.type)}</code></td>
+                      <td>${requiredBadge}</td>
+                      <td>${formatInlineMarkup(field.description)}${field.default ? ` <em>(default: ${escapeHtml(field.default)})</em>` : ''}</td>
+                    </tr>
+`;
+
+    // If this field has union options, display them as sub-rows
+    if (field.union_options && field.union_options.length > 0) {
+      field.union_options.forEach((option, optionIdx) => {
+        // Header row for this option
+        html += `                    <tr class="union-option-header">
+                      <td colspan="4"><strong>Option ${optionIdx + 1}:</strong></td>
+                    </tr>
+`;
+
+        // Sub-rows for each field in this option
+        option.fields.forEach(subField => {
+          const subRequiredBadge = subField.required
+            ? '<span class="badge badge-required">required</span>'
+            : '<span class="badge badge-optional">optional</span>';
+
+          html += `                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;${escapeHtml(subField.name)}</code></td>
+                      <td><code>${escapeHtml(subField.type)}</code></td>
+                      <td>${subRequiredBadge}</td>
+                      <td>${subField.description ? formatInlineMarkup(subField.description) : ''}</td>
+                    </tr>
+`;
+        });
+      });
+    }
+  }
+
+  html += `                  </tbody>
+                </table>
+              </div>
+`;
+
+  return html;
+}
+
+/**
+ * Generate tabbed view for code generation
+ */
+function generateCodeGenerationTabs(
+  codeGen: NonNullable<ExtractedMetadata["code_generation"]>
+): string {
+  const languages = Object.keys(codeGen).filter(lang => codeGen[lang as keyof typeof codeGen]);
+
+  if (languages.length === 0) {
+    return "";
+  }
+
+  let html = `              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+`;
+
+  // Tab buttons
+  languages.forEach((lang, idx) => {
+    const active = idx === 0 ? " active" : "";
+    const displayName = lang.charAt(0).toUpperCase() + lang.slice(1);
+    html += `                  <button class="tab-button${active}" data-lang="${lang}">${escapeHtml(displayName)}</button>
+`;
+  });
+
+  html += `                </div>
+`;
+
+  // Tab contents
+  languages.forEach((lang, idx) => {
+    const active = idx === 0 ? " active" : "";
+    const langData = codeGen[lang as keyof typeof codeGen];
+
+    html += `                <div class="tab-content${active}" data-lang="${lang}">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>${escapeHtml(langData!.type)}</code>
+                  </div>
+`;
+
+    if (langData!.notes && langData!.notes.length > 0) {
+      html += `                  <ul class="code-notes">
+`;
+      for (const note of langData!.notes) {
+        html += `                    <li>${formatInlineMarkup(note)}</li>
+`;
+      }
+      html += `                  </ul>
+`;
+    }
+
+    html += `                </div>
+`;
+  });
+
+  html += `              </div>
+`;
+
+  return html;
+}
+
+/**
+ * Escape HTML special characters
+ */
+function escapeHtml(text: string): string {
+  const map: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  };
+  return text.replace(/[&<>"']/g, (m) => map[m]);
+}
+
+/**
+ * Generate CSS stylesheet (borrows heavily from protocol HTML generator)
+ */
+function generateCSS(): string {
+  return `    /* Type Reference Documentation Styles */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+
+    .protocol-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 40px 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+
+    .protocol-header h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+    }
+
+    .protocol-version {
+      font-size: 1.2em;
+      opacity: 0.9;
+    }
+
+    .toc {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .toc h2 {
+      margin-bottom: 15px;
+      color: #667eea;
+    }
+
+    .toc ul {
+      list-style: none;
+    }
+
+    .toc li {
+      margin: 8px 0;
+    }
+
+    .toc a {
+      color: #667eea;
+      text-decoration: none;
+      padding: 5px 10px;
+      display: inline-block;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .toc a:hover {
+      background: #f0f0f0;
+    }
+
+    main {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .section {
+      margin-bottom: 50px;
+    }
+
+    .section h2 {
+      color: #667eea;
+      border-bottom: 2px solid #667eea;
+      padding-bottom: 10px;
+      margin-bottom: 20px;
+    }
+
+    .section h3 {
+      color: #764ba2;
+      margin: 30px 0 15px 0;
+    }
+
+    .type-category {
+      margin-bottom: 40px;
+    }
+
+    .type-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 0;
+      margin: 15px 0;
+      background: white;
+    }
+
+    .type-details summary {
+      padding: 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      user-select: none;
+      border-radius: 6px;
+      transition: background 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .type-details summary:hover {
+      background: #f3f4f6;
+    }
+
+    .type-details[open] summary {
+      border-bottom: 1px solid #e5e7eb;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .type-details summary h4 {
+      display: inline;
+      margin: 0;
+      font-size: 1.1em;
+    }
+
+    .type-title {
+      color: #6b7280;
+      font-size: 0.95em;
+      font-weight: normal;
+    }
+
+    .type-content {
+      padding: 20px;
+    }
+
+    .type-description {
+      font-size: 1.05em;
+      margin-bottom: 20px;
+      line-height: 1.7;
+      color: #374151;
+    }
+
+    .use-for, .wire-format-info {
+      background: #f0f9ff;
+      border-left: 4px solid #0ea5e9;
+      padding: 12px 15px;
+      margin: 15px 0;
+      border-radius: 4px;
+    }
+
+    /* Wire format diagrams */
+    .wire-format {
+      background: #f9f9f9;
+      border-top: 1px solid #ddd;
+      border-bottom: 1px solid #ddd;
+      padding: 20px;
+      margin: 20px 0;
+      overflow-x: auto;
+    }
+
+    .wire-diagram {
+      display: flex;
+      flex-direction: row;
+      gap: 0;
+      min-width: 100%;
+      margin-bottom: 15px;
+    }
+
+    .field {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: 2px solid #555;
+      border-right: none;
+      padding: 12px 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      min-height: 80px;
+      position: relative;
+      box-sizing: border-box;
+    }
+
+    .field:last-child {
+      border-right: 2px solid #555;
+    }
+
+    .field-name {
+      font-weight: bold;
+      color: white;
+      font-size: 0.9em;
+      margin-bottom: 4px;
+      word-wrap: break-word;
+      max-width: 100%;
+    }
+
+    .field-type {
+      font-family: 'Courier New', monospace;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 0.75em;
+      margin-bottom: 2px;
+    }
+
+    .field-size {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.7em;
+      font-weight: 600;
+    }
+
+    .notes {
+      background: #fffbeb;
+      border-left: 4px solid #f59e0b;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+    }
+
+    .notes h5 {
+      margin: 0 0 10px 0;
+      color: #92400e;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .notes-list {
+      margin: 0;
+      padding-left: 20px;
+      list-style-type: disc;
+    }
+
+    .notes-list li {
+      margin: 6px 0;
+      color: #78350f;
+      line-height: 1.6;
+    }
+
+    .examples {
+      margin: 20px 0;
+    }
+
+    .examples h5 {
+      margin: 0 0 10px 0;
+      color: #4b5563;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .examples pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.85em;
+      line-height: 1.5;
+    }
+
+    /* Examples table with tabs */
+    .examples-table {
+      margin: 20px 0;
+    }
+
+    .examples-table h5 {
+      margin: 0 0 10px 0;
+      color: #4b5563;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .examples-table .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 2px solid #e5e7eb;
+      background: #f9fafb;
+      border-radius: 4px 4px 0 0;
+    }
+
+    .examples-table .tab-content {
+      display: none;
+    }
+
+    .examples-table .tab-content.active {
+      display: block;
+    }
+
+    .example-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #e5e7eb;
+      border-radius: 0 0 6px 6px;
+      overflow: hidden;
+    }
+
+    .example-table thead {
+      background: #f9fafb;
+    }
+
+    .example-table th {
+      text-align: left;
+      padding: 12px 15px;
+      font-weight: 600;
+      font-size: 0.9em;
+      color: #374151;
+      border-bottom: 2px solid #e5e7eb;
+      width: 50%;
+    }
+
+    .example-table td {
+      padding: 0;
+      vertical-align: top;
+      width: 50%;
+    }
+
+    .example-table td pre {
+      margin: 0;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 0;
+      overflow-x: auto;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.85em;
+      line-height: 1.5;
+    }
+
+    .example-table td:first-child {
+      border-right: 1px solid #e5e7eb;
+    }
+
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      color: #1f2937;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+    }
+
+    /* Tabbed code generation view */
+    .tabs-container {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      margin: 20px 0;
+      overflow: hidden;
+    }
+
+    .tabs-container h5 {
+      margin: 0;
+      padding: 12px 15px;
+      background: #f9fafb;
+      border-bottom: 1px solid #e5e7eb;
+      color: #4b5563;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 2px solid #e5e7eb;
+      background: #f9fafb;
+    }
+
+    .tab-button {
+      flex: 1;
+      padding: 12px 20px;
+      background: #f9fafb;
+      border: none;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+      font-size: 0.95em;
+      font-weight: 500;
+      color: #6b7280;
+      transition: all 0.2s;
+    }
+
+    .tab-button:hover {
+      background: #f3f4f6;
+      color: #374151;
+    }
+
+    .tab-button.active {
+      background: white;
+      color: #667eea;
+      border-bottom-color: #667eea;
+    }
+
+    .tab-content {
+      display: none;
+      padding: 20px;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    .code-type {
+      font-size: 1.05em;
+      margin-bottom: 15px;
+    }
+
+    .code-type code {
+      background: #dbeafe;
+      color: #1e40af;
+      padding: 4px 8px;
+      font-size: 1em;
+      font-weight: 600;
+    }
+
+    .code-notes {
+      margin: 0;
+      padding-left: 20px;
+      list-style-type: disc;
+    }
+
+    .code-notes li {
+      margin: 8px 0;
+      color: #4b5563;
+      line-height: 1.6;
+    }
+
+    .code-example {
+      margin-top: 20px;
+    }
+
+    .code-example h6 {
+      margin: 0 0 10px 0;
+      color: #4b5563;
+      font-size: 0.9em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .code-example pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.85em;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    .code-example pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+    }
+
+    /* Fields table */
+    .fields-table {
+      margin: 20px 0;
+    }
+
+    .fields-table h5 {
+      margin: 0 0 12px 0;
+      color: #4b5563;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .fields-table table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .fields-table thead {
+      background: #f9fafb;
+    }
+
+    .fields-table th {
+      text-align: left;
+      padding: 12px 15px;
+      font-weight: 600;
+      font-size: 0.9em;
+      color: #374151;
+      border-bottom: 2px solid #e5e7eb;
+    }
+
+    .fields-table td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #e5e7eb;
+      color: #4b5563;
+      vertical-align: top;
+    }
+
+    .fields-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .fields-table tbody tr:hover {
+      background: #f9fafb;
+    }
+
+    .fields-table code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 0.85em;
+      color: #1f2937;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 3px;
+      font-size: 0.75em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-required {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .badge-optional {
+      background: #e0e7ff;
+      color: #3730a3;
+    }
+
+    /* Union option styles */
+    .union-option-header td {
+      background: #f0f9ff;
+      padding: 8px 15px;
+      font-size: 0.9em;
+      color: #0369a1;
+      border-top: 1px solid #bae6fd;
+    }
+
+    .union-option-field {
+      background: #fafafa;
+    }
+
+    .union-option-field td {
+      padding-left: 30px;
+    }
+
+    .union-option-field:hover {
+      background: #f5f5f5 !important;
+    }
+
+    footer {
+      text-align: center;
+      padding: 20px;
+      color: #999;
+      margin-top: 40px;
+    }`;
+}

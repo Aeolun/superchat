@@ -551,12 +551,6 @@ export const lengthPrefixedItemsOptionalTestSuite = defineTestSuite({
       endianness: "big_endian",
     },
     types: {
-      "Optional<T>": {
-        sequence: [
-          { name: "present", type: "uint8" },
-          { name: "value", type: "T", conditional: "present == 1" },
-        ]
-      },
       "OptionalItem": {
         sequence: [
           {
@@ -565,7 +559,8 @@ export const lengthPrefixedItemsOptionalTestSuite = defineTestSuite({
           },
           {
             name: "data",
-            type: "Optional<uint32>",
+            type: "optional",
+            value_type: "uint32",
           }
         ]
       },

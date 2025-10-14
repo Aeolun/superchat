@@ -1,0 +1,2958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BinSchema Type Reference</title>
+  <style>
+    /* Type Reference Documentation Styles */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+
+    .protocol-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 40px 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+
+    .protocol-header h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+    }
+
+    .protocol-version {
+      font-size: 1.2em;
+      opacity: 0.9;
+    }
+
+    .toc {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .toc h2 {
+      margin-bottom: 15px;
+      color: #667eea;
+    }
+
+    .toc ul {
+      list-style: none;
+    }
+
+    .toc li {
+      margin: 8px 0;
+    }
+
+    .toc a {
+      color: #667eea;
+      text-decoration: none;
+      padding: 5px 10px;
+      display: inline-block;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .toc a:hover {
+      background: #f0f0f0;
+    }
+
+    main {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .section {
+      margin-bottom: 50px;
+    }
+
+    .section h2 {
+      color: #667eea;
+      border-bottom: 2px solid #667eea;
+      padding-bottom: 10px;
+      margin-bottom: 20px;
+    }
+
+    .section h3 {
+      color: #764ba2;
+      margin: 30px 0 15px 0;
+    }
+
+    .type-category {
+      margin-bottom: 40px;
+    }
+
+    .type-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 0;
+      margin: 15px 0;
+      background: white;
+    }
+
+    .type-details summary {
+      padding: 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      user-select: none;
+      border-radius: 6px;
+      transition: background 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .type-details summary:hover {
+      background: #f3f4f6;
+    }
+
+    .type-details[open] summary {
+      border-bottom: 1px solid #e5e7eb;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .type-details summary h4 {
+      display: inline;
+      margin: 0;
+      font-size: 1.1em;
+    }
+
+    .type-title {
+      color: #6b7280;
+      font-size: 0.95em;
+      font-weight: normal;
+    }
+
+    .type-content {
+      padding: 20px;
+    }
+
+    .type-description {
+      font-size: 1.05em;
+      margin-bottom: 20px;
+      line-height: 1.7;
+      color: #374151;
+    }
+
+    .use-for, .wire-format-info {
+      background: #f0f9ff;
+      border-left: 4px solid #0ea5e9;
+      padding: 12px 15px;
+      margin: 15px 0;
+      border-radius: 4px;
+    }
+
+    /* Wire format diagrams */
+    .wire-format {
+      background: #f9f9f9;
+      border-top: 1px solid #ddd;
+      border-bottom: 1px solid #ddd;
+      padding: 20px;
+      margin: 20px 0;
+      overflow-x: auto;
+    }
+
+    .wire-diagram {
+      display: flex;
+      flex-direction: row;
+      gap: 0;
+      min-width: 100%;
+      margin-bottom: 15px;
+    }
+
+    .field {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: 2px solid #555;
+      border-right: none;
+      padding: 12px 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      min-height: 80px;
+      position: relative;
+      box-sizing: border-box;
+    }
+
+    .field:last-child {
+      border-right: 2px solid #555;
+    }
+
+    .field-name {
+      font-weight: bold;
+      color: white;
+      font-size: 0.9em;
+      margin-bottom: 4px;
+      word-wrap: break-word;
+      max-width: 100%;
+    }
+
+    .field-type {
+      font-family: 'Courier New', monospace;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 0.75em;
+      margin-bottom: 2px;
+    }
+
+    .field-size {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.7em;
+      font-weight: 600;
+    }
+
+    .notes {
+      background: #fffbeb;
+      border-left: 4px solid #f59e0b;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+    }
+
+    .notes h5 {
+      margin: 0 0 10px 0;
+      color: #92400e;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .notes-list {
+      margin: 0;
+      padding-left: 20px;
+      list-style-type: disc;
+    }
+
+    .notes-list li {
+      margin: 6px 0;
+      color: #78350f;
+      line-height: 1.6;
+    }
+
+    .examples {
+      margin: 20px 0;
+    }
+
+    .examples h5 {
+      margin: 0 0 10px 0;
+      color: #4b5563;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .examples pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.85em;
+      line-height: 1.5;
+    }
+
+    /* Examples table with tabs */
+    .examples-table {
+      margin: 20px 0;
+    }
+
+    .examples-table h5 {
+      margin: 0 0 10px 0;
+      color: #4b5563;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .examples-table .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 2px solid #e5e7eb;
+      background: #f9fafb;
+      border-radius: 4px 4px 0 0;
+    }
+
+    .examples-table .tab-content {
+      display: none;
+    }
+
+    .examples-table .tab-content.active {
+      display: block;
+    }
+
+    .example-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #e5e7eb;
+      border-radius: 0 0 6px 6px;
+      overflow: hidden;
+    }
+
+    .example-table thead {
+      background: #f9fafb;
+    }
+
+    .example-table th {
+      text-align: left;
+      padding: 12px 15px;
+      font-weight: 600;
+      font-size: 0.9em;
+      color: #374151;
+      border-bottom: 2px solid #e5e7eb;
+      width: 50%;
+    }
+
+    .example-table td {
+      padding: 0;
+      vertical-align: top;
+      width: 50%;
+    }
+
+    .example-table td pre {
+      margin: 0;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 0;
+      overflow-x: auto;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.85em;
+      line-height: 1.5;
+    }
+
+    .example-table td:first-child {
+      border-right: 1px solid #e5e7eb;
+    }
+
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      color: #1f2937;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+    }
+
+    /* Tabbed code generation view */
+    .tabs-container {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      margin: 20px 0;
+      overflow: hidden;
+    }
+
+    .tabs-container h5 {
+      margin: 0;
+      padding: 12px 15px;
+      background: #f9fafb;
+      border-bottom: 1px solid #e5e7eb;
+      color: #4b5563;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 2px solid #e5e7eb;
+      background: #f9fafb;
+    }
+
+    .tab-button {
+      flex: 1;
+      padding: 12px 20px;
+      background: #f9fafb;
+      border: none;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+      font-size: 0.95em;
+      font-weight: 500;
+      color: #6b7280;
+      transition: all 0.2s;
+    }
+
+    .tab-button:hover {
+      background: #f3f4f6;
+      color: #374151;
+    }
+
+    .tab-button.active {
+      background: white;
+      color: #667eea;
+      border-bottom-color: #667eea;
+    }
+
+    .tab-content {
+      display: none;
+      padding: 20px;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    .code-type {
+      font-size: 1.05em;
+      margin-bottom: 15px;
+    }
+
+    .code-type code {
+      background: #dbeafe;
+      color: #1e40af;
+      padding: 4px 8px;
+      font-size: 1em;
+      font-weight: 600;
+    }
+
+    .code-notes {
+      margin: 0;
+      padding-left: 20px;
+      list-style-type: disc;
+    }
+
+    .code-notes li {
+      margin: 8px 0;
+      color: #4b5563;
+      line-height: 1.6;
+    }
+
+    .code-example {
+      margin-top: 20px;
+    }
+
+    .code-example h6 {
+      margin: 0 0 10px 0;
+      color: #4b5563;
+      font-size: 0.9em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .code-example pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.85em;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    .code-example pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+    }
+
+    /* Fields table */
+    .fields-table {
+      margin: 20px 0;
+    }
+
+    .fields-table h5 {
+      margin: 0 0 12px 0;
+      color: #4b5563;
+      font-size: 0.95em;
+      font-weight: 600;
+    }
+
+    .fields-table table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .fields-table thead {
+      background: #f9fafb;
+    }
+
+    .fields-table th {
+      text-align: left;
+      padding: 12px 15px;
+      font-weight: 600;
+      font-size: 0.9em;
+      color: #374151;
+      border-bottom: 2px solid #e5e7eb;
+    }
+
+    .fields-table td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #e5e7eb;
+      color: #4b5563;
+      vertical-align: top;
+    }
+
+    .fields-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .fields-table tbody tr:hover {
+      background: #f9fafb;
+    }
+
+    .fields-table code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 0.85em;
+      color: #1f2937;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 3px;
+      font-size: 0.75em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-required {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .badge-optional {
+      background: #e0e7ff;
+      color: #3730a3;
+    }
+
+    /* Union option styles */
+    .union-option-header td {
+      background: #f0f9ff;
+      padding: 8px 15px;
+      font-size: 0.9em;
+      color: #0369a1;
+      border-top: 1px solid #bae6fd;
+    }
+
+    .union-option-field {
+      background: #fafafa;
+    }
+
+    .union-option-field td {
+      padding-left: 30px;
+    }
+
+    .union-option-field:hover {
+      background: #f5f5f5 !important;
+    }
+
+    footer {
+      text-align: center;
+      padding: 20px;
+      color: #999;
+      margin-top: 40px;
+    }
+  </style>
+  <script>
+    // Synchronized tab switching across all code generation views
+    document.addEventListener('DOMContentLoaded', () => {
+      // Handle tab clicks - synchronize across all tabs on the page
+      document.querySelectorAll('.tab-button').forEach(button => {
+        button.addEventListener('click', (e) => {
+          const btn = e.target;
+          const lang = btn.dataset.lang;
+
+          // Update ALL tab buttons and content across the entire page
+          document.querySelectorAll('.tab-button').forEach(b => {
+            if (b.dataset.lang === lang) {
+              b.classList.add('active');
+            } else {
+              b.classList.remove('active');
+            }
+          });
+
+          document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.toggle('active', content.dataset.lang === lang);
+          });
+        });
+      });
+    });
+  </script>
+</head>
+<body>
+  <header class="protocol-header">
+    <h1>BinSchema Type Reference</h1>
+    <div class="protocol-version">BinSchema Type System</div>
+  </header>
+
+  <nav class="toc">
+    <h2>Table of Contents</h2>
+    <ul>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#primitive-types">Primitive Types</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <section id="overview" class="section">
+      <h2>Overview</h2>
+      <p>Complete reference for all built-in types supported by BinSchema, including wire format specifications and code generation mappings.</p>
+      <p>This reference documents all built-in types supported by BinSchema, including their wire format representation and how they map to different programming languages.</p>
+
+      <h3>Global Configuration</h3>
+      <p>BinSchema schemas can include an optional global <code>config</code> object that sets defaults for all fields. These can be overridden at the field level.</p>
+
+      <div class="fields-table">
+        <h5>Config Properties</h5>
+        <table>
+          <thead>
+            <tr>
+              <th>Property</th>
+              <th>Type</th>
+              <th>Required</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>endianness</code></td>
+              <td><code>enum ("big_endian" | "little_endian")</code></td>
+              <td><span class="badge badge-optional">optional</span></td>
+              <td>Default byte order for multi-byte numeric types. Fields can override this with their own <code>endianness</code> property.</td>
+            </tr>
+            <tr>
+              <td><code>bit_order</code></td>
+              <td><code>enum ("msb_first" | "lsb_first")</code></td>
+              <td><span class="badge badge-optional">optional</span></td>
+              <td>Default bit ordering within bytes for bitfield operations. Most significant bit first (msb_first) or least significant bit first (lsb_first).</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="examples">
+        <h5>Example Schema with Config</h5>
+        <pre><code>{
+  "config": {
+    "endianness": "big_endian",
+    "bit_order": "msb_first"
+  },
+  "types": {
+    "Header": {
+      "sequence": [
+        { "name": "version", "type": "uint8" },
+        { "name": "length", "type": "uint16" }
+      ]
+    }
+  }
+}</code></pre>
+      </div>
+    </section>
+
+    <section id="primitive-types" class="section">
+      <h2>Primitive Types</h2>
+      <div class="type-list">
+        <div class="type-category">
+          <h3>Unsigned Integers</h3>
+          <details class="type-details" id="type-uint8">
+            <summary>
+              <h4><code>uint8</code></h4>
+              <span class="type-title">8-bit Unsigned Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Fixed-width 8-bit unsigned integer (0-255). Single byte, no endianness concerns.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Message type codes, flags, single-byte counters, status codes
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>1 byte (0x00-0xFF)</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;uint8&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Byte order (not applicable for single-byte types, included for consistency)</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Optional documentation string</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript Number type</li>
+                    <li>Safe for all uint8 values</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>uint8</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go uint8 type</li>
+                    <li>Also known as byte</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>u8</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust u8 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="examples-table">
+                <h5>Examples</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;version&quot;,
+    &quot;type&quot;: &quot;uint8&quot;
+  },
+  {
+    &quot;name&quot;: &quot;flags&quot;,
+    &quot;type&quot;: &quot;uint8&quot;,
+    &quot;description&quot;: &quot;Feature flags&quot;
+  },
+  {
+    &quot;name&quot;: &quot;message_type&quot;,
+    &quot;type&quot;: &quot;uint8&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>{
+  version: 1,
+  flags: 0x01,
+  message_type: 0x20
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;version&quot;,
+    &quot;type&quot;: &quot;uint8&quot;
+  },
+  {
+    &quot;name&quot;: &quot;flags&quot;,
+    &quot;type&quot;: &quot;uint8&quot;,
+    &quot;description&quot;: &quot;Feature flags&quot;
+  },
+  {
+    &quot;name&quot;: &quot;message_type&quot;,
+    &quot;type&quot;: &quot;uint8&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>Message{
+  Version:     1,
+  Flags:       0x01,
+  MessageType: 0x20,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;version&quot;,
+    &quot;type&quot;: &quot;uint8&quot;
+  },
+  {
+    &quot;name&quot;: &quot;flags&quot;,
+    &quot;type&quot;: &quot;uint8&quot;,
+    &quot;description&quot;: &quot;Feature flags&quot;
+  },
+  {
+    &quot;name&quot;: &quot;message_type&quot;,
+    &quot;type&quot;: &quot;uint8&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>Message {
+  version: 1,
+  flags: 0x01,
+  message_type: 0x20,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-uint16">
+            <summary>
+              <h4><code>uint16</code></h4>
+              <span class="type-title">16-bit Unsigned Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Fixed-width 16-bit unsigned integer (0-65535). Respects endianness configuration (big-endian or little-endian).</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Port numbers, message lengths, medium-range counters, message IDs
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>2 bytes, byte order depends on endianness setting</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;uint16&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Byte order (overrides global config if specified)</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Optional documentation string</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript Number type</li>
+                    <li>Safe for all uint16 values</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>uint16</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go uint16 type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>u16</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust u16 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Default endianness is inherited from global config</li>
+                  <li>Can override with field-level `endianness` property</li>
+                  <li>Network protocols typically use big-endian</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;port&quot;,
+    &quot;type&quot;: &quot;uint16&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  },
+  {
+    &quot;name&quot;: &quot;content_length&quot;,
+    &quot;type&quot;: &quot;uint16&quot;
+  },
+  {
+    &quot;name&quot;: &quot;message_id&quot;,
+    &quot;type&quot;: &quot;uint16&quot;,
+    &quot;endianness&quot;: &quot;little_endian&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-uint32">
+            <summary>
+              <h4><code>uint32</code></h4>
+              <span class="type-title">32-bit Unsigned Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Fixed-width 32-bit unsigned integer (0-4294967295). Respects endianness configuration.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Timestamps, large counters, IP addresses, file sizes, CRCs
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>4 bytes, byte order depends on endianness setting</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;uint32&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Byte order (overrides global config if specified)</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Optional documentation string</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript Number type</li>
+                    <li>Safe for all uint32 values</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>uint32</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go uint32 type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>u32</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust u32 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Common choice for Unix timestamps (seconds since epoch)</li>
+                  <li>IPv4 addresses are typically stored as uint32</li>
+                </ul>
+              </div>
+              <div class="examples-table">
+                <h5>Examples</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;timestamp&quot;,
+    &quot;type&quot;: &quot;uint32&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  },
+  {
+    &quot;name&quot;: &quot;file_size&quot;,
+    &quot;type&quot;: &quot;uint32&quot;
+  },
+  {
+    &quot;name&quot;: &quot;crc32&quot;,
+    &quot;type&quot;: &quot;uint32&quot;,
+    &quot;endianness&quot;: &quot;little_endian&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>{
+  timestamp: 1704067200,
+  file_size: 1048576,
+  crc32: 0xDEADBEEF
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;timestamp&quot;,
+    &quot;type&quot;: &quot;uint32&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  },
+  {
+    &quot;name&quot;: &quot;file_size&quot;,
+    &quot;type&quot;: &quot;uint32&quot;
+  },
+  {
+    &quot;name&quot;: &quot;crc32&quot;,
+    &quot;type&quot;: &quot;uint32&quot;,
+    &quot;endianness&quot;: &quot;little_endian&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>Message{
+  Timestamp: 1704067200,
+  FileSize:  1048576,
+  Crc32:     0xDEADBEEF,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;timestamp&quot;,
+    &quot;type&quot;: &quot;uint32&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  },
+  {
+    &quot;name&quot;: &quot;file_size&quot;,
+    &quot;type&quot;: &quot;uint32&quot;
+  },
+  {
+    &quot;name&quot;: &quot;crc32&quot;,
+    &quot;type&quot;: &quot;uint32&quot;,
+    &quot;endianness&quot;: &quot;little_endian&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>Message {
+  timestamp: 1704067200,
+  file_size: 1048576,
+  crc32: 0xDEADBEEF,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-uint64">
+            <summary>
+              <h4><code>uint64</code></h4>
+              <span class="type-title">64-bit Unsigned Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Fixed-width 64-bit unsigned integer (0-18446744073709551615). Respects endianness configuration.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> High-precision timestamps, very large counters, database IDs, file offsets
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>8 bytes, byte order depends on endianness setting</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>bigint</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript BigInt type (not Number!)</li>
+                    <li>Number can only safely represent up to 2^53-1</li>
+                    <li>Literal syntax: 123n</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>uint64</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go uint64 type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>u64</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust u64 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Use for millisecond/microsecond timestamps</li>
+                  <li>Exceeds JavaScript Number&#039;s safe integer range</li>
+                </ul>
+              </div>
+              <div class="examples-table">
+                <h5>Examples</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;user_id&quot;,
+    &quot;type&quot;: &quot;uint64&quot;
+  },
+  {
+    &quot;name&quot;: &quot;timestamp_ms&quot;,
+    &quot;type&quot;: &quot;uint64&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;,
+    &quot;description&quot;: &quot;Milliseconds since epoch&quot;
+  },
+  {
+    &quot;name&quot;: &quot;byte_offset&quot;,
+    &quot;type&quot;: &quot;uint64&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>{
+  user_id: 123456789012345n,  // BigInt literal!
+  timestamp_ms: 1704067200000n,
+  byte_offset: 0n
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;user_id&quot;,
+    &quot;type&quot;: &quot;uint64&quot;
+  },
+  {
+    &quot;name&quot;: &quot;timestamp_ms&quot;,
+    &quot;type&quot;: &quot;uint64&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;,
+    &quot;description&quot;: &quot;Milliseconds since epoch&quot;
+  },
+  {
+    &quot;name&quot;: &quot;byte_offset&quot;,
+    &quot;type&quot;: &quot;uint64&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>Message{
+  UserId:      123456789012345,
+  TimestampMs: 1704067200000,
+  ByteOffset:  0,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    &quot;name&quot;: &quot;user_id&quot;,
+    &quot;type&quot;: &quot;uint64&quot;
+  },
+  {
+    &quot;name&quot;: &quot;timestamp_ms&quot;,
+    &quot;type&quot;: &quot;uint64&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;,
+    &quot;description&quot;: &quot;Milliseconds since epoch&quot;
+  },
+  {
+    &quot;name&quot;: &quot;byte_offset&quot;,
+    &quot;type&quot;: &quot;uint64&quot;
+  }
+]</code></pre></td>
+                        <td><pre><code>Message {
+  user_id: 123456789012345,
+  timestamp_ms: 1704067200000,
+  byte_offset: 0,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div class="type-category">
+          <h3>Signed Integers</h3>
+          <details class="type-details" id="type-int8">
+            <summary>
+              <h4><code>int8</code></h4>
+              <span class="type-title">8-bit Signed Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Fixed-width 8-bit signed integer (-128 to 127). Uses two&#039;s complement representation.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Small signed values, temperature readings, coordinate offsets
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>1 byte, two&#039;s complement encoding</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript Number type</li>
+                    <li>Safe for all int8 values</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>int8</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go int8 type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>i8</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust i8 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;temperature&quot;,
+    &quot;type&quot;: &quot;int8&quot;,
+    &quot;description&quot;: &quot;Temperature in Celsius&quot;
+  },
+  {
+    &quot;name&quot;: &quot;offset&quot;,
+    &quot;type&quot;: &quot;int8&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-int16">
+            <summary>
+              <h4><code>int16</code></h4>
+              <span class="type-title">16-bit Signed Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Fixed-width 16-bit signed integer (-32768 to 32767). Respects endianness configuration.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Signed coordinates, altitude values, timezone offsets
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>2 bytes, two&#039;s complement encoding, byte order depends on endianness</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript Number type</li>
+                    <li>Safe for all int16 values</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>int16</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go int16 type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>i16</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust i16 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;altitude&quot;,
+    &quot;type&quot;: &quot;int16&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  },
+  {
+    &quot;name&quot;: &quot;x_coord&quot;,
+    &quot;type&quot;: &quot;int16&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-int32">
+            <summary>
+              <h4><code>int32</code></h4>
+              <span class="type-title">32-bit Signed Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Fixed-width 32-bit signed integer (-2147483648 to 2147483647). Respects endianness configuration.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Large signed values, geographic coordinates, time differences
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>4 bytes, two&#039;s complement encoding, byte order depends on endianness</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript Number type</li>
+                    <li>Safe for all int32 values</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>int32</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go int32 type</li>
+                    <li>Also known as rune</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>i32</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust i32 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;latitude&quot;,
+    &quot;type&quot;: &quot;int32&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  },
+  {
+    &quot;name&quot;: &quot;time_delta&quot;,
+    &quot;type&quot;: &quot;int32&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-int64">
+            <summary>
+              <h4><code>int64</code></h4>
+              <span class="type-title">64-bit Signed Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Fixed-width 64-bit signed integer (-9223372036854775808 to 9223372036854775807). Respects endianness configuration.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> High-precision signed timestamps, large signed offsets, financial calculations
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>8 bytes, two&#039;s complement encoding, byte order depends on endianness</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>bigint</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript BigInt type (not Number!)</li>
+                    <li>Number can only safely represent -(2^53-1) to (2^53-1)</li>
+                    <li>Literal syntax: -123n</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>int64</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go int64 type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>i64</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust i64 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Exceeds JavaScript Number&#039;s safe integer range</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;account_balance&quot;,
+    &quot;type&quot;: &quot;int64&quot;,
+    &quot;description&quot;: &quot;Balance in cents&quot;
+  },
+  {
+    &quot;name&quot;: &quot;time_offset_us&quot;,
+    &quot;type&quot;: &quot;int64&quot;,
+    &quot;description&quot;: &quot;Microsecond offset&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div class="type-category">
+          <h3>Floating Point</h3>
+          <details class="type-details" id="type-float32">
+            <summary>
+              <h4><code>float32</code></h4>
+              <span class="type-title">32-bit Floating Point</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">IEEE 754 single-precision floating point (32-bit). Provides ~7 decimal digits of precision.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Measurements, sensor data, graphics coordinates, scientific values
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>4 bytes, IEEE 754 format, byte order depends on endianness</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript Number type</li>
+                    <li>Stored internally as float64, but represents float32 wire value</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>float32</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go float32 type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>f32</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust f32 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Range: ±1.4E-45 to ±3.4E38</li>
+                  <li>Special values: NaN, +Infinity, -Infinity, -0</li>
+                  <li>Not all decimal values can be represented exactly</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;temperature&quot;,
+    &quot;type&quot;: &quot;float32&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  },
+  {
+    &quot;name&quot;: &quot;sensor_value&quot;,
+    &quot;type&quot;: &quot;float32&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-float64">
+            <summary>
+              <h4><code>float64</code></h4>
+              <span class="type-title">64-bit Floating Point</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">IEEE 754 double-precision floating point (64-bit). Provides ~15 decimal digits of precision.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> High-precision measurements, geographic coordinates, scientific calculations
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>8 bytes, IEEE 754 format, byte order depends on endianness</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript Number type (native representation)</li>
+                    <li>This is the default numeric type in JavaScript</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>float64</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go float64 type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>f64</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust f64 type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Range: ±5.0E-324 to ±1.7E308</li>
+                  <li>Special values: NaN, +Infinity, -Infinity, -0</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;latitude&quot;,
+    &quot;type&quot;: &quot;float64&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  },
+  {
+    &quot;name&quot;: &quot;precise_measurement&quot;,
+    &quot;type&quot;: &quot;float64&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div class="type-category">
+          <h3>Complex Types</h3>
+          <details class="type-details" id="type-string">
+            <summary>
+              <h4><code>string</code></h4>
+              <span class="type-title">String</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Variable or fixed-length text field with UTF-8 or ASCII encoding. Can be length-prefixed, fixed-length, or null-terminated.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Usernames, messages, labels, text data, identifiers
+              </div>
+              <div class="wire-format">
+                <div class="wire-diagram">
+                  <div class="field" style="flex: 1">
+                    <div class="field-name">length</div>
+                    <div class="field-type">uint8</div>
+                    <div class="field-size">1 byte</div>
+                  </div>
+                  <div class="field" style="flex: 4">
+                    <div class="field-name">data</div>
+                    <div class="field-type">utf8 char[]</div>
+                    <div class="field-size">length × 1 byte</div>
+                  </div>
+                </div>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;string&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>kind</code></td>
+                      <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;null_terminated&quot; | &quot;field_referenced&quot;)</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>How the string length is determined</td>
+                    </tr>
+                    <tr>
+                      <td><code>encoding</code></td>
+                      <td><code>default</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Character encoding (defaults to utf8)</td>
+                    </tr>
+                    <tr>
+                      <td><code>length</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Fixed length in bytes (required for kind=fixed)</td>
+                    </tr>
+                    <tr>
+                      <td><code>length_type</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Type of length prefix (required for kind=length_prefixed)</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>string</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript string type</li>
+                    <li>Automatically handles UTF-8 encoding</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>string</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go string type</li>
+                    <li>UTF-8 by default</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>String</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Rust String type (heap-allocated)</li>
+                    <li>Always UTF-8</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Length-prefixed is most common for variable-length strings</li>
+                  <li>Fixed-length strings are padded/truncated to exact size</li>
+                  <li>Null-terminated strings read until 0x00 byte</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;nickname&quot;,
+    &quot;type&quot;: &quot;string&quot;,
+    &quot;kind&quot;: &quot;length_prefixed&quot;,
+    &quot;length_type&quot;: &quot;uint8&quot;
+  },
+  {
+    &quot;name&quot;: &quot;username&quot;,
+    &quot;type&quot;: &quot;string&quot;,
+    &quot;kind&quot;: &quot;length_prefixed&quot;,
+    &quot;length_type&quot;: &quot;uint16&quot;,
+    &quot;encoding&quot;: &quot;utf8&quot;
+  },
+  {
+    &quot;name&quot;: &quot;code&quot;,
+    &quot;type&quot;: &quot;string&quot;,
+    &quot;kind&quot;: &quot;fixed&quot;,
+    &quot;length&quot;: 8,
+    &quot;encoding&quot;: &quot;ascii&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-array">
+            <summary>
+              <h4><code>array</code></h4>
+              <span class="type-title">Array</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Collection of elements of the same type. Supports fixed-length, length-prefixed, field-referenced, and null-terminated arrays.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Lists of items, message batches, repeated structures, variable-length data
+              </div>
+              <div class="wire-format">
+                <div class="wire-diagram">
+                  <div class="field" style="flex: 4">
+                    <div class="field-name">data</div>
+                    <div class="field-type">T[N]</div>
+                    <div class="field-size">N × sizeof(T)</div>
+                  </div>
+                </div>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;array&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>kind</code></td>
+                      <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;null_terminated&quot; | &quot;field_referenced&quot;)</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>How array length is determined</td>
+                    </tr>
+                    <tr>
+                      <td><code>items</code></td>
+                      <td><code>union</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Type of array elements (primitive, struct, or type reference)</td>
+                    </tr>
+                    <tr class="union-option-header">
+                      <td colspan="4"><strong>Option 1:</strong></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;type</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>length</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Fixed array size (required for kind=fixed)</td>
+                    </tr>
+                    <tr>
+                      <td><code>length_type</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Type of length prefix (required for kind=length_prefixed and length_prefixed_items)</td>
+                    </tr>
+                    <tr>
+                      <td><code>item_length_type</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Type of per-item length prefix (required for kind=length_prefixed_items)</td>
+                    </tr>
+                    <tr>
+                      <td><code>length_field</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Field name to read length from (required for kind=field_referenced, supports dot notation)</td>
+                    </tr>
+                    <tr>
+                      <td><code>variants</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>notes</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>terminal_variants</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>Array&lt;T&gt;</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript array</li>
+                    <li>Elements type T depends on items field</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>[]T</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Go slice</li>
+                    <li>Elements type T depends on items field</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>Vec&lt;T&gt;</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Rust vector (heap-allocated)</li>
+                    <li>Elements type T depends on items field</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>length_prefixed is most common for variable-length arrays</li>
+                  <li>field_referenced allows dynamic sizing based on earlier fields</li>
+                  <li>null_terminated useful for variable-length lists with terminator value</li>
+                  <li>length_prefixed_items used when each item has individual length prefix (e.g., array of strings)</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;values&quot;,
+    &quot;type&quot;: &quot;array&quot;,
+    &quot;kind&quot;: &quot;fixed&quot;,
+    &quot;items&quot;: {
+      &quot;type&quot;: &quot;uint32&quot;
+    },
+    &quot;length&quot;: 4
+  },
+  {
+    &quot;name&quot;: &quot;items&quot;,
+    &quot;type&quot;: &quot;array&quot;,
+    &quot;kind&quot;: &quot;length_prefixed&quot;,
+    &quot;items&quot;: {
+      &quot;type&quot;: &quot;uint64&quot;
+    },
+    &quot;length_type&quot;: &quot;uint16&quot;
+  },
+  {
+    &quot;name&quot;: &quot;data&quot;,
+    &quot;type&quot;: &quot;array&quot;,
+    &quot;kind&quot;: &quot;field_referenced&quot;,
+    &quot;items&quot;: {
+      &quot;type&quot;: &quot;uint8&quot;
+    },
+    &quot;length_field&quot;: &quot;data_length&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-optional">
+            <summary>
+              <h4><code>optional</code></h4>
+              <span class="type-title">Optional</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Field that may or may not be present. Uses a presence indicator (byte or bit) followed by the value if present.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Optional data fields, nullable values, feature flags with associated data
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>Presence indicator (1 byte or 1 bit) + value (if present=1)</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;optional&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>value_type</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Type of the wrapped value (primitive or type reference)</td>
+                    </tr>
+                    <tr>
+                      <td><code>presence_type</code></td>
+                      <td><code>default</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Type of presence indicator (defaults to uint8)</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>T | undefined</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>TypeScript union with undefined</li>
+                    <li>Clean optional types</li>
+                    <li>Type T depends on value_type field</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>*T</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Go pointer type (nil for absent)</li>
+                    <li>Type T depends on value_type field</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>Option&lt;T&gt;</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Rust Option enum</li>
+                    <li>Type T depends on value_type field</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>presence_type=uint8 uses 1 full byte (0=absent, 1=present)</li>
+                  <li>presence_type=bit uses 1 bit (more compact for multiple optional fields)</li>
+                  <li>Value is only encoded/decoded if presence indicator is 1</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;user_id&quot;,
+    &quot;type&quot;: &quot;optional&quot;,
+    &quot;value_type&quot;: &quot;uint64&quot;
+  },
+  {
+    &quot;name&quot;: &quot;nickname&quot;,
+    &quot;type&quot;: &quot;optional&quot;,
+    &quot;value_type&quot;: &quot;String&quot;,
+    &quot;presence_type&quot;: &quot;uint8&quot;
+  },
+  {
+    &quot;name&quot;: &quot;flags&quot;,
+    &quot;type&quot;: &quot;optional&quot;,
+    &quot;value_type&quot;: &quot;uint8&quot;,
+    &quot;presence_type&quot;: &quot;bit&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-discriminated_union">
+            <summary>
+              <h4><code>discriminated_union</code></h4>
+              <span class="type-title">Discriminated Union</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Type that can be one of several variants, chosen based on a discriminator value. Supports peek-based (read ahead) or field-based (reference earlier field) discrimination.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Protocol messages, polymorphic data, variant types, message envelopes
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>Discriminator determines which variant type to parse. No additional type tag on wire (discriminator serves this purpose).</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;discriminated_union&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>discriminator</code></td>
+                      <td><code>union</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>How to determine which variant to use - EITHER peek-based OR field-based (mutually exclusive)</td>
+                    </tr>
+                    <tr class="union-option-header">
+                      <td colspan="4"><strong>Option 1:</strong></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;peek</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot;)</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Type of integer to peek (read without consuming bytes)</td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;endianness</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Byte order for uint16/uint32 (required for multi-byte types)</td>
+                    </tr>
+                    <tr class="union-option-header">
+                      <td colspan="4"><strong>Option 2:</strong></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;field</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Name of earlier field to use as discriminator (supports dot notation like &#039;flags.type&#039;)</td>
+                    </tr>
+                    <tr>
+                      <td><code>variants</code></td>
+                      <td><code>array</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>List of possible variants with conditions</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>V1 | V2 | ...</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>TypeScript union of variant types</li>
+                    <li>Requires type guards for access</li>
+                    <li>Variant types depend on variants array</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>interface{} (with type assertion)</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Go interface with concrete variant types</li>
+                    <li>Type assertion required for access</li>
+                    <li>Variant types depend on variants array</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>enum { V1(...), V2(...), ... }</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Rust enum with named variants</li>
+                    <li>Pattern matching for access</li>
+                    <li>Variant types depend on variants array</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Peek-based: Reads discriminator without consuming bytes (useful for tag-first protocols)</li>
+                  <li>Field-based: Uses value from earlier field (useful for header-based protocols)</li>
+                  <li>Each variant has a &#039;when&#039; condition (e.g., &#039;value == 0x01&#039;) that determines if it matches</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;message&quot;,
+    &quot;type&quot;: &quot;discriminated_union&quot;,
+    &quot;discriminator&quot;: {
+      &quot;peek&quot;: &quot;uint8&quot;
+    },
+    &quot;variants&quot;: [
+      {
+        &quot;when&quot;: &quot;value == 0x01&quot;,
+        &quot;type&quot;: &quot;QueryMessage&quot;
+      },
+      {
+        &quot;when&quot;: &quot;value == 0x02&quot;,
+        &quot;type&quot;: &quot;ResponseMessage&quot;
+      }
+    ]
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-bitfield">
+            <summary>
+              <h4><code>bitfield</code></h4>
+              <span class="type-title">Bitfield</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Container for packing multiple bit-level fields into a compact byte-aligned structure. Allows precise bit-level control.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Flags, compact headers, protocol opcodes, bit-packed data
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>Packed bits stored in bytes (size determines total bytes). Bit order (MSB/LSB first) determined by config.</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;bitfield&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>size</code></td>
+                      <td><code>number</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Total size in bits (determines byte count)</td>
+                    </tr>
+                    <tr>
+                      <td><code>bit_order</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Bit ordering within bytes (overrides global config)</td>
+                    </tr>
+                    <tr>
+                      <td><code>fields</code></td>
+                      <td><code>array</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Array of bit fields with offset and size</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>object with number fields</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>TypeScript object with numeric properties</li>
+                    <li>Each field is a number</li>
+                    <li>Bit manipulation handled by encoder/decoder</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>struct with uintN fields</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Go struct with appropriate uint types</li>
+                    <li>Bit manipulation handled by encoder/decoder</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>struct with uN fields</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Rust struct with appropriate uint types</li>
+                    <li>Bit manipulation handled by encoder/decoder</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Size must be multiple of 8 for byte alignment</li>
+                  <li>Field offsets specify bit position within the bitfield</li>
+                  <li>Bit order (MSB first vs LSB first) affects how bits are numbered</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;flags&quot;,
+    &quot;type&quot;: &quot;bitfield&quot;,
+    &quot;size&quot;: 8,
+    &quot;fields&quot;: [
+      {
+        &quot;name&quot;: &quot;version&quot;,
+        &quot;offset&quot;: 0,
+        &quot;size&quot;: 4
+      },
+      {
+        &quot;name&quot;: &quot;type&quot;,
+        &quot;offset&quot;: 4,
+        &quot;size&quot;: 3
+      },
+      {
+        &quot;name&quot;: &quot;reserved&quot;,
+        &quot;offset&quot;: 7,
+        &quot;size&quot;: 1
+      }
+    ]
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-pointer">
+            <summary>
+              <h4><code>pointer</code></h4>
+              <span class="type-title">Pointer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Reference to data at another position in the message. Used for compression via backwards references (like DNS name compression).</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Message compression, duplicate data elimination, backwards references
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>Storage integer with offset bits (extracted via mask). Points to earlier data in message.</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name in the generated struct/type</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Must be &quot;pointer&quot;</td>
+                    </tr>
+                    <tr>
+                      <td><code>storage</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot;)</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>How the pointer value is stored on wire</td>
+                    </tr>
+                    <tr>
+                      <td><code>offset_mask</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Bit mask to extract offset from storage value (e.g., &#039;0x3FFF&#039;)</td>
+                    </tr>
+                    <tr>
+                      <td><code>offset_from</code></td>
+                      <td><code>enum (&quot;message_start&quot; | &quot;current_position&quot;)</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Where offset is calculated from</td>
+                    </tr>
+                    <tr>
+                      <td><code>target_type</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Type to parse at the target offset</td>
+                    </tr>
+                    <tr>
+                      <td><code>endianness</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Byte order for uint16/uint32 storage</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>optional</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>T (resolved value)</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>TypeScript uses resolved value, not pointer</li>
+                    <li>Encoder handles deduplication</li>
+                    <li>Type T depends on target_type field</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>T (resolved value)</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Go uses resolved value, not pointer</li>
+                    <li>Encoder handles deduplication</li>
+                    <li>Type T depends on target_type field</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>T (resolved value)</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Rust uses resolved value, not pointer</li>
+                    <li>Encoder handles deduplication</li>
+                    <li>Type T depends on target_type field</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>offset_mask extracts offset bits (allows packing flags in unused bits)</li>
+                  <li>offset_from=message_start: offset is from beginning of message</li>
+                  <li>offset_from=current_position: offset is relative to current position</li>
+                  <li>Common in DNS (name compression) and other protocols with repeated data</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    &quot;name&quot;: &quot;name_ref&quot;,
+    &quot;type&quot;: &quot;pointer&quot;,
+    &quot;storage&quot;: &quot;uint16&quot;,
+    &quot;offset_mask&quot;: &quot;0x3FFF&quot;,
+    &quot;offset_from&quot;: &quot;message_start&quot;,
+    &quot;target_type&quot;: &quot;DomainName&quot;,
+    &quot;endianness&quot;: &quot;big_endian&quot;
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>Generated by BinSchema Type Reference Generator</p>
+  </footer>
+</body>
+</html>

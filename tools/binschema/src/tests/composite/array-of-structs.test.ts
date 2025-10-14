@@ -232,16 +232,10 @@ export const arrayOfStructsWithOptionalsTestSuite = defineTestSuite({
       endianness: "big_endian",
     },
     types: {
-      "Optional<T>": {
-        sequence: [
-          { name: "present", type: "uint8" },
-          { name: "value", type: "T", conditional: "present == 1" },
-        ]
-      },
       "Person": {
         sequence: [
           { name: "age", type: "uint8" },
-          { name: "height", type: "Optional<uint16>" }, // Optional height in cm
+          { name: "height", type: "optional", value_type: "uint16" }, // Optional height in cm
         ]
       },
       "Group": {

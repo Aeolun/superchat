@@ -27,7 +27,7 @@ export interface ValidationResult {
 const BUILT_IN_TYPES = [
   "bit", "int", "uint8", "uint16", "uint32", "uint64",
   "int8", "int16", "int32", "int64", "float32", "float64",
-  "string", "array", "bitfield", "discriminated_union", "pointer"
+  "string", "array", "optional", "bitfield", "discriminated_union", "pointer"
 ];
 
 /**
@@ -472,6 +472,60 @@ function validatePointer(
 }
 
 /**
+ * Validate an optional field
+ */
+function validateOptional(
+  field: any,
+  path: string,
+  schema: BinarySchema,
+  errors: ValidationError[]
+): void {
+  if (!field.value_type) {
+    errors.push({ path: `${path} (${field.name || "optional"})`, message: "Optional field missing 'value_type' property" });
+    return;
+  }
+
+  const valueType = field.value_type;
+
+  // Prohibit nested optionals (optional<optional<T>>)
+  if (valueType === "optional") {
+    errors.push({
+      path: `${path} (${field.name || "optional"})`,
+      message: "Nested optionals are not allowed (optional<optional<T>> is redundant)"
+    });
+    return;
+  }
+
+  // Prohibit optional bit (pointless - 1 bit presence + 1 bit value = 2 bits)
+  if (valueType === "bit") {
+    errors.push({
+      path: `${path} (${field.name || "optional"})`,
+      message: "Optional bit is not allowed (use a 2-bit field instead - presence flag + value bit = 2 bits total)"
+    });
+    return;
+  }
+
+  // Validate that value_type exists (if not a built-in type)
+  if (!BUILT_IN_TYPES.includes(valueType) && !schema.types[valueType]) {
+    errors.push({
+      path: `${path} (${field.name || "optional"})`,
+      message: `Optional value_type '${valueType}' not found in schema.types`
+    });
+  }
+
+  // Validate presence_type if specified
+  if (field.presence_type) {
+    const validPresenceTypes = ["uint8", "bit"];
+    if (!validPresenceTypes.includes(field.presence_type)) {
+      errors.push({
+        path: `${path} (${field.name || "optional"})`,
+        message: `Invalid presence_type '${field.presence_type}' (must be 'uint8' or 'bit')`
+      });
+    }
+  }
+}
+
+/**
  * Validate a single field
  */
 function validateField(
@@ -603,6 +657,11 @@ function validateField(
     validatePointer(field as any, path, schema, errors);
   }
 
+  // Check optional fields
+  if (fieldType === "optional") {
+    validateOptional(field as any, path, schema, errors);
+  }
+
   // Check type references exist
   // Allow 'T' as a type parameter in generic templates (don't validate it as a type reference)
   if (fieldType === 'T') {
@@ -689,6 +748,12 @@ function validateElementType(
   // Check pointer elements
   if (elementType === "pointer") {
     validatePointer(element, path, schema, errors);
+    return;
+  }
+
+  // Check optional elements
+  if (elementType === "optional") {
+    validateOptional(element, path, schema, errors);
     return;
   }
 
