@@ -25,10 +25,27 @@ export const TestCaseSchema = z.object({
   bits: z.array(
     z.number().int().min(0).max(1) // Enforce 0 or 1
   ).optional(),
+
+  // Optional: chunk sizes for streaming tests
+  // If provided, bytes will be delivered in chunks of these sizes
+  // Example: [3, 5, 10] means first chunk 3 bytes, second chunk 5 bytes, etc.
+  chunkSizes: z.array(z.number().int().min(1)).optional(),
 }).refine(
   (data) => data.bytes !== undefined || data.bits !== undefined,
   {
     message: "Must provide either 'bytes' or 'bits' (or both)",
+  }
+).refine(
+  (data) => {
+    // If chunkSizes provided, validate they sum to bytes.length
+    if (data.chunkSizes && data.bytes) {
+      const totalChunkSize = data.chunkSizes.reduce((sum, size) => sum + size, 0);
+      return totalChunkSize === data.bytes.length;
+    }
+    return true;
+  },
+  {
+    message: "chunkSizes must sum to exactly bytes.length",
   }
 );
 export type TestCase = z.infer<typeof TestCaseSchema>;

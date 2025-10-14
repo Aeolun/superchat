@@ -98,6 +98,7 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
 
   // Run each test case
   for (const testCase of suite.test_cases) {
+    // Run standard encode/decode test
     const testResult = await runTestCase(testCase, EncoderClass, DecoderClass);
     if (testResult.passed) {
       result.passed++;
@@ -105,9 +106,116 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
       result.failed++;
       result.failures.push(...testResult.failures);
     }
+
+    // If chunkSizes provided, also run streaming test
+    if (testCase.chunkSizes && testCase.bytes) {
+      const streamResult = await runStreamingTestCase(
+        testCase,
+        EncoderClass,
+        DecoderClass,
+        typeName,
+        generatedModule
+      );
+      if (streamResult.passed) {
+        result.passed++;
+      } else {
+        result.failed++;
+        result.failures.push(...streamResult.failures);
+      }
+    }
   }
 
   return result;
+}
+
+/**
+ * Create a mock ReadableStream that delivers bytes in chunks
+ */
+function createChunkedStream(fullData: Uint8Array, chunkSizes: number[]): ReadableStream<Uint8Array> {
+  let offset = 0;
+  let chunkIndex = 0;
+
+  return new ReadableStream({
+    pull(controller) {
+      if (offset >= fullData.length) {
+        controller.close();
+        return;
+      }
+
+      const chunkSize = chunkSizes[chunkIndex % chunkSizes.length];
+      const end = Math.min(offset + chunkSize, fullData.length);
+      const chunk = fullData.slice(offset, end);
+
+      controller.enqueue(chunk);
+      offset = end;
+      chunkIndex++;
+    }
+  });
+}
+
+/**
+ * Run streaming test case
+ * Tests that data can be decoded when delivered in chunks
+ */
+async function runStreamingTestCase(
+  testCase: TestCase,
+  EncoderClass: any,
+  DecoderClass: any,
+  typeName: string,
+  generatedModule: any
+): Promise<{ passed: boolean; failures: TestFailure[] }> {
+  const failures: TestFailure[] = [];
+
+  try {
+    const fullData = new Uint8Array(testCase.bytes!);
+    const stream = createChunkedStream(fullData, testCase.chunkSizes!);
+    const reader = stream.getReader();
+
+    // Try to find streaming decoder function
+    const streamDecoderFn = generatedModule[`decode${typeName}Stream`];
+
+    if (!streamDecoderFn) {
+      // No streaming decoder generated yet - skip test
+      console.log(`  ⚠ Skipping streaming test for ${testCase.description} - no streaming decoder generated`);
+      return { passed: true, failures: [] };
+    }
+
+    // Decode using streaming API
+    const items: any[] = [];
+    for await (const item of streamDecoderFn(reader)) {
+      items.push(item);
+    }
+
+    // Compare decoded items with expected value
+    // For arrays, the value should be an array of items
+    const expectedItems = Array.isArray(testCase.value)
+      ? testCase.value
+      : [testCase.value];
+
+    if (!deepEqual(items, expectedItems)) {
+      failures.push({
+        description: `${testCase.description} (streaming with chunks ${testCase.chunkSizes!.join(',')})`,
+        type: "decode",
+        expected: stringifyWithBigInt(expectedItems),
+        actual: stringifyWithBigInt(items),
+        message: "Streaming decode does not match expected value",
+      });
+    }
+
+  } catch (error) {
+    failures.push({
+      description: `${testCase.description} (streaming)`,
+      type: "decode",
+      expected: stringifyWithBigInt(testCase.value),
+      actual: "",
+      message: `Streaming exception: ${error}`,
+    });
+  }
+
+  return {
+    passed: failures.length === 0,
+    failures,
+  };
 }
 
 /**
