@@ -113,6 +113,12 @@ function extractFieldInfo(
   // Extract validation constraints
   const constraints = extractConstraints(fieldDef);
 
+  // Extract array element structure if this is an array
+  let arrayElement: FieldInfo["arrayElement"];
+  if (fieldDef?.type === "array") {
+    arrayElement = extractArrayElement(fieldDef);
+  }
+
   return {
     name,
     type: typeName,
@@ -120,6 +126,7 @@ function extractFieldInfo(
     description,
     constraints,
     unionOptions,
+    arrayElement,
   };
 }
 
@@ -155,7 +162,68 @@ function getTypeName(fieldDef: any): string {
     }
   }
 
+  // Handle array types - extract element type
+  if (type === "array") {
+    const element = fieldDef?.element;
+    if (element) {
+      const elementDef = element._def || element.def;
+      const elementType = getTypeName(elementDef);
+      return `Array<${elementType}>`;
+    }
+  }
+
   return type;
+}
+
+/**
+ * Extract array element structure
+ *
+ * @param arrayDef - Zod array definition
+ * @returns Element structure or undefined
+ */
+function extractArrayElement(arrayDef: any): FieldInfo["arrayElement"] {
+  const element = arrayDef?.element;
+  if (!element) {
+    return undefined;
+  }
+
+  const elementDef = element._def || element.def;
+  const elementType = getTypeName(elementDef);
+
+  // If element is an object, extract its fields
+  if (elementDef?.type === "object" && elementDef?.shape) {
+    const fields: Array<{
+      name: string;
+      type: string;
+      required: boolean;
+      description?: string;
+    }> = [];
+
+    for (const [fieldName, fieldSchema] of Object.entries(elementDef.shape)) {
+      const fieldInfo = extractFieldInfo(
+        fieldName,
+        fieldSchema as z.ZodType,
+        { extractUnions: false, extractFieldMeta: true }
+      );
+
+      fields.push({
+        name: fieldInfo.name,
+        type: fieldInfo.type,
+        required: fieldInfo.required,
+        description: fieldInfo.description,
+      });
+    }
+
+    return {
+      type: elementType,
+      fields,
+    };
+  }
+
+  // For non-object elements, just return the type
+  return {
+    type: elementType,
+  };
 }
 
 /**

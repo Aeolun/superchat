@@ -21,6 +21,45 @@ export interface SchemaMetadata extends Record<string, unknown> {
     deprecated?: string;
 }
 /**
+ * Validation constraints extracted from Zod schema checks
+ */
+export type Constraint = {
+    type: "min";
+    value: number;
+    inclusive: boolean;
+} | {
+    type: "max";
+    value: number;
+    inclusive: boolean;
+} | {
+    type: "greater_than";
+    value: number;
+    inclusive: boolean;
+} | {
+    type: "less_than";
+    value: number;
+    inclusive: boolean;
+} | {
+    type: "min_length";
+    value: number;
+} | {
+    type: "max_length";
+    value: number;
+} | {
+    type: "exact_length";
+    value: number;
+} | {
+    type: "format";
+    format: string;
+    pattern?: RegExp;
+} | {
+    type: "pattern";
+    pattern: RegExp;
+} | {
+    type: "multiple_of";
+    value: number;
+};
+/**
  * Field information extracted from schema structure
  */
 export interface FieldInfo {
@@ -34,8 +73,22 @@ export interface FieldInfo {
     description?: string;
     /** Default value if specified */
     default?: string;
+    /** Validation constraints (min/max/length/format/pattern) */
+    constraints?: Constraint[];
     /** For union fields, extracted options */
     unionOptions?: UnionOption[];
+    /** For array fields, extracted element structure */
+    arrayElement?: {
+        /** Element type name */
+        type: string;
+        /** For object elements, their fields */
+        fields?: Array<{
+            name: string;
+            type: string;
+            required: boolean;
+            description?: string;
+        }>;
+    };
 }
 /**
  * A single option in a union type

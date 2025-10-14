@@ -486,6 +486,32 @@ function generateFieldsTable(fields: NonNullable<ExtractedMetadata["fields"]>): 
         });
       });
     }
+
+    // If this field is an array with element structure, display element fields
+    if ((field as any).arrayElement?.fields) {
+      const arrayElement = (field as any).arrayElement;
+
+      // Header row for array elements
+      html += `                    <tr class="union-option-header">
+                      <td colspan="4"><strong>Array Element Fields:</strong></td>
+                    </tr>
+`;
+
+      // Sub-rows for each field in the element
+      arrayElement.fields.forEach((elemField: any) => {
+        const elemRequiredBadge = elemField.required
+          ? '<span class="badge badge-required">required</span>'
+          : '<span class="badge badge-optional">optional</span>';
+
+        html += `                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;${escapeHtml(elemField.name)}</code></td>
+                      <td><code>${escapeHtml(elemField.type)}</code></td>
+                      <td>${elemRequiredBadge}</td>
+                      <td>${elemField.description ? formatInlineMarkup(elemField.description) : ''}</td>
+                    </tr>
+`;
+      });
+    }
   }
 
   html += `                  </tbody>

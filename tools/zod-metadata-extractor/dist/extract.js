@@ -72,12 +72,21 @@ function extractFieldInfo(name, schema, options) {
     if (extractUnions && fieldDef?.type === "union") {
         unionOptions = extractUnionOptions(unwrappedSchema);
     }
+    // Extract validation constraints
+    const constraints = extractConstraints(fieldDef);
+    // Extract array element structure if this is an array
+    let arrayElement;
+    if (fieldDef?.type === "array") {
+        arrayElement = extractArrayElement(fieldDef);
+    }
     return {
         name,
         type: typeName,
         required,
         description,
+        constraints,
         unionOptions,
+        arrayElement,
     };
 }
 /**
@@ -110,7 +119,118 @@ function getTypeName(fieldDef) {
             return `enum (${Array.from(fieldDef.values).map((v) => `"${v}"`).join(" | ")})`;
         }
     }
+    // Handle array types - extract element type
+    if (type === "array") {
+        const element = fieldDef?.element;
+        if (element) {
+            const elementDef = element._def || element.def;
+            const elementType = getTypeName(elementDef);
+            return `Array<${elementType}>`;
+        }
+    }
     return type;
+}
+/**
+ * Extract array element structure
+ *
+ * @param arrayDef - Zod array definition
+ * @returns Element structure or undefined
+ */
+function extractArrayElement(arrayDef) {
+    const element = arrayDef?.element;
+    if (!element) {
+        return undefined;
+    }
+    const elementDef = element._def || element.def;
+    const elementType = getTypeName(elementDef);
+    // If element is an object, extract its fields
+    if (elementDef?.type === "object" && elementDef?.shape) {
+        const fields = [];
+        for (const [fieldName, fieldSchema] of Object.entries(elementDef.shape)) {
+            const fieldInfo = extractFieldInfo(fieldName, fieldSchema, { extractUnions: false, extractFieldMeta: true });
+            fields.push({
+                name: fieldInfo.name,
+                type: fieldInfo.type,
+                required: fieldInfo.required,
+                description: fieldInfo.description,
+            });
+        }
+        return {
+            type: elementType,
+            fields,
+        };
+    }
+    // For non-object elements, just return the type
+    return {
+        type: elementType,
+    };
+}
+/**
+ * Extract validation constraints from Zod checks array
+ *
+ * @param fieldDef - Zod field definition
+ * @returns Array of constraints or undefined if none exist
+ */
+function extractConstraints(fieldDef) {
+    const checks = fieldDef?.checks;
+    if (!checks || !Array.isArray(checks) || checks.length === 0) {
+        return undefined;
+    }
+    const constraints = [];
+    for (const check of checks) {
+        const checkDef = check._zod?.def;
+        if (!checkDef)
+            continue;
+        switch (checkDef.check) {
+            case "min_length":
+                constraints.push({ type: "min_length", value: checkDef.minimum });
+                break;
+            case "max_length":
+                constraints.push({ type: "max_length", value: checkDef.maximum });
+                break;
+            case "length_equals":
+                constraints.push({ type: "exact_length", value: checkDef.length });
+                break;
+            case "greater_than":
+                constraints.push({
+                    type: checkDef.inclusive ? "min" : "greater_than",
+                    value: checkDef.value,
+                    inclusive: checkDef.inclusive,
+                });
+                break;
+            case "less_than":
+                constraints.push({
+                    type: checkDef.inclusive ? "max" : "less_than",
+                    value: checkDef.value,
+                    inclusive: checkDef.inclusive,
+                });
+                break;
+            case "string_format":
+                // Distinguish between regex and other formats (email, url, uuid)
+                if (checkDef.format === "regex") {
+                    constraints.push({
+                        type: "pattern",
+                        pattern: checkDef.pattern,
+                    });
+                }
+                else {
+                    constraints.push({
+                        type: "format",
+                        format: checkDef.format,
+                        pattern: checkDef.pattern,
+                    });
+                }
+                break;
+            case "multiple_of":
+                constraints.push({
+                    type: "multiple_of",
+                    value: checkDef.value,
+                });
+                break;
+            // Add more constraint types as needed
+        }
+    }
+    return constraints.length > 0 ? constraints : undefined;
 }
 /**
  * Extract union options from a Zod union schema

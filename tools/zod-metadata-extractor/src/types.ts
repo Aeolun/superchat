@@ -71,6 +71,19 @@ export interface FieldInfo {
 
   /** For union fields, extracted options */
   unionOptions?: UnionOption[];
+
+  /** For array fields, extracted element structure */
+  arrayElement?: {
+    /** Element type name */
+    type: string;
+    /** For object elements, their fields */
+    fields?: Array<{
+      name: string;
+      type: string;
+      required: boolean;
+      description?: string;
+    }>;
+  };
 }
 
 /**

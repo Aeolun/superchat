@@ -2110,7 +2110,7 @@
                     </tr>
                     <tr>
                       <td><code>length</code></td>
-                      <td><code>number</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 1)</span></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2271,7 +2271,7 @@
                     </tr>
                     <tr>
                       <td><code>length</code></td>
-                      <td><code>number</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 1)</span></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2295,19 +2295,19 @@
                     </tr>
                     <tr>
                       <td><code>variants</code></td>
-                      <td><code>array</code></td>
+                      <td><code>Array&lt;string&gt;</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>notes</code></td>
-                      <td><code>array</code></td>
+                      <td><code>Array&lt;string&gt;</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>terminal_variants</code></td>
-                      <td><code>array</code></td>
+                      <td><code>Array&lt;string&gt;</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2593,8 +2593,29 @@
                     </tr>
                     <tr>
                       <td><code>variants</code></td>
-                      <td><code>array</code></td>
+                      <td><code>Array&lt;object&gt;</code> <span class="constraints">(min length: 1)</span></td>
                       <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr class="union-option-header">
+                      <td colspan="4"><strong>Array Element Fields:</strong></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;when</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;type</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
@@ -2715,7 +2736,7 @@
                     </tr>
                     <tr>
                       <td><code>size</code></td>
-                      <td><code>number</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 1)</span></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
@@ -2727,8 +2748,35 @@
                     </tr>
                     <tr>
                       <td><code>fields</code></td>
-                      <td><code>array</code></td>
+                      <td><code>Array&lt;object&gt;</code></td>
                       <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr class="union-option-header">
+                      <td colspan="4"><strong>Array Element Fields:</strong></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;offset</code></td>
+                      <td><code>number</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;size</code></td>
+                      <td><code>number</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
