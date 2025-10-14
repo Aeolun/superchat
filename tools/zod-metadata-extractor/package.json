@@ -1,0 +1,37 @@
+{
+  "name": "zod-metadata-extractor",
+  "version": "0.1.0",
+  "description": "Extract and work with metadata from Zod v4 schemas",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "zod",
+    "metadata",
+    "schema",
+    "documentation",
+    "introspection"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0",
+    "zod": "^4.0.0"
+  }
+}
