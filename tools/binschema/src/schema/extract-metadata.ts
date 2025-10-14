@@ -1,32 +1,22 @@
-// ABOUTME: Extract metadata from Zod schemas for documentation generation
-// ABOUTME: Walks schema definitions and retrieves .meta() data from z.globalRegistry
+// ABOUTME: Re-export metadata extraction from zod-metadata-extractor library
+// ABOUTME: Provides binschema-specific type aliases and utilities
 
-import { z } from "zod";
+import type { z } from "zod";
+import {
+  extractMetadata as libExtractMetadata,
+  walkUnion as libWalkUnion,
+  type ExtractedMetadata as LibExtractedMetadata,
+  type FieldInfo as LibFieldInfo,
+} from "zod-metadata-extractor";
 
 /**
- * Metadata extracted from a Zod schema
+ * BinSchema-specific metadata interface
+ * Extends the library's ExtractedMetadata with custom fields
  */
-export interface ExtractedMetadata {
-  title?: string;
-  description?: string;
-  examples?: unknown[];
+export interface ExtractedMetadata extends LibExtractedMetadata {
+  // BinSchema-specific fields
   use_for?: string;
   wire_format?: string;
-  fields?: Array<{
-    name: string;
-    type: string;
-    required: boolean;
-    description: string;
-    default?: string;
-    union_options?: Array<{
-      fields: Array<{
-        name: string;
-        type: string;
-        required: boolean;
-        description?: string;
-      }>;
-    }>;
-  }>;
   code_generation?: {
     typescript?: {
       type: string;
@@ -46,128 +36,27 @@ export interface ExtractedMetadata {
     go?: string;
     rust?: string;
   };
-  notes?: string[];
-  see_also?: string[];
-  since?: string;
-  deprecated?: string;
 }
 
 /**
- * Extract union options from a Zod union schema
- * Returns array of option structures with their fields
- */
-function extractUnionOptions(schema: any): Array<{ fields: Array<{ name: string; type: string; required: boolean }> }> | undefined {
-  // Check if this is a union type
-  if (schema.def?.type !== 'union' || !schema.def?.options) {
-    return undefined;
-  }
-
-  const options: Array<{ fields: Array<{ name: string; type: string; required: boolean }> }> = [];
-
-  for (const option of schema.def.options) {
-    // Only extract from object types
-    if (option.def?.type === 'object' && option.def?.shape) {
-      const fields: Array<{ name: string; type: string; required: boolean }> = [];
-
-      for (const [fieldName, fieldSchema] of Object.entries(option.def.shape)) {
-        const fieldDef = (fieldSchema as any).def;
-
-        // Determine if field is required (not optional)
-        const required = !(fieldSchema as any).isOptional?.();
-
-        // Get the type name
-        let typeName = fieldDef?.type || 'unknown';
-
-        // For enum types, show the enum values
-        if (fieldDef?.type === 'enum' && fieldDef?.values) {
-          typeName = `enum (${Array.from(fieldDef.values).map((v: any) => `"${v}"`).join(' | ')})`;
-        }
-
-        fields.push({
-          name: fieldName,
-          type: typeName,
-          required
-        });
-      }
-
-      if (fields.length > 0) {
-        options.push({ fields });
-      }
-    }
-  }
-
-  return options.length > 0 ? options : undefined;
-}
-
-/**
- * Extract metadata from a Zod schema
- *
- * Uses Zod 4's .meta() method to retrieve metadata from z.globalRegistry
+ * Re-export extractMetadata from library
  */
 export function extractMetadata(schema: z.ZodType): ExtractedMetadata | undefined {
-  try {
-    // In Zod 4, calling .meta() without arguments retrieves metadata
-    const metadata = (schema as any).meta();
-
-    // If metadata has fields, check if any field schemas are unions
-    if (metadata?.fields) {
-      // We need access to the actual schema to extract union info
-      // This requires the schema to be passed along with metadata
-      // For now, we'll handle this in the generator that has access to both
-    }
-
-    return metadata;
-  } catch (error) {
-    // Schema has no metadata
-    return undefined;
-  }
+  return libExtractMetadata(schema) as ExtractedMetadata | undefined;
 }
 
 /**
- * Walk a Zod union/discriminated union and extract metadata from each option
+ * Walk a Zod union and extract metadata from each option
+ * Wrapper around library's walkUnion with BinSchema types
  */
-function walkUnion(schema: any): Map<string, ExtractedMetadata> {
-  const results = new Map<string, ExtractedMetadata>();
+export function walkUnion(schema: z.ZodType): Map<string, ExtractedMetadata> {
+  const result = libWalkUnion(schema, {
+    mergeFields: true,
+    extractUnions: true,
+    extractFieldMeta: true,
+  });
 
-  if (!schema._def?.options) {
-    return results;
-  }
-
-  // Regular ZodUnion - walk all options (could be nested discriminated unions)
-  for (const optionSchema of schema._def.options) {
-    // Check if this option itself is a discriminated union
-    if (optionSchema._def?.discriminator && optionSchema._def?.options) {
-      // Recursively walk this discriminated union
-      for (const innerOption of optionSchema._def.options) {
-        // Try to find the literal type value from the 'type' field
-        // In Zod 4, ZodLiteral has _def.values which is a Set
-        const typeLiteral = innerOption._def?.shape?.type;
-        if (typeLiteral?._def?.values) {
-          const typeValue = Array.from(typeLiteral._def.values)[0];
-          if (typeValue && typeof typeValue === 'string') {
-            const meta = extractMetadata(innerOption);
-            if (meta) {
-              results.set(typeValue, meta);
-            }
-          }
-        }
-      }
-    } else {
-      // Try to extract from this option directly
-      const typeLiteral = optionSchema._def?.shape?.type;
-      if (typeLiteral?._def?.values) {
-        const typeValue = Array.from(typeLiteral._def.values)[0];
-        if (typeValue && typeof typeValue === 'string') {
-          const meta = extractMetadata(optionSchema);
-          if (meta) {
-            results.set(typeValue, meta);
-          }
-        }
-      }
-    }
-  }
-
-  return results;
+  return result.metadata as Map<string, ExtractedMetadata>;
 }
 
 /**
@@ -175,7 +64,6 @@ function walkUnion(schema: any): Map<string, ExtractedMetadata> {
  */
 export async function testMetadataExtraction() {
   // Import the FieldSchema which is a union of all field types
-  // Use dynamic import to get the TS version
   const binarySchema = await import("./binary-schema.js");
   const FieldSchema = binarySchema.FieldSchema;
 

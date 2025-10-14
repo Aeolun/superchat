@@ -1,0 +1,8 @@
+{
+  "name": "superchat-tools",
+  "private": true,
+  "workspaces": [
+    "binschema",
+    "zod-metadata-extractor"
+  ]
+}
