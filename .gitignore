@@ -41,3 +41,5 @@ Thumbs.db
 
 # Log files
 *.log
+
+node_modules
