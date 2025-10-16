@@ -2,27 +2,27 @@ import { BinarySchema } from "../../schema/binary-schema";
 import { validateSchema, ValidationResult } from "../../schema/validator";
 
 /**
- * Schema Validation Tests for Pointer Types
+ * Schema Validation Tests for Back Reference Types
  *
- * Pointers enable backwards references for compression (like DNS).
+ * Back references enable backwards references for compression (like DNS).
  * They read an offset value, seek to that offset, decode the target type,
  * then return to the original position.
  */
 
-interface PointerTestCase {
+interface BackReferenceTestCase {
   description: string;
   schema: BinarySchema;
   shouldPass: boolean;
   expectedErrors?: string[]; // Substrings that should appear in error messages
 }
 
-const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
+const BACK_REFERENCE_VALIDATION_TESTS: BackReferenceTestCase[] = [
   // ============================================================================
   // Valid Schemas (Should Pass)
   // ============================================================================
 
   {
-    description: "Simple uint16 pointer to DomainName",
+    description: "Simple uint16 back_reference to DomainName",
     shouldPass: true,
     schema: {
       types: {
@@ -32,7 +32,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           encoding: "ascii",
         },
         "Pointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -44,7 +44,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
   },
 
   {
-    description: "Uint8 pointer with full offset (no mask)",
+    description: "Uint8 back_reference with full offset (no mask)",
     shouldPass: true,
     schema: {
       types: {
@@ -52,7 +52,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "value", type: "uint8" }],
         },
         "SmallPointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint8",
           offset_mask: "0xFF", // Full byte
           offset_from: "message_start",
@@ -63,7 +63,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
   },
 
   {
-    description: "Uint32 pointer to complex struct",
+    description: "Uint32 back_reference to complex struct",
     shouldPass: true,
     schema: {
       types: {
@@ -74,7 +74,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           ],
         },
         "LargePointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint32",
           offset_mask: "0x7FFFFFFF", // 31-bit offset
           offset_from: "message_start",
@@ -86,7 +86,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
   },
 
   {
-    description: "Pointer with current_position offset (relative pointer)",
+    description: "Pointer with current_position offset (relative back_reference)",
     shouldPass: true,
     schema: {
       types: {
@@ -94,7 +94,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "RelativePointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "current_position",
@@ -117,8 +117,8 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           encoding: "ascii",
         },
         "LabelPointer": {
-          type: "pointer",
-          description: "DNS label compression pointer (RFC 1035)",
+          type: "back_reference",
+          description: "DNS label compression back_reference (RFC 1035)",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -141,7 +141,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           items: { type: "uint8" },
         },
         "ArrayPointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -153,7 +153,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
   },
 
   {
-    description: "Multiple different pointer types in same schema",
+    description: "Multiple different back_reference types in same schema",
     shouldPass: true,
     schema: {
       types: {
@@ -164,7 +164,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "b", type: "uint16", endianness: "big_endian" }],
         },
         "PointerA": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -172,7 +172,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "PointerB": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint32",
           offset_mask: "0xFFFFFFFF",
           offset_from: "message_start",
@@ -197,7 +197,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           // Missing storage!
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -218,7 +218,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           // Missing offset_mask!
           offset_from: "message_start",
@@ -239,7 +239,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           // Missing offset_from!
@@ -257,7 +257,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
     schema: {
       types: {
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -278,8 +278,8 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
-          storage: "uint64", // Invalid: uint64 pointers not supported
+          type: "back_reference",
+          storage: "uint64", // Invalid: uint64 back_references not supported
           offset_mask: "0xFFFF",
           offset_from: "message_start",
           target_type: "Target",
@@ -299,7 +299,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "buffer_end", // Invalid value!
@@ -320,7 +320,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "65535", // Should be "0xFFFF"
           offset_from: "message_start",
@@ -341,7 +341,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint8",
           offset_mask: "0xFFFF", // Too large for uint8 (max 0xFF)
           offset_from: "message_start",
@@ -358,7 +358,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
     schema: {
       types: {
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -379,7 +379,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -400,7 +400,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "data", type: "uint8" }],
         },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint8",
           offset_mask: "0xFF",
           offset_from: "message_start",
@@ -418,7 +418,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
     schema: {
       types: {
         "Recursive": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -436,7 +436,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
     schema: {
       types: {
         "A": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -444,7 +444,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "B": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -456,7 +456,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
   },
 
   {
-    description: "Pointer to pointer (valid - chain of pointers)",
+    description: "Pointer to back_reference (valid - chain of back_references)",
     shouldPass: true,
     schema: {
       types: {
@@ -464,7 +464,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           sequence: [{ name: "value", type: "uint8" }],
         },
         "PointerToData": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -472,7 +472,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "PointerToPointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -490,7 +490,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
     schema: {
       types: {
         "A": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -498,7 +498,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "B": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -506,7 +506,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "C": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -528,7 +528,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           encoding: "ascii",
         },
         "Pointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -558,7 +558,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
       types: {
         "Target": { sequence: [{ name: "data", type: "uint8" }] },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -576,14 +576,14 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
       types: {
         "Data": { sequence: [{ name: "value", type: "uint8" }] },
         "Pointer8": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint8",
           offset_mask: "0xFF", // Valid: uses all 8 bits
           offset_from: "message_start",
           target_type: "Data",
         } as any,
         "Pointer16": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF", // Valid: uses all 16 bits
           offset_from: "message_start",
@@ -591,7 +591,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "Pointer32": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint32",
           offset_mask: "0xFFFFFFFF", // Valid: uses all 32 bits
           offset_from: "message_start",
@@ -610,7 +610,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
       types: {
         "Target": { sequence: [{ name: "data", type: "uint8" }] },
         "Invalid": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x0000", // Zero mask - no offset bits!
           offset_from: "message_start",
@@ -622,7 +622,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
   },
 
   {
-    description: "CRITICAL: Array of pointers (common in DNS answers)",
+    description: "CRITICAL: Array of back_references (common in DNS answers)",
     shouldPass: true,
     schema: {
       types: {
@@ -632,7 +632,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           encoding: "ascii",
         },
         "NamePointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -656,7 +656,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
       types: {
         "Data": { sequence: [{ name: "value", type: "uint8" }] },
         "Ptr1": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -664,7 +664,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "Ptr2": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -672,7 +672,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "Ptr3": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -680,7 +680,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           endianness: "big_endian",
         } as any,
         "Ptr4": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -692,7 +692,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
   },
 
   {
-    description: "CRITICAL: Pointer target is discriminated union (pointer → union)",
+    description: "CRITICAL: Pointer target is discriminated union (back_reference → union)",
     shouldPass: true,
     schema: {
       types: {
@@ -707,7 +707,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
           ],
         } as any,
         "Pointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "message_start",
@@ -720,7 +720,7 @@ const POINTER_VALIDATION_TESTS: PointerTestCase[] = [
 ];
 
 /**
- * Run all pointer validation tests
+ * Run all back_reference validation tests
  */
 export function runPointerValidationTests() {
   console.log("\n=== Pointer Schema Validation Tests ===\n");
@@ -728,7 +728,7 @@ export function runPointerValidationTests() {
   let passed = 0;
   let failed = 0;
 
-  for (const tc of POINTER_VALIDATION_TESTS) {
+  for (const tc of BACK_REFERENCE_VALIDATION_TESTS) {
     const result = validateSchema(tc.schema);
 
     if (tc.shouldPass && result.valid) {
@@ -773,10 +773,10 @@ export function runPointerValidationTests() {
   console.log(`\n✓ ${passed} tests passed`);
   if (failed > 0) {
     console.log(`✗ ${failed} tests failed`);
-    throw new Error(`${failed} pointer validation tests failed`);
+    throw new Error(`${failed} back_reference validation tests failed`);
   }
 
-  console.log("\n✓ All pointer validation tests passed!\n");
+  console.log("\n✓ All back_reference validation tests passed!\n");
 }
 
 // Run tests if executed directly

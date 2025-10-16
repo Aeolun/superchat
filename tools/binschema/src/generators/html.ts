@@ -5,7 +5,7 @@
  */
 
 import { BinarySchema, TypeDef, Field } from "../schema/binary-schema.js";
-import { ProtocolSchema, ProtocolMessage } from "../schema/protocol-schema.js";
+import { ProtocolSchema, ProtocolMessage, normalizeProtocolSchemaInPlace } from "../schema/protocol-schema.js";
 import { formatInlineMarkup } from "./inline-formatting.js";
 import { annotateWireFormat } from "../schema/annotate-wire-format.js";
 import { encodeValue } from "../schema/encoder.js";
@@ -286,6 +286,8 @@ export function generateHTML(
   binarySchema: BinarySchema,
   options: HTMLGeneratorOptions = {},
 ): string {
+  normalizeProtocolSchemaInPlace(protocolSchema);
+
   const { inlineCSS = true, includeExamples = true } = options;
   const title = options.title || protocolSchema.protocol.name;
 

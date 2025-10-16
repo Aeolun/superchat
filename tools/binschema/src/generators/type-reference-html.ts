@@ -4,6 +4,7 @@
 import { ExtractedMetadata } from "../schema/extract-metadata.js";
 import { formatInlineMarkup } from "./inline-formatting.js";
 import { generateWireFormatDiagram } from "./wire-format-diagram.js";
+import { normalizeMessageCode } from "../schema/protocol-schema.js";
 
 export interface TypeReferenceOptions {
   /** Include CSS inline (default: true) */
@@ -24,6 +25,8 @@ export function generateTypeReferenceHTML(
   const { inlineCSS = true } = options;
   const title = options.title || "BinSchema Type Reference";
   const description = options.description || "Binary schema type definitions with wire format specifications and code generation mappings.";
+
+  const linkTargets = new Set(Array.from(metadata.keys()));
 
   let html = `<!DOCTYPE html>
 <html lang="en">
@@ -76,6 +79,8 @@ export function generateTypeReferenceHTML(
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
+      <li><a href="#schema-structure">Schema Structure</a></li>
+      <li><a href="#protocol-definition">Protocol Definition</a></li>
       <li><a href="#primitive-types">Primitive Types</a></li>
     </ul>
   </nav>
@@ -87,62 +92,19 @@ export function generateTypeReferenceHTML(
   html += `    <section id="overview" class="section">
       <h2>Overview</h2>
       <p>${escapeHtml(description)}</p>
-      <p>This reference documents all built-in types supported by BinSchema, including their wire format representation and how they map to different programming languages.</p>
-
-      <h3>Global Configuration</h3>
-      <p>BinSchema schemas can include an optional global <code>config</code> object that sets defaults for all fields. These can be overridden at the field level.</p>
-
-      <div class="fields-table">
-        <h5>Config Properties</h5>
-        <table>
-          <thead>
-            <tr>
-              <th>Property</th>
-              <th>Type</th>
-              <th>Required</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>endianness</code></td>
-              <td><code>enum ("big_endian" | "little_endian")</code></td>
-              <td><span class="badge badge-optional">optional</span></td>
-              <td>Default byte order for multi-byte numeric types. Fields can override this with their own <code>endianness</code> property.</td>
-            </tr>
-            <tr>
-              <td><code>bit_order</code></td>
-              <td><code>enum ("msb_first" | "lsb_first")</code></td>
-              <td><span class="badge badge-optional">optional</span></td>
-              <td>Default bit ordering within bytes for bitfield operations. Most significant bit first (msb_first) or least significant bit first (lsb_first).</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="examples">
-        <h5>Example Schema with Config</h5>
-        <pre><code>{
-  "config": {
-    "endianness": "big_endian",
-    "bit_order": "msb_first"
-  },
-  "types": {
-    "Header": {
-      "sequence": [
-        { "name": "version", "type": "uint8" },
-        { "name": "length", "type": "uint16" }
-      ]
-    }
-  }
-}</code></pre>
-      </div>
+      <p>This reference documents the overall JSON structure used by BinSchema, the optional protocol metadata layer, and the built-in field types you can use when defining schemas.</p>
     </section>
 
 `;
 
+  // Schema structure section
+  html += generateSchemaStructureSection(linkTargets);
+
+  // Protocol section
+  html += generateProtocolDefinitionSection(linkTargets);
+
   // Primitive types section
-  html += generateTypesSection(metadata);
+  html += generateTypesSection(metadata, linkTargets);
 
   html += `  </main>
 
@@ -155,10 +117,552 @@ export function generateTypeReferenceHTML(
   return html;
 }
 
+interface PropertyDoc {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+}
+
+interface JsonRenderOptions {
+  indent?: number;
+  linkTargets?: Set<string>;
+  linkKeys?: Set<string>;
+}
+
+const SCHEMA_TOP_LEVEL_PROPERTIES: PropertyDoc[] = [
+  {
+    name: "config",
+    type: "object",
+    required: false,
+    description: "Optional global defaults for endianness and bit ordering. Individual fields can override these settings."
+  },
+  {
+    name: "types",
+    type: "record<string, TypeDef>",
+    required: true,
+    description: "Map of type names to type definitions. Keys must start with an uppercase letter so they never collide with built-in primitives."
+  },
+  {
+    name: "protocol",
+    type: "ProtocolDefinition",
+    required: false,
+    description: "Optional protocol metadata for documenting message-oriented systems. When present, describes headers, message codes, and grouping."
+  }
+];
+
+const CONFIG_PROPERTIES: PropertyDoc[] = [
+  {
+    name: "endianness",
+    type: `enum ("big_endian" | "little_endian")`,
+    required: false,
+    description: "Default byte order for multi-byte numeric values. Use field-level `endianness` to override."
+  },
+  {
+    name: "bit_order",
+    type: `enum ("msb_first" | "lsb_first")`,
+    required: false,
+    description: "Default bit ordering for bitfields. Most-significant-bit first (`msb_first`) or least-significant-bit first (`lsb_first`)."
+  }
+];
+
+const PROTOCOL_PROPERTIES: PropertyDoc[] = [
+  {
+    name: "name",
+    type: "string",
+    required: true,
+    description: "Human-readable protocol name. Appears in generated documentation."
+  },
+  {
+    name: "version",
+    type: "string",
+    required: true,
+    description: "Protocol version string (for example, `\"1.0\"`)."
+  },
+  {
+    name: "types_schema",
+    type: "string",
+    required: true,
+    description: "Path to the BinarySchema JSON file that defines the types section. Resolved relative to the protocol JSON file."
+  },
+  {
+    name: "description",
+    type: "string",
+    required: false,
+    description: "Optional overview paragraph shown at the top of generated docs."
+  },
+  {
+    name: "header_format",
+    type: "string",
+    required: false,
+    description: "Name of the type in `types` that describes the frame header. Required for frame diagrams and header validation."
+  },
+  {
+    name: "header_size_field",
+    type: "string",
+    required: false,
+    description: "Name of the header field that stores payload size. Used to auto-fill frame examples."
+  },
+  {
+    name: "discriminator_field",
+    type: "string",
+    required: false,
+    description: "Header field (supports dot notation for bitfields) that selects which message payload is on the wire. Required when documenting multiple message codes."
+  },
+  {
+    name: "header_example",
+    type: "{ decoded: any }",
+    required: false,
+    description: "Sample decoded header values shown in generated diagrams. BinSchema fills in missing size fields when possible."
+  },
+  {
+    name: "field_descriptions",
+    type: "record<string, string>",
+    required: false,
+    description: "Map of `Type.field` → human-readable description. Applied across headers and payload types."
+  },
+  {
+    name: "messages",
+    type: "ProtocolMessage[]",
+    required: true,
+    description: "List of documented message codes and payload types. Used to drive tables and payload renderings."
+  },
+  {
+    name: "message_groups",
+    type: "MessageGroup[]",
+    required: false,
+    description: "Optional organization layer that groups message codes into categories."
+  },
+  {
+    name: "constants",
+    type: "record<string, ProtocolConstant>",
+    required: false,
+    description: "Named numeric/string constants referenced by the protocol."
+  },
+  {
+    name: "notes",
+    type: "string[]",
+    required: false,
+    description: "Protocol-wide notes rendered as bullet points."
+  }
+];
+
+const PROTOCOL_MESSAGE_PROPERTIES: PropertyDoc[] = [
+  {
+    name: "code",
+    type: "string | number",
+    required: true,
+    description: "Unique message identifier expressed as hex (for example, `\"0x8A\"`). Numeric values are converted to uppercase hex on load."
+  },
+  {
+    name: "name",
+    type: "string",
+    required: true,
+    description: "Message constant name such as `\"AUTH_REQUEST\"`."
+  },
+  {
+    name: "direction",
+    type: `enum ("client_to_server" | "server_to_client" | "bidirectional")`,
+    required: true,
+    description: "Traffic direction hint for documentation tables."
+  },
+  {
+    name: "payload_type",
+    type: "string",
+    required: true,
+    description: "Type name from the BinarySchema `types` map that encodes the payload."
+  },
+  {
+    name: "description",
+    type: "string",
+    required: false,
+    description: "Short summary of what the message conveys."
+  },
+  {
+    name: "notes",
+    type: "string | string[]",
+    required: false,
+    description: "Extended guidance on when or how to use the message. Supports Markdown-style `**bold**` and `*italic*`."
+  },
+  {
+    name: "example",
+    type: "{ description: string; bytes: number[]; decoded?: any }",
+    required: false,
+    description: "Example payload illustrating bytes on the wire. Combined with header_example to build frame diagrams."
+  },
+  {
+    name: "since",
+    type: "string",
+    required: false,
+    description: "Protocol version where the message was introduced."
+  },
+  {
+    name: "deprecated",
+    type: "string",
+    required: false,
+    description: "Marks the version where the message was deprecated."
+  }
+];
+
+const MESSAGE_GROUP_PROPERTIES: PropertyDoc[] = [
+  {
+    name: "name",
+    type: "string",
+    required: true,
+    description: "Display name for the group (for example, `\"Authentication\"`)."
+  },
+  {
+    name: "messages",
+    type: "Array<string | number>",
+    required: true,
+    description: "List of message codes included in the group."
+  },
+  {
+    name: "description",
+    type: "string",
+    required: false,
+    description: "Optional description shown beneath the group heading."
+  }
+];
+
+const PROTOCOL_CONSTANT_PROPERTIES: PropertyDoc[] = [
+  {
+    name: "value",
+    type: "number | string",
+    required: true,
+    description: "Literal constant value."
+  },
+  {
+    name: "description",
+    type: "string",
+    required: true,
+    description: "Explanation of how the constant is used."
+  },
+  {
+    name: "type",
+    type: "string",
+    required: false,
+    description: "Optional type reference that clarifies the constant's units or bit width."
+  }
+];
+
+function generateSchemaStructureSection(linkTargets: Set<string>): string {
+  const minimalSchemaExample = {
+    config: {
+      endianness: "big_endian"
+    },
+    types: {
+      FrameHeader: {
+        sequence: [
+          { name: "length", type: "uint16" },
+          { name: "type", type: "uint8" }
+        ]
+      },
+      Ping: {
+        sequence: [
+          { name: "timestamp", type: "uint64" }
+        ]
+      }
+    }
+  };
+
+  let html = `    <section id="schema-structure" class="section">
+      <h2>Schema Structure</h2>
+      <p>BinSchema documents are JSON (or JSON5) files with three top-level sections. Only <code>types</code> is required; the other sections layer additional context or reusable defaults.</p>
+      <p>You can use JSON5 authoring conveniences—comments, trailing commas, and hex literals are accepted when loading schemas.</p>
+`;
+
+  html += renderPropertyTable("Top-Level Properties", SCHEMA_TOP_LEVEL_PROPERTIES);
+
+  html += `      <h3>Config Object</h3>
+      <p>The optional <code>config</code> object defines defaults for every field in the schema. Values can be overridden by individual field definitions.</p>
+`;
+
+  html += renderPropertyTable("Config Properties", CONFIG_PROPERTIES);
+
+  html += `      <h3>Type Definitions</h3>
+      <p>Each entry in the <code>types</code> map defines a reusable structure or alias:</p>
+      <ul>
+        <li>Composite types use <code>sequence</code> (or legacy <code>fields</code>) to describe ordered fields on the wire.</li>
+        <li>Type aliases reference another type or primitive directly and inherit its wire format &mdash; useful for strings, arrays, or simple wrappers.</li>
+        <li>All field definitions ultimately resolve to the built-in type primitives documented later in this guide.</li>
+        <li>Type names must start with an uppercase letter; BinSchema enforces this to prevent clashes with built-in primitives.</li>
+      </ul>
+
+      <div class="examples">
+        <h5>Minimal Types-Only Schema</h5>
+        ${renderJsonBlock(minimalSchemaExample, linkTargets)}
+      </div>
+    </section>
+
+`;
+
+  return html;
+}
+
+function generateProtocolDefinitionSection(linkTargets: Set<string>): string {
+  const protocolExcerpt = {
+    types: {
+      FrameHeader: {
+        sequence: [
+          { name: "length", type: "uint32" },
+          { name: "version", type: "uint8" },
+          { name: "type", type: "uint8" }
+        ]
+      },
+      Ping: {
+        sequence: [
+          { name: "timestamp", type: "uint64" }
+        ]
+      }
+    },
+    protocol: {
+      name: "Example Protocol",
+      version: "1.0",
+      types_schema: "./example-types.json",
+      header_format: "FrameHeader",
+      discriminator_field: "type",
+      messages: [
+        { code: 0x10, name: "PING", direction: "client_to_server", payload_type: "Ping" },
+        { code: 0x90, name: "PONG", direction: "server_to_client", payload_type: "Ping" }
+      ]
+    }
+  };
+
+  let html = `    <section id="protocol-definition" class="section">
+      <h2>Protocol Definition</h2>
+      <p>The optional <code>protocol</code> block documents message-oriented protocols built on top of the binary types. It links a frame header to payload types and captures metadata for documentation.</p>
+`;
+
+  html += renderPropertyTable("Protocol Properties", PROTOCOL_PROPERTIES);
+
+  html += renderPropertyTable("ProtocolMessage Properties", PROTOCOL_MESSAGE_PROPERTIES);
+
+  html += renderPropertyTable("MessageGroup Properties", MESSAGE_GROUP_PROPERTIES);
+
+  html += renderPropertyTable("ProtocolConstant Properties", PROTOCOL_CONSTANT_PROPERTIES);
+
+  html += `      <div class="notes">
+        <h5>Usage Notes</h5>
+        <ul class="notes-list">
+          <li><code>discriminator_field</code> becomes mandatory when more than one message code is listed. BinSchema validates the field exists in the header type.</li>
+          <li>Message codes provided as integers are automatically converted to uppercase hex strings (for example, <code>0x01</code>).</li>
+          <li><code>field_descriptions</code> entries can target either header fields (for example, <code>FrameHeader.length</code>) or payload fields (for example, <code>AuthRequest.nickname</code>).</li>
+          <li>When a message provides an <code>example</code>, the generator combines it with <code>header_example</code> to render fully annotated frame diagrams.</li>
+        </ul>
+      </div>
+
+      <div class="examples">
+        <h5>Schema with Protocol Metadata (excerpt)</h5>
+        ${renderJsonBlock(protocolExcerpt, linkTargets)}
+      </div>
+    </section>
+
+`;
+
+  return html;
+}
+
+function renderPropertyTable(title: string, properties: PropertyDoc[]): string {
+  let html = `      <div class="fields-table">
+        <h5>${escapeHtml(title)}</h5>
+        <table>
+          <thead>
+            <tr>
+              <th>Property</th>
+              <th>Type</th>
+              <th>Required</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+`;
+
+  for (const prop of properties) {
+    html += `            <tr>
+              <td><code>${escapeHtml(prop.name)}</code></td>
+              <td><code>${escapeHtml(prop.type)}</code></td>
+              <td><span class="badge ${prop.required ? "badge-required" : "badge-optional"}">${prop.required ? "required" : "optional"}</span></td>
+              <td>${formatPropertyDescription(prop.description)}</td>
+            </tr>
+`;
+  }
+
+  html += `          </tbody>
+        </table>
+      </div>
+
+`;
+
+  return html;
+}
+
+function formatPropertyDescription(text: string): string {
+  const withMarkup = formatInlineMarkup(text);
+  return withMarkup.replace(/`([^`]+)`/g, (_match, code) => `<code>${code}</code>`);
+}
+
+const DEFAULT_JSON_LINK_KEYS = new Set<string>(["type"]);
+
+function renderJsonBlock(value: unknown, linkTargets: Set<string>): string {
+  const jsonHtml = renderHighlightedJson(value, {
+    linkTargets
+  });
+  return `<pre><code>${jsonHtml}</code></pre>`;
+}
+
+function renderHighlightedJson(value: unknown, options: JsonRenderOptions = {}): string {
+  const resolvedOptions = {
+    indent: options.indent ?? 2,
+    linkTargets: options.linkTargets ?? new Set<string>(),
+    linkKeys: options.linkKeys ?? DEFAULT_JSON_LINK_KEYS
+  };
+
+  return renderJsonValue(value, resolvedOptions, null, 0, null);
+}
+
+function renderJsonValue(
+  value: unknown,
+  options: { indent: number; linkTargets: Set<string>; linkKeys: Set<string> },
+  currentKey: string | null,
+  depth: number,
+  parentKey: string | null
+): string {
+  if (value === null) {
+    return `<span class="json-null">null</span>`;
+  }
+
+  if (Array.isArray(value)) {
+    return renderJsonArray(value, options, depth, currentKey);
+  }
+
+  switch (typeof value) {
+    case "object":
+      return renderJsonObject(value as Record<string, unknown>, options, depth);
+    case "string":
+      return renderJsonString(value, { linkTargets: options.linkTargets, linkKeys: options.linkKeys }, currentKey);
+    case "number":
+      return renderJsonNumber(
+        value,
+        { ...options, currentKey, parentKey }
+      );
+    case "boolean":
+      return `<span class="json-boolean">${value}</span>`;
+    default:
+      return `<span class="json-null">null</span>`;
+  }
+}
+
+function renderJsonObject(
+  obj: Record<string, unknown>,
+  options: { indent: number; linkTargets: Set<string>; linkKeys: Set<string> },
+  depth: number
+): string {
+  const keys = Object.keys(obj);
+  if (keys.length === 0) {
+    return "{}";
+  }
+
+  const indent = " ".repeat(depth * options.indent);
+  const nextIndent = " ".repeat((depth + 1) * options.indent);
+
+  let result = "{\n";
+
+  keys.forEach((key, index) => {
+    const keyToken = `<span class="json-key">"${escapeHtml(key)}"</span>`;
+    const valueToken = renderJsonValue(obj[key], options, key, depth + 1, null);
+    const suffix = index < keys.length - 1 ? "," : "";
+    result += `${nextIndent}${keyToken}: ${valueToken}${suffix}\n`;
+  });
+
+  result += `${indent}}`;
+  return result;
+}
+
+function renderJsonArray(
+  arr: unknown[],
+  options: { indent: number; linkTargets: Set<string>; linkKeys: Set<string> },
+  depth: number,
+  parentKey: string | null
+): string {
+  if (arr.length === 0) {
+    return "[]";
+  }
+
+  const indent = " ".repeat(depth * options.indent);
+  const nextIndent = " ".repeat((depth + 1) * options.indent);
+  let result = "[\n";
+
+  arr.forEach((item, index) => {
+    const valueToken = renderJsonValue(item, options, null, depth + 1, parentKey);
+    const suffix = index < arr.length - 1 ? "," : "";
+    result += `${nextIndent}${valueToken}${suffix}\n`;
+  });
+
+  result += `${indent}]`;
+  return result;
+}
+
+function renderJsonString(
+  value: string,
+  options: { linkTargets: Set<string>; linkKeys: Set<string> },
+  currentKey: string | null
+): string {
+  const jsonString = JSON.stringify(value);
+  const inner = escapeHtml(jsonString.slice(1, -1));
+
+  const linkedInner = maybeRenderTypeLink(inner, value, options, currentKey);
+
+  return `<span class="json-string">&quot;${linkedInner}&quot;</span>`;
+}
+
+function renderJsonNumber(
+  value: number,
+  options: { indent: number; linkTargets: Set<string>; linkKeys: Set<string>; currentKey: string | null; parentKey: string | null }
+): string {
+  if (!Number.isFinite(value)) {
+    return `<span class="json-null">null</span>`;
+  }
+
+  const isMessageCode =
+    options.currentKey === "code" ||
+    options.parentKey === "messages";
+
+  if (isMessageCode) {
+    try {
+      const normalized = normalizeMessageCode(value);
+      return `<span class="json-number json-number-hex">${normalized}</span>`;
+    } catch {
+      // fall through to default formatting
+    }
+  }
+
+  return `<span class="json-number">${value}</span>`;
+}
+
+function maybeRenderTypeLink(
+  escapedInner: string,
+  rawValue: string,
+  options: { linkTargets: Set<string>; linkKeys: Set<string> },
+  currentKey: string | null
+): string {
+  if (!currentKey || !options.linkKeys.has(currentKey)) {
+    return escapedInner;
+  }
+
+  if (!options.linkTargets.has(rawValue)) {
+    return escapedInner;
+  }
+
+  const anchorId = `type-${rawValue}`;
+  const href = `#${anchorId}`;
+  return `<a href="${escapeHtml(href)}" class="type-link">${escapedInner}</a>`;
+}
+
 /**
  * Generate types section with all documented types
  */
-function generateTypesSection(metadata: Map<string, ExtractedMetadata>): string {
+function generateTypesSection(metadata: Map<string, ExtractedMetadata>, linkTargets: Set<string>): string {
   let html = `    <section id="primitive-types" class="section">
       <h2>Primitive Types</h2>
       <div class="type-list">
@@ -169,8 +673,11 @@ function generateTypesSection(metadata: Map<string, ExtractedMetadata>): string 
     "Unsigned Integers": ["uint8", "uint16", "uint32", "uint64"],
     "Signed Integers": ["int8", "int16", "int32", "int64"],
     "Floating Point": ["float32", "float64"],
-    "Complex Types": ["string", "array", "optional", "discriminated_union", "bitfield", "pointer"],
+    "Complex Types": ["string", "array", "optional", "discriminated_union", "bitfield", "back_reference"],
   };
+
+  // Track which types we've rendered
+  const renderedTypes = new Set<string>();
 
   for (const [categoryName, typeNames] of Object.entries(categories)) {
     html += `        <div class="type-category">
@@ -180,7 +687,27 @@ function generateTypesSection(metadata: Map<string, ExtractedMetadata>): string 
     for (const typeName of typeNames) {
       const meta = metadata.get(typeName);
       if (meta) {
-        html += generateTypeSection(typeName, meta);
+        html += generateTypeSection(typeName, meta, linkTargets);
+        renderedTypes.add(typeName);
+      }
+    }
+
+    html += `        </div>
+`;
+  }
+
+  // Add "Other Types" category for any types not explicitly categorized
+  const otherTypes = Array.from(metadata.keys()).filter(name => !renderedTypes.has(name)).sort();
+
+  if (otherTypes.length > 0) {
+    html += `        <div class="type-category">
+          <h3>Other Types</h3>
+`;
+
+    for (const typeName of otherTypes) {
+      const meta = metadata.get(typeName);
+      if (meta) {
+        html += generateTypeSection(typeName, meta, linkTargets);
       }
     }
 
@@ -199,7 +726,7 @@ function generateTypesSection(metadata: Map<string, ExtractedMetadata>): string 
 /**
  * Generate section for a single type
  */
-function generateTypeSection(typeName: string, meta: ExtractedMetadata): string {
+function generateTypeSection(typeName: string, meta: ExtractedMetadata, linkTargets: Set<string>): string {
   let html = `          <details class="type-details" id="type-${typeName}">
             <summary>
               <h4><code>${escapeHtml(typeName)}</code></h4>
@@ -262,7 +789,7 @@ function generateTypeSection(typeName: string, meta: ExtractedMetadata): string 
 
   // Examples section - schema definitions + tabbed values
   if (meta.examples && meta.examples.length > 0) {
-    html += generateExamplesSection(meta.examples, meta.examples_values);
+    html += generateExamplesSection(meta.examples, meta.examples_values, linkTargets);
   }
 
   html += `            </div>
@@ -277,15 +804,18 @@ function generateTypeSection(typeName: string, meta: ExtractedMetadata): string 
  */
 function generateExamplesSection(
   examples: unknown[],
-  examplesValues?: ExtractedMetadata["examples_values"]
+  examplesValues: ExtractedMetadata["examples_values"] | undefined,
+  linkTargets: Set<string>
 ): string {
-  const schemaJson = JSON.stringify(examples, null, 2);
+  const schemaHtml = renderHighlightedJson(examples, {
+    linkTargets
+  });
 
   // If no value examples, just show schema
   if (!examplesValues) {
     return `              <div class="examples">
                 <h5>Examples</h5>
-                <pre><code>${escapeHtml(schemaJson)}</code></pre>
+                <pre><code>${schemaHtml}</code></pre>
               </div>
 `;
   }
@@ -295,7 +825,7 @@ function generateExamplesSection(
   if (languages.length === 0) {
     return `              <div class="examples">
                 <h5>Examples</h5>
-                <pre><code>${escapeHtml(schemaJson)}</code></pre>
+                <pre><code>${schemaHtml}</code></pre>
               </div>
 `;
   }
@@ -332,7 +862,7 @@ function generateExamplesSection(
                     </thead>
                     <tbody>
                       <tr>
-                        <td><pre><code>${escapeHtml(schemaJson)}</code></pre></td>
+                        <td><pre><code>${schemaHtml}</code></pre></td>
                         <td><pre><code>${escapeHtml(valueCode!)}</code></pre></td>
                       </tr>
                     </tbody>
@@ -416,7 +946,7 @@ function formatConstraints(constraints: any[] | undefined): string {
         parts.push(`format: ${c.format}`);
         break;
       case "pattern":
-        parts.push(`pattern: ${c.pattern}`);
+        parts.push(`pattern: <code>${c.pattern}</code>`);
         break;
       case "multiple_of":
         parts.push(`multiple of: ${c.value}`);
@@ -691,6 +1221,26 @@ function generateCSS(): string {
       margin: 30px 0 15px 0;
     }
 
+    .section ul {
+      list-style: disc;
+      margin: 15px 0 20px 1.5rem;
+      padding-left: 1rem;
+    }
+
+    .section ul li {
+      margin: 6px 0;
+    }
+
+    .type-link {
+      color: #2563eb;
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(37, 99, 235, 0.45);
+    }
+
+    .type-link:hover {
+      border-bottom-style: solid;
+    }
+
     .type-category {
       margin-bottom: 40px;
     }
@@ -893,6 +1443,7 @@ function generateCSS(): string {
 
     .example-table {
       width: 100%;
+      table-layout: fixed;
       border-collapse: collapse;
       border: 1px solid #e5e7eb;
       border-radius: 0 0 6px 6px;
@@ -917,6 +1468,36 @@ function generateCSS(): string {
       padding: 0;
       vertical-align: top;
       width: 50%;
+    }
+
+    .fields-table table th:nth-child(1),
+    .fields-table table td:nth-child(1) {
+      width: 15%;
+    }
+
+    .fields-table table th:nth-child(2),
+    .fields-table table td:nth-child(2) {
+      width: 20%;
+    }
+
+    .fields-table table th:nth-child(3),
+    .fields-table table td:nth-child(3) {
+      width: 15%;
+    }
+
+    .fields-table table th:nth-child(4),
+    .fields-table table td:nth-child(4) {
+      width: 50%;
+    }
+
+    .example-table thead th:nth-child(1),
+    .example-table tbody td:nth-child(1) {
+      width: 35%;
+    }
+
+    .example-table thead th:nth-child(2),
+    .example-table tbody td:nth-child(2) {
+      width: 65%;
     }
 
     .example-table td pre {
@@ -949,6 +1530,35 @@ function generateCSS(): string {
       padding: 0;
       color: inherit;
     }
+
+    .json-key {
+      color: #b58900;
+    }
+
+    .json-string {
+      color: #268bd2;
+    }
+
+    .json-number {
+      color: #d33682;
+    }
+    .json-number-hex {
+      color: #d33682;
+    }
+
+    .json-boolean {
+      color: #cb4b16;
+    }
+
+    .json-null {
+      color: #6b7280;
+    }
+
+    .json-string .type-link {
+      color: inherit;
+      border-bottom-color: rgba(38, 139, 210, 0.45);
+    }
+
 
     /* Tabbed code generation view */
     .tabs-container {
@@ -1079,6 +1689,7 @@ function generateCSS(): string {
 
     .fields-table table {
       width: 100%;
+      table-layout: fixed;
       border-collapse: collapse;
       border: 1px solid #e5e7eb;
       border-radius: 6px;
@@ -1146,6 +1757,10 @@ function generateCSS(): string {
       font-size: 0.85em;
       font-weight: normal;
       font-style: italic;
+    }
+
+    .constraints code {
+      font-style: normal;
     }
 
     /* Union option styles */

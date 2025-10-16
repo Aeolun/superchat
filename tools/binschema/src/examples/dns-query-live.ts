@@ -6,15 +6,16 @@
  */
 
 import { createSocket } from "dgram";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve } from "path";
 import { generateTypeScriptCode } from "../generators/typescript.js";
-import type { BinarySchema } from "../schema/binary-schema.js";
-import { writeFileSync, mkdirSync } from "fs";
+import { defineBinarySchema, type BinarySchema } from "../schema/binary-schema.js";
+import JSON5 from "json5";
 
 // Load DNS schema
 const schemaPath = resolve(__dirname, "../tests/protocols/dns.schema.json");
-const schema = JSON.parse(readFileSync(schemaPath, "utf-8")) as BinarySchema;
+const rawSchema = JSON5.parse(readFileSync(schemaPath, "utf-8")) as BinarySchema;
+const schema = defineBinarySchema(rawSchema);
 
 // Generate code
 console.log("Generating DNS message encoder/decoder...");

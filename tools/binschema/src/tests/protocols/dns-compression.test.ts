@@ -50,7 +50,7 @@ export const dnsCompressionFullDomainTestSuite = defineTestSuite({
         ]
       },
       "LabelPointer": {
-        type: "pointer",
+        type: "back_reference",
         storage: "uint16",
         endianness: "big_endian",
         offset_mask: "0x3FFF",
@@ -131,7 +131,7 @@ export const dnsCompressionPointerTestSuite = defineTestSuite({
         ]
       },
       "LabelPointer": {
-        type: "pointer",
+        type: "back_reference",
         storage: "uint16",
         endianness: "big_endian",
         offset_mask: "0x3FFF",
@@ -221,7 +221,7 @@ export const dnsCompressionMixedTestSuite = defineTestSuite({
         ]
       },
       "LabelPointer": {
-        type: "pointer",
+        type: "back_reference",
         storage: "uint16",
         endianness: "big_endian",
         offset_mask: "0x3FFF",
@@ -312,7 +312,7 @@ export const dnsCompressionEdgeCasesTestSuite = defineTestSuite({
         ]
       },
       "LabelPointer": {
-        type: "pointer",
+        type: "back_reference",
         storage: "uint16",
         endianness: "big_endian",
         offset_mask: "0x3FFF",

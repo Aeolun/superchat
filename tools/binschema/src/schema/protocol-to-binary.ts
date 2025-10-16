@@ -11,6 +11,7 @@
  */
 
 import { BinarySchema } from "./binary-schema";
+import { normalizeMessageCode } from "./protocol-schema";
 
 export interface ProtocolTransformOptions {
   /** Custom name for the generated combined type (default: "Frame") */
@@ -41,33 +42,28 @@ export function transformProtocolToBinary(
     throw new Error("Protocol must have at least one message");
   }
 
-  // 2. Check for duplicate message codes
+  // 2. Normalize codes and check for duplicates
   const messageCodes = new Set<string>();
   for (const msg of protocol.messages) {
-    if (messageCodes.has(msg.code)) {
-      throw new Error(`Duplicate message code '${msg.code}' for message '${msg.name}'`);
+    const normalizedCode = normalizeMessageCode(msg.code);
+    if (messageCodes.has(normalizedCode)) {
+      throw new Error(`Duplicate message code '${normalizedCode}' for message '${msg.name}'`);
     }
-    messageCodes.add(msg.code);
+    messageCodes.add(normalizedCode);
+    msg.code = normalizedCode;
   }
 
-  // 3. Validate message codes are valid hex
-  for (const msg of protocol.messages) {
-    if (!/^0x[0-9A-Fa-f]+$/.test(msg.code)) {
-      throw new Error(`Message code '${msg.code}' for message '${msg.name}' is not valid hex (must start with 0x)`);
-    }
-  }
-
-  // 4. Check that combined type name doesn't already exist
+  // 3. Check that combined type name doesn't already exist
   if (schema.types[combinedTypeName]) {
     throw new Error(`Combined type name '${combinedTypeName}' already exists in schema`);
   }
 
-  // 5. Verify header type exists
+  // 4. Verify header type exists
   if (!schema.types[protocol.header]) {
     throw new Error(`Header type '${protocol.header}' not found in schema types`);
   }
 
-  // 6. Get header fields
+  // 5. Get header fields
   const headerType = schema.types[protocol.header];
   const headerFields = getFieldsFromType(headerType);
 
@@ -77,7 +73,7 @@ export function transformProtocolToBinary(
     throw new Error(`Header type '${protocol.header}' cannot have a field named 'payload' (reserved for generated union)`);
   }
 
-  // 7. Check for field name collisions between header and payloads
+  // 6. Check for field name collisions between header and payloads
   const headerFieldNames = new Set(headerFields.map((f: any) => f.name));
   for (const msg of protocol.messages) {
     if (!schema.types[msg.payload_type]) {
@@ -96,10 +92,10 @@ export function transformProtocolToBinary(
     }
   }
 
-  // 8. Build combined type
+  // 7. Build combined type
   const combinedFields: any[] = [...headerFields];
 
-  // 9. Add payload field (discriminated union or direct reference)
+  // 8. Add payload field (discriminated union or direct reference)
   if (protocol.messages.length === 1 && !protocol.discriminator) {
     // Single message without discriminator: direct type reference
     combinedFields.push({
@@ -123,13 +119,13 @@ export function transformProtocolToBinary(
     });
   }
 
-  // 10. Create combined type
+  // 9. Create combined type
   const combinedType = {
     sequence: combinedFields,
     description: `Auto-generated combined frame type for ${protocol.name}`
   };
 
-  // 11. Return schema with combined type added
+  // 10. Return schema with combined type added
   return {
     ...schema,
     types: {

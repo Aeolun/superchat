@@ -43,7 +43,7 @@ const dnsMessageSchema = {
       ]
     },
     "LabelPointer": {
-      "type": "pointer" as const,
+      "type": "back_reference" as const,
       "storage": "uint16" as const,
       "endianness": "big_endian" as const,
       "offset_mask": "0x3FFF",

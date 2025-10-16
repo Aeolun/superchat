@@ -121,6 +121,42 @@ const TEST_CASES: TestCase[] = [
     }
   },
 
+  {
+    description: "Valid protocol with numeric message codes",
+    shouldPass: true,
+    protocolSchema: {
+      protocol: {
+        name: "Test Protocol",
+        version: "1.0",
+        types_schema: "test-types.json",
+        header_format: "FrameHeader",
+        discriminator_field: "message_type",
+        messages: [
+          { code: 0x10, name: "PING", direction: "client_to_server", payload_type: "PayloadPing", description: "Ping" },
+          { code: 0x90, name: "PONG", direction: "server_to_client", payload_type: "PayloadPong", description: "Pong" },
+        ],
+        message_groups: [
+          {
+            name: "Keepalive",
+            messages: [0x10, 0x90],
+          }
+        ]
+      }
+    },
+    binarySchema: {
+      types: {
+        "FrameHeader": {
+          sequence: [
+            { name: "length", type: "uint32", endianness: "big_endian" as const },
+            { name: "message_type", type: "uint8" },
+          ]
+        },
+        "PayloadPing": { sequence: [{ name: "timestamp", type: "uint64" }] },
+        "PayloadPong": { sequence: [{ name: "timestamp", type: "uint64" }] }
+      }
+    }
+  },
+
   // ==========================================================================
   // Invalid Schemas
   // ==========================================================================
@@ -265,7 +301,7 @@ const TEST_CASES: TestCase[] = [
   {
     description: "Invalid message code (not hex)",
     shouldPass: false,
-    expectedErrors: ["code", "123", "not valid hex"],
+    expectedErrors: ["code", "hex value"],
     protocolSchema: {
       protocol: {
         name: "Test Protocol",
@@ -275,6 +311,30 @@ const TEST_CASES: TestCase[] = [
         discriminator_field: "message_type",
         messages: [
           { code: "123", name: "MSG1", direction: "client_to_server", payload_type: "Payload1", description: "Message 1" }, // Not hex!
+        ]
+      }
+    },
+    binarySchema: {
+      types: {
+        "FrameHeader": { sequence: [{ name: "message_type", type: "uint8" }] },
+        "Payload1": { sequence: [{ name: "data", type: "uint8" }] }
+      }
+    }
+  },
+
+  {
+    description: "Invalid message code (negative number)",
+    shouldPass: false,
+    expectedErrors: ["code", "non-negative"],
+    protocolSchema: {
+      protocol: {
+        name: "Test Protocol",
+        version: "1.0",
+        types_schema: "test-types.json",
+        header_format: "FrameHeader",
+        discriminator_field: "message_type",
+        messages: [
+          { code: -1, name: "MSG1", direction: "client_to_server", payload_type: "Payload1", description: "Message 1" },
         ]
       }
     },

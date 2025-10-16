@@ -25,12 +25,14 @@
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import JSON5 from "json5";
 import { transformProtocolToBinary } from "../../schema/protocol-to-binary.js";
-import type { BinarySchema } from "../../schema/binary-schema.js";
+import { defineBinarySchema, type BinarySchema } from "../../schema/binary-schema.js";
 
 // Load unified DNS schema (types + protocol)
 const schemaPath = resolve(__dirname, "dns.schema.json");
-const schema = JSON.parse(readFileSync(schemaPath, "utf-8")) as BinarySchema;
+const rawSchema = JSON5.parse(readFileSync(schemaPath, "utf-8")) as BinarySchema;
+const schema = defineBinarySchema(rawSchema);
 
 // Transform protocol to binary schema (creates Frame type)
 const combinedSchema = transformProtocolToBinary(schema, {

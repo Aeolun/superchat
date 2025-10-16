@@ -27,7 +27,7 @@ export interface ValidationResult {
 const BUILT_IN_TYPES = [
   "bit", "int", "uint8", "uint16", "uint32", "uint64",
   "int8", "int16", "int32", "int64", "float32", "float64",
-  "string", "array", "optional", "bitfield", "discriminated_union", "pointer"
+  "string", "array", "optional", "bitfield", "discriminated_union", "back_reference"
 ];
 
 /**
@@ -136,9 +136,9 @@ function validateTypeDef(
       return;
     }
 
-    // Validate pointer type aliases
-    if (typeDefAny.type === "pointer") {
-      validatePointer(typeDefAny, `types.${typeName}`, schema, errors);
+    // Validate back_reference type aliases
+    if (typeDefAny.type === "back_reference") {
+      validateBackReference(typeDefAny, `types.${typeName}`, schema, errors);
       return;
     }
 
@@ -370,16 +370,16 @@ function validateDiscriminatedUnion(
 }
 
 /**
- * Validate a pointer
+ * Validate a back_reference
  */
-function validatePointer(
+function validateBackReference(
   field: any,
   path: string,
   schema: BinarySchema,
   errors: ValidationError[]
 ): void {
   if (!field.storage) {
-    errors.push({ path: `${path} (${field.name})`, message: "Pointer missing 'storage' property" });
+    errors.push({ path: `${path} (${field.name})`, message: "Back reference missing 'storage' property" });
     return;
   }
 
@@ -387,12 +387,12 @@ function validatePointer(
   if (!validStorageTypes.includes(field.storage)) {
     errors.push({
       path: `${path} (${field.name})`,
-      message: `Invalid pointer storage type '${field.storage}' (must be uint8, uint16, or uint32, not uint64)`
+      message: `Invalid back reference storage type '${field.storage}' (must be uint8, uint16, or uint32, not uint64)`
     });
   }
 
   if (!field.offset_mask) {
-    errors.push({ path: `${path} (${field.name})`, message: "Pointer missing 'offset_mask' property" });
+    errors.push({ path: `${path} (${field.name})`, message: "Back reference missing 'offset_mask' property" });
   } else {
     // Validate offset_mask format
     if (!/^0x[0-9A-Fa-f]+$/.test(field.offset_mask)) {
@@ -427,24 +427,12 @@ function validatePointer(
     }
   }
 
-  if (!field.offset_from) {
-    errors.push({ path: `${path} (${field.name})`, message: "Pointer missing 'offset_from' property" });
-  } else {
-    const validOffsetFrom = ["message_start", "current_position"];
-    if (!validOffsetFrom.includes(field.offset_from)) {
-      errors.push({
-        path: `${path} (${field.name})`,
-        message: `Invalid offset_from value '${field.offset_from}' (must be 'message_start' or 'current_position')`
-      });
-    }
-  }
-
   if (!field.target_type) {
-    errors.push({ path: `${path} (${field.name})`, message: "Pointer missing 'target_type' property" });
+    errors.push({ path: `${path} (${field.name})`, message: "Back reference missing 'target_type' property" });
   } else if (!schema.types[field.target_type]) {
     errors.push({
       path: `${path} (${field.name})`,
-      message: `Pointer target_type '${field.target_type}' not found in schema.types`
+      message: `Back reference target_type '${field.target_type}' not found in schema.types`
     });
   }
 
@@ -459,7 +447,7 @@ function validatePointer(
   if ((field.storage === "uint16" || field.storage === "uint32") && !field.endianness) {
     errors.push({
       path: `${path} (${field.name})`,
-      message: `Endianness is required for ${field.storage} pointer storage`
+      message: `Endianness is required for ${field.storage} back reference storage`
     });
   }
 
@@ -652,9 +640,9 @@ function validateField(
     validateDiscriminatedUnion(field as any, path, schema, errors, parentFields);
   }
 
-  // Check pointer fields
-  if (fieldType === "pointer") {
-    validatePointer(field as any, path, schema, errors);
+  // Check back_reference fields
+  if (fieldType === "back_reference") {
+    validateBackReference(field as any, path, schema, errors);
   }
 
   // Check optional fields
@@ -745,9 +733,9 @@ function validateElementType(
     return;
   }
 
-  // Check pointer elements
-  if (elementType === "pointer") {
-    validatePointer(element, path, schema, errors);
+  // Check back_reference elements
+  if (elementType === "back_reference") {
+    validateBackReference(element, path, schema, errors);
     return;
   }
 
@@ -851,8 +839,8 @@ function findCircularDependency(
       }
     }
 
-    // Check pointer target_type for circular dependencies
-    if (typeDefAny.type === "pointer" && typeDefAny.target_type) {
+    // Check back_reference target_type for circular dependencies
+    if (typeDefAny.type === "back_reference" && typeDefAny.target_type) {
       if (schema.types[typeDefAny.target_type]) {
         const cycle = findCircularDependency(typeDefAny.target_type, schema, new Set(visited), [...path]);
         if (cycle) return cycle;
@@ -891,8 +879,8 @@ function findCircularDependency(
         }
       }
 
-      // Check pointer target type recursively
-      if (fieldType === "pointer" && "target_type" in field) {
+      // Check back_reference target type recursively
+      if (fieldType === "back_reference" && "target_type" in field) {
         const targetType = (field as any).target_type;
         if (targetType && !BUILT_IN_TYPES.includes(targetType)) {
           const cycle = findCircularDependency(targetType, schema, new Set(visited), [...path]);

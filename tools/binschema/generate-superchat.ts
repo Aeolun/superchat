@@ -4,10 +4,12 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve } from "path";
 import { generateTypeScript } from "./src/generators/typescript.js";
-import type { BinarySchema } from "./src/schema/binary-schema.js";
+import { defineBinarySchema, type BinarySchema } from "./src/schema/binary-schema.js";
+import JSON5 from "json5";
 
 const schemaPath = resolve(__dirname, "examples/superchat-types.json");
-const schema = JSON.parse(readFileSync(schemaPath, "utf-8")) as BinarySchema;
+const rawSchema = JSON5.parse(readFileSync(schemaPath, "utf-8")) as BinarySchema;
+const schema = defineBinarySchema(rawSchema);
 
 const generatedCode = generateTypeScript(schema);
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeMessageCode } from "./protocol-schema.js";
 
 /**
  * Binary Schema Definition
@@ -18,13 +19,6 @@ declare module "zod" {
     examples?: unknown[];     // Code examples showing usage
     use_for?: string;        // "Use for: X, Y, Z"
     wire_format?: string;    // Binary representation (for binary schemas)
-    fields?: Array<{         // Properties/fields that can be used with this type
-      name: string;          // Field name (e.g., "name", "type", "endianness")
-      type: string;          // Field type (e.g., "string", "literal", "enum")
-      required: boolean;     // Whether this field is required
-      description: string;   // Description of what this field does
-      default?: string;      // Default value if omitted
-    }>;
     code_generation?: {      // How this type is represented in generated code (for tabbed view per language)
       typescript?: {
         type: string;        // TypeScript type (e.g., "number", "bigint")
@@ -71,7 +65,9 @@ export type BitOrder = z.infer<typeof BitOrderSchema>;
  * Global configuration options
  */
 export const ConfigSchema = z.object({
-  endianness: EndiannessSchema.optional(),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
   bit_order: BitOrderSchema.optional(),
 }).optional();
 export type Config = z.infer<typeof ConfigSchema>;
@@ -84,31 +80,48 @@ export type Config = z.infer<typeof ConfigSchema>;
  * Bit field (1-64 bits, unsigned integer)
  */
 const BitFieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("bit"),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("bit").meta({
+    description: "Field type (always 'bit')"  
+  }),
   size: z.number().int().min(1).max(64),
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 /**
  * Signed integer field (1-64 bits)
  */
 const SignedIntFieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("int"),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("int").meta({
+    description: "Field type (always 'int')"  
+  }),
   size: z.number().int().min(1).max(64),
   signed: z.literal(true),
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 /**
  * Fixed-width unsigned integers (syntactic sugar for bit fields)
  */
 const Uint8FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("uint8"),
-  endianness: EndiannessSchema.optional(), // Override global
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("uint8").meta({
+    description: "Field type (always 'uint8')"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "8-bit Unsigned Integer",
   description: "Fixed-width 8-bit unsigned integer (0-255). Single byte, no endianness concerns.",
@@ -154,10 +167,18 @@ const Uint8FieldSchema = z.object({
 });
 
 const Uint16FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("uint16"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("uint16").meta({
+    description: "Field type (always 'uint16')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "16-bit Unsigned Integer",
   description: "Fixed-width 16-bit unsigned integer (0-65535). Respects endianness configuration (big-endian or little-endian).",
@@ -191,10 +212,18 @@ const Uint16FieldSchema = z.object({
 });
 
 const Uint32FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("uint32"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("uint32").meta({
+    description: "Field type (always 'uint32')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "32-bit Unsigned Integer",
   description: "Fixed-width 32-bit unsigned integer (0-4294967295). Respects endianness configuration.",
@@ -244,10 +273,18 @@ const Uint32FieldSchema = z.object({
 });
 
 const Uint64FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("uint64"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("uint64").meta({
+    description: "Field type (always 'uint64')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "64-bit Unsigned Integer",
   description: "Fixed-width 64-bit unsigned integer (0-18446744073709551615). Respects endianness configuration.",
@@ -303,13 +340,18 @@ const Uint64FieldSchema = z.object({
  * Fixed-width signed integers
  */
 const Int8FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("int8"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("int8").meta({
+    description: "Field type (always 'int8')"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "8-bit Signed Integer",
-  description: "Fixed-width 8-bit signed integer (-128 to 127). Uses two's complement representation.",
+  description: "Fixed-width 8-bit signed integer (-128 to 127). Single byte, no endianness concerns.",
   use_for: "Small signed values, temperature readings, coordinate offsets",
   wire_format: "1 byte, two's complement encoding",
   code_generation: {
@@ -333,10 +375,18 @@ const Int8FieldSchema = z.object({
 });
 
 const Int16FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("int16"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("int16").meta({
+    description: "Field type (always 'int16')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "16-bit Signed Integer",
   description: "Fixed-width 16-bit signed integer (-32768 to 32767). Respects endianness configuration.",
@@ -363,10 +413,18 @@ const Int16FieldSchema = z.object({
 });
 
 const Int32FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("int32"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("int32").meta({
+    description: "Field type (always 'int32')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "32-bit Signed Integer",
   description: "Fixed-width 32-bit signed integer (-2147483648 to 2147483647). Respects endianness configuration.",
@@ -393,10 +451,18 @@ const Int32FieldSchema = z.object({
 });
 
 const Int64FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("int64"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("int64").meta({
+    description: "Field type (always 'int64')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "64-bit Signed Integer",
   description: "Fixed-width 64-bit signed integer (-9223372036854775808 to 9223372036854775807). Respects endianness configuration.",
@@ -433,10 +499,18 @@ const Int64FieldSchema = z.object({
  * Floating point types
  */
 const Float32FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("float32"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("float32").meta({
+    description: "Field type (always 'float32')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "32-bit Floating Point",
   description: "IEEE 754 single-precision floating point (32-bit). Provides ~7 decimal digits of precision.",
@@ -471,10 +545,18 @@ const Float32FieldSchema = z.object({
 });
 
 const Float64FieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("float64"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("float64").meta({
+    description: "Field type (always 'float64')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "64-bit Floating Point",
   description: "IEEE 754 double-precision floating point (64-bit). Provides ~15 decimal digits of precision.",
@@ -538,97 +620,169 @@ export type StringEncoding = z.infer<typeof StringEncodingSchema>;
  */
 
 const BitElementSchema = z.object({
-  type: z.literal("bit"),
+  type: z.literal("bit").meta({
+    description: "Field type (always 'bit')"  
+  }),
   size: z.number().int().min(1).max(64),
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const SignedIntElementSchema = z.object({
-  type: z.literal("int"),
+  type: z.literal("int").meta({
+    description: "Field type (always 'int')"  
+  }),
   size: z.number().int().min(1).max(64),
   signed: z.literal(true),
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Uint8ElementSchema = z.object({
-  type: z.literal("uint8"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("uint8").meta({
+    description: "Field type (always 'uint8')"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Uint16ElementSchema = z.object({
-  type: z.literal("uint16"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("uint16").meta({
+    description: "Field type (always 'uint16')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Uint32ElementSchema = z.object({
-  type: z.literal("uint32"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("uint32").meta({
+    description: "Field type (always 'uint32')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Uint64ElementSchema = z.object({
-  type: z.literal("uint64"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("uint64").meta({
+    description: "Field type (always 'uint64')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Int8ElementSchema = z.object({
-  type: z.literal("int8"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("int8").meta({
+    description: "Field type (always 'int8')"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Int16ElementSchema = z.object({
-  type: z.literal("int16"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("int16").meta({
+    description: "Field type (always 'int16')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Int32ElementSchema = z.object({
-  type: z.literal("int32"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("int32").meta({
+    description: "Field type (always 'int32')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Int64ElementSchema = z.object({
-  type: z.literal("int64"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("int64").meta({
+    description: "Field type (always 'int64')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Float32ElementSchema = z.object({
-  type: z.literal("float32"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("float32").meta({
+    description: "Field type (always 'float32')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 const Float64ElementSchema = z.object({
-  type: z.literal("float64"),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+  type: z.literal("float64").meta({
+    description: "Field type (always 'float64')"  
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 /**
  * Optional element schema (optional without name - for array items)
  */
 const OptionalElementSchema = z.object({
-  type: z.literal("optional"),
+  type: z.literal("optional").meta({
+    description: "Field type (always 'optional')"  
+  }),
   value_type: z.string(), // The wrapped type (can be primitive or type reference)
   presence_type: z.enum(["uint8", "bit"]).optional().default("uint8"), // Type of presence indicator (uint8 = 1 byte, bit = 1 bit)
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 /**
  * Optional field schema (optional with name - for struct fields)
  */
 const OptionalFieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("optional"),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("optional").meta({
+    description: "Field type (always 'optional')"  
+  }),
   value_type: z.string(), // The wrapped type (can be primitive or type reference)
   presence_type: z.enum(["uint8", "bit"]).optional().default("uint8"), // Type of presence indicator (uint8 = 1 byte, bit = 1 bit)
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "Optional",
   description: "Field that may or may not be present. Uses a presence indicator (byte or bit) followed by the value if present.",
@@ -666,7 +820,9 @@ const OptionalFieldSchema = z.object({
  */
 const TypeRefElementSchema = z.object({
   type: z.string(),
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 /**
@@ -675,7 +831,9 @@ const TypeRefElementSchema = z.object({
 const DiscriminatedUnionVariantSchema = z.object({
   when: z.string().optional(), // Condition expression (e.g., "value >= 0xC0"), optional for fallback
   type: z.string(), // Type name to parse if condition matches
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 /**
@@ -703,30 +861,95 @@ const DiscriminatorSchema = z.union([
  * Discriminated union element (without name - for type aliases)
  */
 const DiscriminatedUnionElementSchema = z.object({
-  type: z.literal("discriminated_union"),
+  type: z.literal("discriminated_union").meta({
+    description: "Field type (always 'discriminated_union')"  
+  }),
   discriminator: DiscriminatorSchema,
   variants: z.array(DiscriminatedUnionVariantSchema).min(1),
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 /**
- * Pointer element (without name - for type aliases)
+ * Back reference element (without name - for type aliases)
+ * Used for compression via backwards references (like DNS name compression)
  */
-const PointerElementSchema = z.object({
-  type: z.literal("pointer"),
-  storage: z.enum(["uint8", "uint16", "uint32"]),
-  offset_mask: z.string(),
-  offset_from: z.enum(["message_start", "current_position"]),
-  target_type: z.string(),
-  endianness: EndiannessSchema.optional(),
-  description: z.string().optional(),
+const BackReferenceElementSchema = z.object({
+  type: z.literal("back_reference").meta({
+    description: "Type identifier (always 'back_reference')"
+  }),
+  storage: z.enum(["uint8", "uint16", "uint32"]).meta({
+    description: "Integer type used to store the offset on the wire (uint8 = 1 byte, uint16 = 2 bytes, uint32 = 4 bytes)"
+  }),
+  offset_mask: z.string().regex(/^0x[0-9A-Fa-f]+$/, "Must be a valid hex mask (e.g., '0x3FFF')").meta({
+    description: "Hex bitmask to extract offset bits from the storage integer (e.g., '0x3FFF' extracts lower 14 bits). Allows packing flags or type tags in unused bits."
+  }),
+  target_type: z.string().meta({
+    description: "Name of the type to parse at the referenced offset location. When decoder jumps to the offset, it will decode this type."
+  }),
+  endianness: EndiannessSchema.optional().meta({
+    description: "Byte order for multi-byte storage types (required for uint16/uint32, meaningless for uint8)"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this back reference field"
+  }),
+});
+
+/**
+ * Back reference field (with name - for struct fields)
+ * Extends the element schema with a name field
+ */
+const BackReferenceFieldSchema = BackReferenceElementSchema.extend({
+  name: z.string().meta({
+    description: "Field name"
+  }),
+}).meta({
+  title: "Back Reference",
+  description: "Backward reference to data at an earlier position in the message. Used for compression via backwards references (like DNS name compression). Offset is always from message start.",
+  use_for: "Message compression, duplicate data elimination, backwards references, deduplication",
+  wire_format: "Storage integer with offset bits (extracted via mask). Offset points backwards to earlier data in message (measured from message start).",
+
+  code_generation: {
+    typescript: {
+      type: "T (resolved value)",
+      notes: ["TypeScript uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
+    },
+    go: {
+      type: "T (resolved value)",
+      notes: ["Go uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
+    },
+    rust: {
+      type: "T (resolved value)",
+      notes: ["Rust uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
+    }
+  },
+  notes: [
+    "offset_mask extracts offset bits (allows packing flags in unused bits)",
+    "Offset is always measured from message start (backwards only)",
+    "Cannot reference data that comes later (no forward references)",
+    "Common in DNS (name compression) and other protocols with repeated data"
+  ],
+  examples: [
+    {
+      name: "domain_name_ref",
+      type: "back_reference",
+      storage: "uint16",
+      offset_mask: "0x3FFF",
+      target_type: "DomainName",
+      endianness: "big_endian",
+      description: "Compressed domain name (DNS-style)"
+    }
+  ]
 });
 
 /**
  * Array element schema (array without name - for nested arrays)
  */
 const ArrayElementSchema = z.object({
-  type: z.literal("array"),
+  type: z.literal("array").meta({
+    description: "Field type (always 'array')"  
+  }),
   kind: ArrayKindSchema,
   get items() {
     return ElementTypeSchema; // Recursive reference
@@ -738,7 +961,9 @@ const ArrayElementSchema = z.object({
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
   terminal_variants: z.array(z.string()).optional(), // Optional: variant types that terminate the array (no null terminator after)
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).refine(
   (data) => {
     if (data.kind === "fixed") return data.length !== undefined;
@@ -756,12 +981,16 @@ const ArrayElementSchema = z.object({
  * String element schema (string without name - for array items)
  */
 const StringElementSchema = z.object({
-  type: z.literal("string"),
+  type: z.literal("string").meta({
+    description: "Field type (always 'string')"  
+  }),
   kind: ArrayKindSchema,
   encoding: StringEncodingSchema.optional().default("utf8"),
   length: z.number().int().min(1).optional(), // For fixed length
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).refine(
   (data) => {
     if (data.kind === "fixed") return data.length !== undefined;
@@ -796,7 +1025,7 @@ const ElementTypeSchema: z.ZodType<any> = z.union([
     ArrayElementSchema, // Support nested arrays
     StringElementSchema, // Support strings
     DiscriminatedUnionElementSchema, // Support discriminated unions
-    PointerElementSchema, // Support pointers
+    BackReferenceElementSchema, // Support back references
   ]),
   // Type reference for user-defined types
   TypeRefElementSchema,
@@ -807,8 +1036,12 @@ const ElementTypeSchema: z.ZodType<any> = z.union([
  * Note: Uses getter for recursive 'items' reference (Zod 4 pattern)
  */
 const ArrayFieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("array"),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("array").meta({
+    description: "Field type (always 'array')"  
+  }),
   kind: ArrayKindSchema,
   get items() {
     return ElementTypeSchema; // Recursive: array of element types (no name required)
@@ -820,7 +1053,9 @@ const ArrayFieldSchema = z.object({
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
   terminal_variants: z.array(z.string()).optional(), // Optional: variant types that terminate the array (no null terminator after)
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).refine(
   (data) => {
     if (data.kind === "fixed") return data.length !== undefined;
@@ -869,13 +1104,19 @@ const ArrayFieldSchema = z.object({
  * String field (variable or fixed length)
  */
 const StringFieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("string"),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("string").meta({
+    description: "Field type (always 'string')"  
+  }),
   kind: ArrayKindSchema,
   encoding: StringEncodingSchema.optional().default("utf8"),
   length: z.number().int().min(1).optional(), // For fixed length
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).refine(
   (data) => {
     if (data.kind === "fixed") return data.length !== undefined;
@@ -922,11 +1163,17 @@ const StringFieldSchema = z.object({
  * Choose type variant based on discriminator value (peek or field-based)
  */
 const DiscriminatedUnionFieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("discriminated_union"),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("discriminated_union").meta({
+    description: "Field type (always 'discriminated_union')"  
+  }),
   discriminator: DiscriminatorSchema,
   variants: z.array(DiscriminatedUnionVariantSchema).min(1),
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "Discriminated Union",
   description: "Type that can be one of several variants, chosen based on a discriminator value. Supports peek-based (read ahead) or field-based (reference earlier field) discrimination.",
@@ -966,71 +1213,30 @@ const DiscriminatedUnionFieldSchema = z.object({
 });
 
 /**
- * Pointer field (for compression via backwards references)
- */
-const PointerFieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("pointer"),
-  storage: z.enum(["uint8", "uint16", "uint32"]), // How pointer is stored
-  offset_mask: z.string(), // Bit mask to extract offset (e.g., "0x3FFF")
-  offset_from: z.enum(["message_start", "current_position"]), // Offset calculation
-  target_type: z.string(), // Type to parse at offset
-  endianness: EndiannessSchema.optional(), // Required for uint16/uint32
-  description: z.string().optional(),
-}).meta({
-  title: "Pointer",
-  description: "Reference to data at another position in the message. Used for compression via backwards references (like DNS name compression).",
-  use_for: "Message compression, duplicate data elimination, backwards references",
-  wire_format: "Storage integer with offset bits (extracted via mask). Points to earlier data in message.",
-  
-  code_generation: {
-    typescript: {
-      type: "T (resolved value)",
-      notes: ["TypeScript uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
-    },
-    go: {
-      type: "T (resolved value)",
-      notes: ["Go uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
-    },
-    rust: {
-      type: "T (resolved value)",
-      notes: ["Rust uses resolved value, not pointer", "Encoder handles deduplication", "Type T depends on target_type field"]
-    }
-  },
-  notes: [
-    "offset_mask extracts offset bits (allows packing flags in unused bits)",
-    "offset_from=message_start: offset is from beginning of message",
-    "offset_from=current_position: offset is relative to current position",
-    "Common in DNS (name compression) and other protocols with repeated data"
-  ],
-  examples: [
-    {
-      name: "name_ref",
-      type: "pointer",
-      storage: "uint16",
-      offset_mask: "0x3FFF",
-      offset_from: "message_start",
-      target_type: "DomainName",
-      endianness: "big_endian"
-    }
-  ]
-});
-
-/**
  * Bitfield container (pack multiple bit-level fields)
  */
 const BitfieldFieldSchema = z.object({
-  name: z.string(),
-  type: z.literal("bitfield"),
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("bitfield").meta({
+    description: "Field type (always 'bitfield')"  
+  }),
   size: z.number().int().min(1), // Total bits
   bit_order: BitOrderSchema.optional(), // Override global
   fields: z.array(z.object({
-    name: z.string(),
+    name: z.string().meta({
+      description: "Field name"
+    }),
     offset: z.number().int().min(0), // Bit offset within bitfield
     size: z.number().int().min(1),   // Bits used
-    description: z.string().optional(),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
   })),
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "Bitfield",
   description: "Container for packing multiple bit-level fields into a compact byte-aligned structure. Allows precise bit-level control.",
@@ -1071,19 +1277,27 @@ const BitfieldFieldSchema = z.object({
  * Note: This MUST be last in the FieldTypeRefSchema union to avoid matching built-in types
  */
 const TypeRefFieldSchema = z.object({
-  name: z.string(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
   type: z.string(), // Name of another type or generic like "Optional<uint64>"
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 
 /**
  * Conditional field (only present if condition is true)
  */
 const ConditionalFieldSchema = z.object({
-  name: z.string(),
+  name: z.string().meta({
+    description: "Field name"
+  }),
   type: z.string(),
   conditional: z.string(), // Expression like "flags.present == 1"
-  description: z.string().optional(),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 }).meta({
   title: "Conditional Field",
   description: "Field that is only present on the wire if a condition evaluates to true. Condition references earlier fields.",
@@ -1154,7 +1368,7 @@ const FieldTypeRefSchema: z.ZodType<any> = z.union([
     StringFieldSchema,
     BitfieldFieldSchema,
     DiscriminatedUnionFieldSchema,
-    PointerFieldSchema,
+    BackReferenceFieldSchema,
   ]),
 
   // Third: Fallback to type reference for user-defined types
@@ -1221,8 +1435,24 @@ export type TypeDef = z.infer<typeof TypeDefSchema>;
  */
 const MessageGroupSchema = z.object({
   name: z.string(), // Group name (e.g., "Authentication", "Messaging")
-  messages: z.array(z.string()), // Message codes in this group
-  description: z.string().optional(),
+  messages: z.array(z.union([z.string(), z.number()])).transform((values, ctx) => {
+    const normalized: string[] = [];
+    values.forEach((value, index) => {
+      try {
+        normalized.push(normalizeMessageCode(value as string | number));
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index],
+          message: err instanceof Error ? err.message : "Invalid message code value",
+        });
+      }
+    });
+    return normalized;
+  }), // Message codes in this group (normalized to hex)
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
 });
 export type MessageGroup = z.infer<typeof MessageGroupSchema>;
 
@@ -1240,7 +1470,17 @@ export type ProtocolConstant = z.infer<typeof ProtocolConstantSchema>;
  * Protocol message definition
  */
 const ProtocolMessageSchema = z.object({
-  code: z.string(), // Message type code (e.g., "0x00", "0x01")
+  code: z.union([z.string(), z.number()]).transform((value, ctx) => {
+    try {
+      return normalizeMessageCode(value as string | number);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: err instanceof Error ? err.message : "Invalid message code value",
+      });
+      return z.NEVER;
+    }
+  }), // Message type code (normalized hex string, e.g., "0x00")
   name: z.string(), // Human-readable name (e.g., "Query", "Response")
   direction: z.enum(["client_to_server", "server_to_client", "bidirectional"]).optional(), // Message direction
   payload_type: z.string(), // Type name from schema.types
@@ -1322,7 +1562,7 @@ function validateTerminalVariants(schema: any): { valid: boolean; error?: string
 
       // If items is a type reference (string), resolve it
       let itemsTypeDef = itemsType;
-      if (typeof itemsType === "string" || (itemsType.type && typeof itemsType.type === "string" && !["array", "discriminated_union", "pointer"].includes(itemsType.type))) {
+      if (typeof itemsType === "string" || (itemsType.type && typeof itemsType.type === "string" && !["array", "discriminated_union", "back_reference"].includes(itemsType.type))) {
         const refTypeName = typeof itemsType === "string" ? itemsType : itemsType.type;
         itemsTypeDef = schema.types[refTypeName];
         if (!itemsTypeDef) {

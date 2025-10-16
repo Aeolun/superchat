@@ -51,8 +51,8 @@ export interface ProtocolSchema {
 }
 
 export interface ProtocolMessage {
-  /** Message type code (e.g., "0x01", "0x81") */
-  code: string;
+  /** Message type code (e.g., "0x01", "0x81") or integer */
+  code: string | number;
 
   /** Message name (e.g., "AUTH_REQUEST") */
   name: string;
@@ -88,7 +88,7 @@ export interface MessageGroup {
   name: string;
 
   /** Message codes in this group */
-  messages: string[];
+  messages: Array<string | number>;
 
   /** Optional description */
   description?: string;
@@ -103,6 +103,52 @@ export interface ProtocolConstant {
 
   /** Optional: Associated type */
   type?: string;
+}
+
+/**
+ * Normalize a protocol message code to uppercase hex string (e.g., 0x01)
+ */
+export function normalizeMessageCode(code: string | number): string {
+  const ensureEvenLength = (hex: string) => (hex.length % 2 === 1 ? `0${hex}` : hex);
+
+  if (typeof code === "number") {
+    if (!Number.isFinite(code) || !Number.isInteger(code)) {
+      throw new Error(`Message code numeric value must be a finite integer (received ${code}).`);
+    }
+    if (code < 0) {
+      throw new Error(`Message code numeric value must be non-negative (received ${code}).`);
+    }
+    if (code > Number.MAX_SAFE_INTEGER) {
+      throw new Error(`Message code ${code} exceeds MAX_SAFE_INTEGER and cannot be represented safely.`);
+    }
+    const hexDigits = ensureEvenLength(code.toString(16).toUpperCase());
+    return `0x${hexDigits}`;
+  }
+
+  const trimmed = code.trim();
+  const match = trimmed.match(/^0x([0-9a-fA-F]+)$/);
+  if (!match) {
+    throw new Error(`Message code '${code}' must be a hex value like 0x01 or an integer.`);
+  }
+  const hexDigits = ensureEvenLength(match[1].toUpperCase());
+  return `0x${hexDigits}`;
+}
+
+/**
+ * Normalize all message and group codes in place.
+ */
+export function normalizeProtocolSchemaInPlace(schema: ProtocolSchema): void {
+  schema.protocol.messages = schema.protocol.messages.map((msg) => ({
+    ...msg,
+    code: normalizeMessageCode(msg.code),
+  }));
+
+  if (schema.protocol.message_groups) {
+    schema.protocol.message_groups = schema.protocol.message_groups.map((group) => ({
+      ...group,
+      messages: group.messages.map((code) => normalizeMessageCode(code)),
+    }));
+  }
 }
 
 /**
@@ -239,10 +285,24 @@ export function validateProtocolSchemaWithTypes(
     }
   }
 
-  // Validate all payload_type references exist
+  // Validate all payload_type references exist and normalize codes
   const messageCodes = new Set<string>();
   for (let i = 0; i < protocol.messages.length; i++) {
     const msg = protocol.messages[i];
+    let normalizedCode: string;
+
+    try {
+      normalizedCode = normalizeMessageCode(msg.code);
+    } catch (err) {
+      errors.push({
+        path: `protocol.messages[${i}].code`,
+        message: err instanceof Error ? err.message : `Invalid message code '${msg.code}' for message '${msg.name}'`
+      });
+      continue;
+    }
+
+    // Persist normalized code for downstream tooling
+    (protocol.messages[i] as ProtocolMessage).code = normalizedCode;
 
     // Check payload type exists
     if (!binarySchema.types[msg.payload_type]) {
@@ -252,22 +312,33 @@ export function validateProtocolSchemaWithTypes(
       });
     }
 
-    // Check message code is valid hex
-    if (!/^0x[0-9A-Fa-f]+$/.test(msg.code)) {
-      errors.push({
-        path: `protocol.messages[${i}].code`,
-        message: `Message code '${msg.code}' for message '${msg.name}' is not valid hex (must start with 0x)`
-      });
-    }
-
     // Check for duplicate message codes
-    if (messageCodes.has(msg.code)) {
+    if (messageCodes.has(normalizedCode)) {
       errors.push({
         path: `protocol.messages[${i}].code`,
-        message: `Duplicate message code '${msg.code}' for message '${msg.name}'`
+        message: `Duplicate message code '${normalizedCode}' for message '${msg.name}'`
       });
     }
-    messageCodes.add(msg.code);
+    messageCodes.add(normalizedCode);
+  }
+  if (protocol.message_groups) {
+    protocol.message_groups = protocol.message_groups.map((group, groupIndex) => {
+      const normalizedMessages: string[] = [];
+      group.messages.forEach((code, messageIndex) => {
+        try {
+          normalizedMessages.push(normalizeMessageCode(code));
+        } catch (err) {
+          errors.push({
+            path: `protocol.message_groups[${groupIndex}].messages[${messageIndex}]`,
+            message: err instanceof Error ? err.message : "Invalid message code value"
+          });
+        }
+      });
+      return {
+        ...group,
+        messages: normalizedMessages
+      };
+    });
   }
 
   return {

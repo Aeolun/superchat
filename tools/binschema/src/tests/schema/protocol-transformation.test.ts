@@ -97,6 +97,57 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
     }
   },
 
+  {
+    description: "Protocol transformation with numeric message codes",
+    shouldSucceed: true,
+    protocolSchema: {
+      protocol: {
+        name: "Numeric Codes",
+        version: "1.0",
+        types_schema: "types.json",
+        header_format: "FrameHeader",
+        discriminator_field: "message_type",
+        messages: [
+          { code: 0x10, name: "PING", direction: "client_to_server", payload_type: "PingPayload", description: "Ping" },
+          { code: 0x90, name: "PONG", direction: "server_to_client", payload_type: "PongPayload", description: "Pong" },
+        ]
+      }
+    },
+    binarySchema: {
+      types: {
+        "FrameHeader": {
+          sequence: [
+            { name: "length", type: "uint32", endianness: "big_endian" },
+            { name: "message_type", type: "uint8" },
+          ]
+        },
+        "PingPayload": { sequence: [{ name: "timestamp", type: "uint64" }] },
+        "PongPayload": { sequence: [{ name: "timestamp", type: "uint64" }] }
+      }
+    },
+    expectedOutput: {
+      combinedTypeName: "Frame",
+      combinedType: {
+        sequence: [
+          { name: "length", type: "uint32", endianness: "big_endian" },
+          { name: "message_type", type: "uint8" },
+          {
+            name: "payload",
+            type: "discriminated_union",
+            discriminator: {
+              field: "message_type"
+            },
+            variants: [
+              { when: "value == 0x10", type: "PingPayload" },
+              { when: "value == 0x90", type: "PongPayload" },
+            ]
+          }
+        ],
+        description: "Auto-generated combined frame type for Numeric Codes"
+      }
+    }
+  },
+
   // ==========================================================================
   // Single Message (Degenerate Case)
   // ==========================================================================

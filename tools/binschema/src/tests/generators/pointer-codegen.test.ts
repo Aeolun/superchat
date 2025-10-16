@@ -38,7 +38,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
           ]
         },
         "LabelPointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -89,7 +89,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Data": { sequence: [{ name: "byte", type: "uint8" }] },
         "Pointer8": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint8",
           offset_mask: "0x7F",
           offset_from: "message_start",
@@ -122,7 +122,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "LargeData": { sequence: [{ name: "value", type: "uint32", endianness: "big_endian" }] },
         "Pointer32BE": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint32",
           offset_mask: "0x7FFFFFFF",
           offset_from: "message_start",
@@ -150,7 +150,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Data": { sequence: [{ name: "value", type: "uint8" }] },
         "PointerLE": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -181,7 +181,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Target": { sequence: [{ name: "data", type: "uint8" }] },
         "RelativePointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0xFFFF",
           offset_from: "current_position",
@@ -219,7 +219,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Leaf": { sequence: [{ name: "value", type: "uint8" }] },
         "PointerToLeaf": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -227,7 +227,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
           endianness: "big_endian"
         } as any,
         "PointerToPointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -263,7 +263,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Label": { sequence: [{ name: "text", type: "uint8" }] },
         "LabelPtr": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -309,7 +309,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
           ]
         },
         "StringPtr": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -357,7 +357,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Data": { sequence: [{ name: "value", type: "uint8" }] },
         "DataPointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -391,7 +391,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Target": { sequence: [{ name: "data", type: "uint8" }] },
         "MaskedPointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x0FFF", // Only 12 bits for offset (top 4 bits used for flags)
           offset_from: "message_start",
@@ -427,7 +427,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
           ]
         },
         "SelfPointerRef": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -461,7 +461,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Leaf": { sequence: [{ name: "value", type: "uint8" }] },
         "DeepPointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -490,7 +490,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "Data": { sequence: [{ name: "value", type: "uint8" }] },
         "Ptr": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",
@@ -522,7 +522,7 @@ const POINTER_CODEGEN_TESTS: CodegenTestCase[] = [
       types: {
         "SafeData": { sequence: [{ name: "byte", type: "uint8" }] },
         "SafePointer": {
-          type: "pointer",
+          type: "back_reference",
           storage: "uint16",
           offset_mask: "0x3FFF",
           offset_from: "message_start",

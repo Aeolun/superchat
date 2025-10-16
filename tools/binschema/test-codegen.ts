@@ -9,7 +9,7 @@ const schema = {
       ]
     },
     "LabelPointer": {
-      type: "pointer",
+      type: "back_reference",
       storage: "uint16",
       offset_mask: "0x3FFF",
       offset_from: "message_start",
