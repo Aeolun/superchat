@@ -1388,27 +1388,18 @@ export type Field = z.infer<typeof FieldSchema>;
 /**
  * Composite type with sequence of fields
  *
- * Supports both 'sequence' (new format) and 'fields' (backwards compatibility).
  * A composite type represents an ordered sequence of types on the wire.
  */
-const CompositeTypeSchema = z.union([
-  // New format with 'sequence' - represents ordered byte sequence
-  z.object({
-    sequence: z.array(FieldSchema),
-    description: z.string().optional(),
-  }),
-  // Backwards compatibility with 'fields'
-  z.object({
-    fields: z.array(FieldSchema),
-    description: z.string().optional(),
-  })
-]);
+const CompositeTypeSchema = z.object({
+  sequence: z.array(FieldSchema),
+  description: z.string().optional(),
+});
 
 /**
  * Type definition - either composite or type alias
  *
  * A type can be:
- * 1. Composite type: Has a 'sequence' (or 'fields') of named types that appear in order on the wire
+ * 1. Composite type: Has a 'sequence' of named types that appear in order on the wire
  *    Example: AuthRequest is a sequence of [String nickname, String password]
  *
  * 2. Type alias: Directly references a type/primitive without wrapping
@@ -1537,7 +1528,7 @@ function getDiscriminatedUnionVariants(typeDef: any): string[] {
 function validateTerminalVariants(schema: any): { valid: boolean; error?: string } {
   // Walk through all types and find arrays with terminal_variants
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
-    // Check if this is an array type (either top-level or nested in sequence/fields)
+    // Check if this is an array type (either top-level or nested in sequence)
     const checkArray = (arrayDef: any, path: string) => {
       if (!arrayDef || arrayDef.type !== "array" || !arrayDef.terminal_variants) {
         return { valid: true };
@@ -1609,8 +1600,8 @@ function validateTerminalVariants(schema: any): { valid: boolean; error?: string
       return result;
     }
 
-    // Check fields/sequence for array fields
-    const fields = (typeDef as any).sequence || (typeDef as any).fields;
+    // Check sequence for array fields
+    const fields = (typeDef as any).sequence;
     if (Array.isArray(fields)) {
       for (const field of fields) {
         if (field.type === "array") {

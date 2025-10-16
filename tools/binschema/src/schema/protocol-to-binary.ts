@@ -135,11 +135,8 @@ export function transformProtocolToBinary(
   };
 }
 
-/**
- * Helper: Get fields from a type definition (handles both 'sequence' and 'fields')
- */
+/** Helper: Get fields from a type definition */
 function getFieldsFromType(typeDef: any): any[] {
   if (typeDef.sequence) return typeDef.sequence;
-  if (typeDef.fields) return typeDef.fields;
   return [];
 }

@@ -13,24 +13,21 @@ const EXAMPLES = [
     id: 'superchat',
     name: 'SuperChat Protocol',
     description: 'End-to-end frame format for the SuperChat messaging stack.',
-    schema: 'examples/superchat-protocol.json',
-    types: 'examples/superchat-types.json',
+    schema: 'examples/superchat.schema.json',
     docs: 'examples/protocol-docs.html'
   },
   {
     id: 'dns',
     name: 'DNS RFC 1035',
     description: 'Complete DNS message implementation including compression pointers.',
-    schema: 'examples/dns-protocol.json',
-    types: 'examples/dns-types.json',
+    schema: 'examples/dns.schema.json',
     docs: 'examples/dns-docs.html'
   },
   {
     id: 'sensornet',
     name: 'SensorNet Telemetry',
     description: 'Binary telemetry format for low-power sensor networks.',
-    schema: 'examples/sensornet-protocol.json',
-    types: 'examples/sensornet-types.json',
+    schema: 'examples/sensornet.schema.json',
     docs: 'examples/sensornet-docs.html'
   }
 ];
@@ -287,16 +284,6 @@ const selectExample = (exampleId) => {
   highlightActiveExample(exampleId);
 
   const previewEl = document.querySelector('#example-preview');
-  const typesLink = example.types
-    ? `<a href="${example.types}" target="_blank" rel="noreferrer">Shared Types JSON</a>`
-    : '';
-  const typesDetails = example.types
-    ? `<details class="example-json">
-      <summary>Shared Types</summary>
-      <pre><code id="example-types-json">Loading types…</code></pre>
-    </details>`
-    : '';
-
   previewEl.innerHTML = `
     <div class="example-meta">
       <div>
@@ -304,8 +291,7 @@ const selectExample = (exampleId) => {
         <p>${example.description}</p>
       </div>
       <div class="example-links">
-        <a href="${example.schema}" target="_blank" rel="noreferrer">Protocol Schema JSON</a>
-        ${typesLink}
+        <a href="${example.schema}" target="_blank" rel="noreferrer">Schema JSON</a>
         <a href="${example.docs}" target="_blank" rel="noreferrer">Generated Docs (raw)</a>
       </div>
     </div>
@@ -314,20 +300,15 @@ const selectExample = (exampleId) => {
       <iframe id="example-doc-frame" title="${example.name} documentation" class="embedded-doc"></iframe>
     </div>
     <details class="example-json" open>
-      <summary>Protocol Schema</summary>
+      <summary>Schema JSON</summary>
       <pre><code id="example-schema-json">Loading schema…</code></pre>
     </details>
-    ${typesDetails}
   `;
 
   const schemaTarget = previewEl.querySelector('#example-schema-json');
-  const typesTarget = previewEl.querySelector('#example-types-json');
 
   loadExampleDocumentation(example, previewEl);
-  loadExampleJson(example.schema, schemaTarget, `${example.name} protocol schema`);
-  if (example.types && typesTarget) {
-    loadExampleJson(example.types, typesTarget, `${example.name} shared types`);
-  }
+  loadExampleJson(example.schema, schemaTarget, `${example.name} schema`);
 };
 
 const init = async () => {

@@ -141,7 +141,7 @@ Now `String` IS the array, not a struct containing it.
    ```
 
 2. Update example schemas:
-   - `examples/superchat-types.json`
+   - `examples/superchat.schema.json`
    - Convert `String`, `Optional<T>` to type aliases
 
 3. Run full test suite:

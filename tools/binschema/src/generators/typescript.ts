@@ -245,15 +245,15 @@ function generateFunctionalTypeCode(
 }
 
 /**
- * Check if a type is a composite (has sequence/fields) or a type alias
+ * Check if a type is a composite (has sequence) or a type alias
  * Note: Standalone array types (type: "array") and string types (type: "string")
  * are NOT aliases - they need encoder/decoder functions
  */
 function isTypeAlias(typeDef: TypeDef): boolean {
   const typeDefAny = typeDef as any;
 
-  // Types with sequence or fields are composite types
-  if ('sequence' in typeDef || 'fields' in typeDef) {
+  // Types with sequence are composite types
+  if ('sequence' in typeDef) {
     return false;
   }
 
@@ -266,15 +266,10 @@ function isTypeAlias(typeDef: TypeDef): boolean {
   return true;
 }
 
-/**
- * Get fields from a type definition (handles both 'sequence' and 'fields')
- */
+/** Get fields from a type definition */
 function getTypeFields(typeDef: TypeDef): Field[] {
   if ('sequence' in typeDef && (typeDef as any).sequence) {
     return (typeDef as any).sequence;
-  }
-  if ('fields' in typeDef && (typeDef as any).fields) {
-    return (typeDef as any).fields;
   }
   return [];
 }

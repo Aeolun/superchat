@@ -1,14 +1,56 @@
 {
+  "config": {
+    "endianness": "little_endian"
+  },
+  "types": {
+    "Packet": {
+      "description": "All packets use this header format",
+      "sequence": [
+        { "name": "size", "type": "uint16" },
+        { "name": "msg_type", "type": "uint8" },
+        { "name": "device_id", "type": "uint32" },
+        { "name": "sequence_num", "type": "uint16" }
+      ]
+    },
+    "Optional<T>": {
+      "description": "Optional field with presence byte",
+      "sequence": [
+        { "name": "present", "type": "uint8" },
+        { "name": "value", "type": "T", "conditional": "present == 1" }
+      ]
+    },
+    "SensorReading": {
+      "description": "Sensor data reading",
+      "sequence": [
+        { "name": "sensor_type", "type": "bit", "size": 4 },
+        { "name": "battery_low", "type": "bit", "size": 1 },
+        { "name": "error", "type": "bit", "size": 1 },
+        { "name": "reserved", "type": "bit", "size": 2 },
+        { "name": "timestamp", "type": "uint32" },
+        { "name": "value", "type": "float32" },
+        { "name": "location", "type": "Optional<uint32>" }
+      ]
+    },
+    "ConfigUpdate": {
+      "description": "Configuration update command",
+      "sequence": [
+        { "name": "interval", "type": "uint16" },
+        { "name": "threshold", "type": "float32" }
+      ]
+    },
+    "Acknowledgment": {
+      "description": "Generic acknowledgment",
+      "sequence": [
+        { "name": "status", "type": "uint8" }
+      ]
+    }
+  },
   "protocol": {
     "name": "SensorNet Protocol",
     "version": "2.0",
-    "types_schema": "./sensornet-types.json",
     "description": "A lightweight binary protocol for IoT sensor devices to report telemetry data to a central hub.",
-
-    "header_format": "Packet",
-
+    "header": "Packet",
     "header_size_field": "size",
-
     "header_example": {
       "decoded": {
         "msg_type": 1,
@@ -16,13 +58,12 @@
         "sequence_num": 42
       }
     },
-
+    "discriminator": "msg_type",
     "field_descriptions": {
       "Packet.size": "Total size of the packet excluding the size field itself (2 bytes)",
       "Packet.msg_type": "Message type identifier (1-255)",
       "Packet.device_id": "Unique device identifier assigned during provisioning",
       "Packet.sequence_num": "Incrementing sequence number for duplicate detection",
-
       "SensorReading.sensor_type": "Sensor type: 0=temperature, 1=humidity, 2=pressure, 3=light, etc.",
       "SensorReading.battery_low": "Battery low warning flag (1=low, 0=normal)",
       "SensorReading.error": "Error flag (1=sensor error, 0=normal)",
@@ -30,20 +71,16 @@
       "SensorReading.timestamp": "Unix timestamp in seconds (device time)",
       "SensorReading.value": "Sensor reading value (interpretation depends on sensor_type)",
       "SensorReading.location": "Optional GPS location ID (present if device has GPS enabled)",
-
       "ConfigUpdate.interval": "Reporting interval in seconds",
       "ConfigUpdate.threshold": "Alert threshold value",
-
       "Acknowledgment.status": "Status code: 0=success, 1=error, 2=retry"
     },
-
     "notes": [
       "All multi-byte integers use **little-endian** byte order.",
       "Devices must increment sequence_num for each packet sent.",
       "Hub responds to SENSOR_READING with ACK if status is abnormal.",
       "Maximum packet size is 256 bytes."
     ],
-
     "messages": [
       {
         "code": "0x01",

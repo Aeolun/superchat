@@ -786,7 +786,7 @@
       <h3>Type Definitions</h3>
       <p>Each entry in the <code>types</code> map defines a reusable structure or alias:</p>
       <ul>
-        <li>Composite types use <code>sequence</code> (or legacy <code>fields</code>) to describe ordered fields on the wire.</li>
+        <li>Composite types use <code>sequence</code> to describe ordered fields on the wire.</li>
         <li>Type aliases reference another type or primitive directly and inherit its wire format &mdash; useful for strings, arrays, or simple wrappers.</li>
         <li>All field definitions ultimately resolve to the built-in type primitives documented later in this guide.</li>
         <li>Type names must start with an uppercase letter; BinSchema enforces this to prevent clashes with built-in primitives.</li>

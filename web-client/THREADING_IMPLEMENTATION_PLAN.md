@@ -206,7 +206,7 @@ UNSUBSCRIBE_THREAD (0x17) - Unsubscribe from thread
 SUBSCRIBE_OK (0x99) - Server confirms subscription
 ```
 
-**File:** `tools/binschema/examples/superchat-types.json`
+**File:** `tools/binschema/examples/superchat.schema.json`
 
 **Schema additions needed:**
 - [x] Check if SUBSCRIBE_CHANNEL/THREAD messages exist in schema
@@ -331,7 +331,7 @@ SUBSCRIBE_OK (0x99) - Server confirms subscription
 
 ## Files That Need Changes
 
-1. ✅ `tools/binschema/examples/superchat-types.json` - Already has message types
+1. ✅ `tools/binschema/examples/superchat.schema.json` - Already has message types
 2. ⏳ `web-client/src/main.ts` - Main implementation (bulk of work)
 3. ⏳ `web-client/index.html` - HTML structure changes
 4. ⏳ `web-client/index.html` - CSS additions (inline styles)

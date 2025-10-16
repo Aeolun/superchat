@@ -7,7 +7,7 @@ import { generateTypeScript } from "./src/generators/typescript.js";
 import { defineBinarySchema, type BinarySchema } from "./src/schema/binary-schema.js";
 import JSON5 from "json5";
 
-const schemaPath = resolve(__dirname, "examples/superchat-types.json");
+const schemaPath = resolve(__dirname, "examples/superchat.schema.json");
 const rawSchema = JSON5.parse(readFileSync(schemaPath, "utf-8")) as BinarySchema;
 const schema = defineBinarySchema(rawSchema);
 

@@ -109,7 +109,7 @@
 
 ## Refactor Plan – `fields` → `sequence` (from docs/REFACTOR_PLAN.md)
 - [ ] All 272 tests passing
-- [ ] No schema uses `"fields"` (all use `"sequence"`)
+- [x] No schema uses `"fields"` (all use `"sequence"`)
 - [ ] Type aliases work correctly (String, Optional, etc.)
 - [ ] TypeScript generator produces correct code
 - [ ] HTML generator produces correct docs

@@ -10,22 +10,15 @@ import { formatInlineMarkup } from "./inline-formatting.js";
 import { annotateWireFormat } from "../schema/annotate-wire-format.js";
 import { encodeValue } from "../schema/encoder.js";
 
-/**
- * Check if a type is a composite (has sequence/fields) or a type alias
- */
+/** Check if a type is a composite (has a sequence) or a type alias */
 function isTypeAlias(typeDef: TypeDef): boolean {
-  return !("sequence" in typeDef || "fields" in typeDef);
+  return !("sequence" in typeDef);
 }
 
-/**
- * Get fields from a type definition (handles both 'sequence' and 'fields')
- */
+/** Get fields from a type definition */
 function getTypeFields(typeDef: TypeDef): Field[] {
   if ("sequence" in typeDef && (typeDef as any).sequence) {
     return (typeDef as any).sequence;
-  }
-  if ("fields" in typeDef && (typeDef as any).fields) {
-    return (typeDef as any).fields;
   }
   return [];
 }

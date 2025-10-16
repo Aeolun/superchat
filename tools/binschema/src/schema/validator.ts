@@ -34,18 +34,13 @@ const BUILT_IN_TYPES = [
  * Check if a type is a composite (has sequence/fields) or a type alias
  */
 function isTypeAlias(typeDef: TypeDef): boolean {
-  return !('sequence' in typeDef || 'fields' in typeDef);
+  return !('sequence' in typeDef);
 }
 
-/**
- * Get fields from a type definition (handles both 'sequence' and 'fields')
- */
+/** Get fields from a type definition */
 function getTypeFields(typeDef: TypeDef): Field[] {
   if ('sequence' in typeDef && (typeDef as any).sequence) {
     return (typeDef as any).sequence;
-  }
-  if ('fields' in typeDef && (typeDef as any).fields) {
-    return (typeDef as any).fields;
   }
   return [];
 }
@@ -147,7 +142,7 @@ function validateTypeDef(
   }
 
   const fields = getTypeFields(typeDef);
-  const fieldsKey = 'sequence' in typeDef ? 'sequence' : 'fields';
+  const fieldsKey = 'sequence';
 
   // Check for duplicate field names
   const fieldNames = new Set<string>();

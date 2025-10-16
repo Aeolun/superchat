@@ -105,17 +105,16 @@ This generates `type-reference.html` with complete documentation for all built-i
 To generate HTML documentation from a protocol schema:
 
 ```bash
-bun run src/generate-docs.ts <protocol-schema.json> <output.html>
+bun run src/generate-docs.ts <schema.json> <output.html>
 ```
 
 **Example for SuperChat protocol:**
 ```bash
-bun run src/generate-docs.ts examples/superchat-protocol.json examples/protocol-docs.html
+bun run src/generate-docs.ts examples/superchat.schema.json examples/protocol-docs.html
 ```
 
-**Input files:**
-- `examples/superchat-protocol.json` - Protocol definition with messages, descriptions, examples
-- `examples/superchat-types.json` - Type definitions referenced by protocol (linked via `types_schema` field)
+**Input file:**
+- `examples/superchat.schema.json` - Combined types + protocol definition
 
 **Output:**
 - HTML documentation with:
@@ -125,7 +124,8 @@ bun run src/generate-docs.ts examples/superchat-protocol.json examples/protocol-
   - Interactive hex examples with byte-level annotations
 
 **Protocol Schema Fields:**
-- `header_format` - Name of the type used as the frame header (e.g., "FrameHeader", "Packet")
+- `header` - Name of the type used as the frame header (e.g., "FrameHeader", "Packet")
+- `discriminator` - Header field that selects the payload type (supports dot notation for bitfields)
 - `header_size_field` - Name of the header field that contains the payload size/length (e.g., "length", "size")
   - This field will be auto-calculated in the frame example if not provided in `header_example.decoded`
   - Calculation: size of all other header fields + payload size
@@ -190,10 +190,10 @@ Tests are comprehensive and test-driven:
 3. Update HTML primitive types table if needed
 
 **Adding a new message type to SuperChat docs:**
-1. Add to `examples/superchat-protocol.json` messages array
+1. Add to `examples/superchat.schema.json` messages array
 2. Add type definition to `examples/superchat-types.json` if needed
 3. Add field descriptions to `field_descriptions` object
-4. Regenerate: `bun run src/generate-docs.ts examples/superchat-protocol.json examples/protocol-docs.html`
+4. Regenerate: `bun run src/generate-docs.ts examples/superchat.schema.json examples/protocol-docs.html`
 
 **Testing annotation generation:**
 - Create test file in `src/tests/schema/`
