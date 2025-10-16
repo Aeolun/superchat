@@ -7,6 +7,8 @@
 - No distinction between composite types (tuples) and type aliases
 - Example problem: `String` is defined as a struct with a `data` field, but on the wire it's just a length-prefixed byte array
 
+> Active tasks from this refactor plan have been migrated to `docs/TODO.md`.
+
 ## Problem
 
 The schema conflates two concepts:
@@ -180,12 +182,7 @@ Now `String` IS the array, not a struct containing it.
 
 ## Success Criteria
 
-- [ ] All 272 tests passing
-- [ ] No schema uses `"fields"` (all use `"sequence"`)
-- [ ] Type aliases work correctly (String, Optional, etc.)
-- [ ] TypeScript generator produces correct code
-- [ ] HTML generator produces correct docs
-- [ ] Example SuperChat schema uses type aliases
+_Progress toward these criteria is now monitored via `docs/TODO.md`._
 
 ## Timeline
 

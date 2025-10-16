@@ -185,13 +185,7 @@ A complete DNS message has:
   - Response with NS records in authority section ✅
   - Test: Authority array populated ✅
 
-- [ ] **5.3** Additional section (ARCOUNT > 0)
-  - Schema supports it, not yet tested
-  - Future: Add test with glue records
-
-- [ ] **5.4** Maximum message size
-  - Not critical for proof of concept
-  - Future: Add TC (truncation) bit test
+- _Additional section tests and maximum message size validation are tracked in `docs/TODO.md`._
 
 ### Phase 6: Documentation ✅ COMPLETE
 

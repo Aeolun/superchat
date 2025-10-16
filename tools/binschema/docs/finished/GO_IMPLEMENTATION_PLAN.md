@@ -10,6 +10,8 @@ Implement Go code generator and test runner for BinSchema, using the existing JS
 2. **Enable SuperChat usage** - Generate Go encoders/decoders for SuperChat protocol
 3. **Prepare for streaming** - Ensure core architecture supports streaming before implementing it
 
+> Outstanding action items from this plan now live in `docs/TODO.md`.
+
 ## Architecture
 
 ```
@@ -43,10 +45,7 @@ tools/binschema/
 
 **Goal:** Create Go module structure
 
-- [ ] Create `go/` directory structure
-- [ ] Initialize Go module: `go mod init github.com/anthropics/binschema`
-- [ ] Add basic README explaining Go implementation
-- [ ] Create placeholder files for each component
+- _Setup checklist moved to `docs/TODO.md`._
 
 **Deliverable:** Go module that compiles (empty implementations)
 
@@ -336,17 +335,7 @@ func DecodeMyMessage(bytes []byte) (*MyMessage, error) {
 
 ## Validation Checklist
 
-**Before considering Go implementation "complete":**
-
-- [ ] All primitive type tests pass (10 test suites)
-- [ ] All composite type tests pass (6 test suites)
-- [ ] All advanced feature tests pass (4 test suites)
-- [ ] No test failures (100% pass rate required)
-- [ ] Generated code compiles without warnings
-- [ ] Error codes behave identically to TypeScript
-- [ ] Documentation is complete
-- [ ] Examples run successfully
-- [ ] Can generate SuperChat protocol encoders/decoders
+_Validation criteria continue to be tracked centrally in `docs/TODO.md`._
 
 **Test pass criteria:**
 - Total test suites: ~20 (from tests-json/)

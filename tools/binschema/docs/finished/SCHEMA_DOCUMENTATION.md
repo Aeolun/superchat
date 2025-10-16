@@ -17,6 +17,8 @@ This generates `type-reference.html` with comprehensive documentation for all Bi
 - Tabbed code generation views (TypeScript, Go, Rust)
 - Examples and notes
 
+> Any outstanding work from this document is recorded in `docs/TODO.md`.
+
 ## Goals
 
 1. **Self-documenting schemas**: Add rich metadata to Zod schemas using `.meta()`
@@ -37,9 +39,7 @@ Zod Schema + .meta() → Metadata Extractor → HTML Generator → Beautiful Doc
 - [x] Add `.meta()` calls to primitive types (uint8, uint16, uint32, uint64, int8, int16, int32, int64)
 - [x] Add `.meta()` calls to floating point types (float32, float64)
 - [x] Add `code_generation` field with per-language type mappings and notes
-- [ ] Add `.meta()` calls to bit-level types (bit, bitfield)
-- [ ] Add `.meta()` calls to composite types (array, string, optional, discriminated_union, pointer)
-- [ ] Add `.meta()` calls to special types (conditional, type reference)
+- _Outstanding metadata tasks were moved to `docs/TODO.md`._
 
 ### Phase 2: Generic Metadata Extractor
 - [x] Create `extractMetadata(zodSchema)` function
@@ -47,9 +47,7 @@ Zod Schema + .meta() → Metadata Extractor → HTML Generator → Beautiful Doc
 - [x] Handle object types (ZodObject)
 - [x] Handle union/discriminated union types
 - [x] Walk discriminated union structure to extract metadata from all options
-- [ ] Handle array types (future)
-- [ ] Handle optional/nullable types (future)
-- [ ] Handle recursive schemas (future)
+- _Remaining extractor enhancements are tracked in `docs/TODO.md`._
 
 ### Phase 3: HTML Generator
 - [x] Design HTML layout for type reference (sections, navigation, examples)
@@ -59,19 +57,16 @@ Zod Schema + .meta() → Metadata Extractor → HTML Generator → Beautiful Doc
 - [x] Reuse inline formatting parser (`**bold**`, `*italic*`)
 - [x] Add responsive CSS styling (borrowed from protocol generator)
 - [x] Add table of contents with anchor links
-- [ ] Add search/filter functionality (optional, future)
+- _Future HTML generator enhancements are tracked in `docs/TODO.md`._
 
 ### Phase 4: Integration
 - [x] Create `generate-type-reference.ts` script
 - [x] Add npm script: `npm run docs:types`
 - [x] Generate docs for BinSchema primitive types (dogfooding)
-- [ ] Add to CI/deployment pipeline (optional, future)
+- _Integration follow-ups are tracked in `docs/TODO.md`._
 
 ### Phase 5: Documentation & Examples
-- [ ] Document metadata format and conventions
-- [ ] Document how to use the generic extractor
-- [ ] Provide example for documenting custom schemas
-- [ ] Update main README with link to type reference
+- _Documentation tasks now live in `docs/TODO.md`._
 
 ## Metadata Format
 

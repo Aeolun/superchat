@@ -82,6 +82,26 @@ export const myTestSuite = defineTestSuite({
 
 ## Generating HTML Documentation
 
+**IMPORTANT: Always use npm commands to regenerate documentation!**
+
+### Type Reference Documentation
+
+To regenerate the BinSchema type reference documentation:
+
+```bash
+npm run docs:types
+```
+
+This generates `type-reference.html` with complete documentation for all built-in BinSchema types (primitives, arrays, optionals, bitfields, discriminated unions, back references, etc.). The documentation is automatically extracted from the Zod schema metadata in `src/schema/binary-schema.ts`.
+
+**When to regenerate:**
+- After adding new primitive types
+- After modifying type metadata (.meta() calls)
+- After changing type constraints or examples
+- After renaming types
+
+### Protocol Documentation
+
 To generate HTML documentation from a protocol schema:
 
 ```bash

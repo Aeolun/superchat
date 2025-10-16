@@ -5,6 +5,8 @@
 
 ---
 
+> Task tracking for this plan is now consolidated in `docs/TODO.md`.
+
 ## Overview
 
 DNS uses message compression via backwards pointers to eliminate repeated domain names. A domain name field can be either:
@@ -611,14 +613,7 @@ Full DNS protocol schema with:
 
 ## Success Criteria
 
-- [ ] All runtime tests pass (peek, seek, position)
-- [ ] All schema validation tests pass
-- [ ] All code generation tests pass (code compiles & runs)
-- [ ] All DNS protocol tests pass (including compression)
-- [ ] Circular pointer references detected and rejected
-- [ ] Generated code handles real DNS responses from RFC 1035
-- [ ] Documentation explains how to use new features
-- [ ] Example DNS schema works end-to-end
+_Remaining validation items are tracked in `docs/TODO.md`._
 
 ---
 

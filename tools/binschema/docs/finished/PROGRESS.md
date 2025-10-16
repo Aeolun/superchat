@@ -11,6 +11,8 @@ BinSchema is a bit-level binary serialization schema and code generator. It gene
 - Test infrastructure: ✅ Complete
 - Test pass rate: **53% (85/159 tests passing)**
 
+> Historical progress is kept here; active TODO tracking for the items referenced below now lives in `docs/TODO.md`.
+
 ---
 
 ## ✅ Completed Work
@@ -217,77 +219,10 @@ BinSchema is a bit-level binary serialization schema and code generator. It gene
    - **Impact:** Debugging failures is harder
    - **Fix Needed:** Add field path context to error messages
 
----
 
 ## 📋 TODO
 
-### Critical - Schema Migration Tasks
-
-1. **Merge Remaining Protocol Schemas**
-   - [ ] Merge IoT protocol schema files into single unified schema
-   - [ ] Merge any other protocol schemas (follow dns.schema.json pattern)
-   - [ ] Update all protocol tests to use merged schemas
-   - **Note:** Protocol schemas now use unified format with `protocol` field
-
-### Immediate Next Steps (To Reach 80%+ Pass Rate)
-
-1. **Implement Field-Referenced Array Decoder Support** ⭐ **HIGH PRIORITY**
-   - [ ] Update TypeScript generator to handle field-referenced arrays
-   - [ ] Decoder needs to access earlier fields in same sequence for array lengths
-   - [ ] Support cross-field references (e.g., payload arrays referencing header counts)
-   - **Estimated Impact:** +2 tests passing (DNS protocol tests)
-   - **Blocker:** DNS protocol tests currently fail because decoder can't find header field values
-
-2. **Fix Decoder Conditional Logic**
-   - [ ] Add conditional wrapper in `generateDecodeFieldCore()`
-   - [ ] Evaluate condition expressions (start with simple `present == 1`)
-   - [ ] Handle undefined fields correctly in decoder
-   - **Estimated Impact:** +8 tests passing (optionals)
-
-2. **Fix Array Items Undefined Bug**
-   - [ ] Debug test schemas to find source of undefined items
-   - [ ] Ensure all array definitions have valid items field
-   - [ ] Improve error message if items missing
-   - **Estimated Impact:** +13 tests passing (arrays)
-
-3. **Fix BigInt Conditional Expressions**
-   - [ ] Detect when conditional involves BigInt types
-   - [ ] Cast appropriately (Number() or BigInt())
-   - [ ] Generate type-safe comparison code
-   - **Estimated Impact:** +4 tests passing (multiple conditionals)
-
-4. **Fix Null-Terminated String Decoding**
-   - [ ] Check element type in null-terminated array decoder
-   - [ ] Read full elements, not just bytes
-   - **Estimated Impact:** +2 tests passing (c_string)
-
-5. **Audit Test Suite Type Names**
-   - [ ] Check all test_type values match schema type keys
-   - [ ] Fix mismatches in test files
-   - **Estimated Impact:** +3-4 tests passing (bit-level)
-
-### Future Enhancements
-
-6. **Performance Optimizations**
-   - [ ] Benchmark encoder/decoder performance
-   - [ ] Consider pre-allocated buffer sizes
-   - [ ] Profile bit operations for hot paths
-
-7. **Go Code Generator**
-   - [ ] Design Go code structure (types, encoder, decoder)
-   - [ ] Implement generator similar to TypeScript version
-   - [ ] Add Go-specific tests
-
-8. **HTML Documentation Generator**
-   - [ ] Generate visual schema documentation
-   - [ ] Show byte/bit layouts
-   - [ ] Include examples and test cases
-
-9. **Advanced Features**
-   - [ ] Support for enums
-   - [ ] Support for unions/tagged unions
-   - [ ] Support for alignment/padding
-   - [ ] Support for computed fields (checksums, lengths)
+_See `docs/TODO.md` for the current consolidated task list derived from this progress log._
 
 ---
 
@@ -332,16 +267,16 @@ tools/binschema/
 - [x] 50%+ tests passing ✅ **ACHIEVED: 53.5%**
 
 ### Next Milestone: Feature Complete (80%+ Pass Rate)
-- [ ] Decoder conditionals working
-- [ ] Array handling robust
-- [ ] String types fully supported
-- [ ] 80%+ tests passing
+- Decoder conditionals working *(tracked in `docs/TODO.md`)*
+- Array handling robust *(tracked in `docs/TODO.md`)*
+- String types fully supported *(tracked in `docs/TODO.md`)*
+- 80%+ tests passing *(tracked in `docs/TODO.md`)*
 
 ### Final Milestone: Production Ready
-- [ ] 95%+ tests passing
-- [ ] Performance benchmarks
-- [ ] Documentation complete
-- [ ] Go generator implemented
+- 95%+ tests passing *(tracked in `docs/TODO.md`)*
+- Performance benchmarks *(tracked in `docs/TODO.md`)*
+- Documentation complete *(tracked in `docs/TODO.md`)*
+- Go generator implemented *(tracked in `docs/TODO.md`)*
 
 ---
 
