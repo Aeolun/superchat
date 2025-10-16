@@ -20,6 +20,16 @@ const TS_RESERVED_TYPES = new Set([
   "Array", "Promise", "Map", "Set", "Date", "RegExp", "Error",
 ]);
 
+const BACK_REFERENCE_TYPE_NAMES = new Set(["back_reference"]);
+
+function isBackReferenceTypeDef(typeDef: any): boolean {
+  return !!typeDef && typeof typeDef === "object" && BACK_REFERENCE_TYPE_NAMES.has(typeDef.type);
+}
+
+function isBackReferenceType(type: string | undefined): boolean {
+  return !!type && BACK_REFERENCE_TYPE_NAMES.has(type);
+}
+
 /**
  * Sanitize a type name for TypeScript to avoid conflicts with built-in types
  * Appends "_" to conflicting names (e.g., "string" → "string_")
@@ -90,8 +100,8 @@ export function generateTypeScriptCode(schema: BinarySchema): string {
   // Import runtime library (from same directory)
   let code = `import { BitStreamEncoder, BitStreamDecoder } from "./BitStream.js";\n\n`;
 
-  // Add global visitedOffsets for pointer circular reference detection
-  code += `// Global set for circular reference detection in pointers\n`;
+  // Add global visitedOffsets for back_reference circular reference detection
+  code += `// Global set for circular reference detection in back references\n`;
   code += `let visitedOffsets: Set<number>;\n\n`;
 
   // Generate code for each type (skip generic templates)
@@ -117,6 +127,44 @@ export function generateTypeScript(schema: BinarySchema): string {
 
   // Import runtime library (from same directory)
   let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "./BitStream.js";\n\n`;
+
+  // Helper utilities for safe conditional evaluation (avoid runtime errors during decode/encode)
+  code += `function __bs_get<T>(expr: () => T): T | undefined {\n`;
+  code += `  try {\n`;
+  code += `    return expr();\n`;
+  code += `  } catch {\n`;
+  code += `    return undefined;\n`;
+  code += `  }\n`;
+  code += `}\n\n`;
+
+  code += `function __bs_numeric(value: any): any {\n`;
+  code += `  if (typeof value === "bigint") {\n`;
+  code += `    return value;\n`;
+  code += `  }\n`;
+  code += `  if (typeof value === "number" && Number.isInteger(value)) {\n`;
+  code += `    return BigInt(value);\n`;
+  code += `  }\n`;
+  code += `  return value;\n`;
+  code += `}\n\n`;
+
+  code += `function __bs_literal(value: number): number | bigint {\n`;
+  code += `  if (Number.isInteger(value)) {\n`;
+  code += `    return BigInt(value);\n`;
+  code += `  }\n`;
+  code += `  return value;\n`;
+  code += `}\n\n`;
+
+  code += `function __bs_checkCondition(expr: () => any): boolean {\n`;
+  code += `  try {\n`;
+  code += `    const result = expr();\n`;
+  code += `    if (typeof result === "bigint") {\n`;
+  code += `      return result !== 0n;\n`;
+  code += `    }\n`;
+  code += `    return !!result;\n`;
+  code += `  } catch {\n`;
+  code += `    return false;\n`;
+  code += `  }\n`;
+  code += `}\n\n`;
 
   // Generate code for each type (skip generic templates like Optional<T>)
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
@@ -144,15 +192,15 @@ function generateFunctionalTypeCode(
   globalEndianness: Endianness,
   globalBitOrder: string
 ): string {
-  // Check if this is a discriminated union or pointer type alias
+  // Check if this is a discriminated union or back_reference type alias
   const typeDefAny = typeDef as any;
 
   if (typeDefAny.type === "discriminated_union") {
     return generateFunctionalDiscriminatedUnion(typeName, typeDefAny, schema, globalEndianness);
   }
 
-  if (typeDefAny.type === "pointer") {
-    return generateFunctionalPointer(typeName, typeDefAny, schema, globalEndianness);
+  if (isBackReferenceTypeDef(typeDefAny)) {
+    return generateFunctionalBackReference(typeName, typeDefAny, schema, globalEndianness);
   }
 
   // Handle string types - generate type alias + functions
@@ -283,12 +331,12 @@ function generateFunctionalEncoder(
 
   const fields = getTypeFields(typeDef);
 
-  // Optimization: if struct has exactly 1 field and it's a pointer, encode the target directly
+  // Optimization: if struct has exactly 1 field and it's a back_reference, encode the target directly
   if (fields.length === 1 && 'type' in fields[0]) {
     const field = fields[0];
     const fieldTypeDef = schema.types[field.type];
-    if (fieldTypeDef && (fieldTypeDef as any).type === "pointer") {
-      // Encode target type directly (pointers are transparent during encoding)
+    if (isBackReferenceTypeDef(fieldTypeDef)) {
+      // Encode target type directly (back references are transparent during encoding)
       const targetType = (fieldTypeDef as any).target_type;
       let code = `function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
       code += `  encode${targetType}(stream, value.${field.name});\n`;
@@ -365,13 +413,13 @@ function generateFunctionalDecoder(
 
   const fields = getTypeFields(typeDef);
 
-  // Optimization: if struct has exactly 1 field and it's a pointer, inline the logic
+  // Optimization: if struct has exactly 1 field and it's a back_reference, inline the logic
   if (fields.length === 1 && 'type' in fields[0]) {
     const field = fields[0];
     const fieldTypeDef = schema.types[field.type];
-    if (fieldTypeDef && (fieldTypeDef as any).type === "pointer") {
-      // Inline pointer logic
-      return generateInlinedPointerDecoder(typeName, field.name, fieldTypeDef as any, schema, globalEndianness);
+    if (isBackReferenceTypeDef(fieldTypeDef)) {
+      // Inline back_reference logic
+      return generateInlinedBackReferenceDecoder(typeName, field.name, fieldTypeDef as any, schema, globalEndianness);
     }
   }
 
@@ -497,40 +545,40 @@ function generateFunctionalDecoderWithEarlyReturns(
 }
 
 /**
- * Generate decoder for single-field struct with inlined pointer logic
+ * Generate decoder for single-field struct with inlined back_reference logic
  */
-function generateInlinedPointerDecoder(
+function generateInlinedBackReferenceDecoder(
   typeName: string,
   fieldName: string,
-  pointerDef: any,
+  backRefDef: any,
   schema: BinarySchema,
   globalEndianness: Endianness
 ): string {
-  const storage = pointerDef.storage;
-  const offsetMask = pointerDef.offset_mask;
-  const offsetFrom = pointerDef.offset_from;
-  const targetType = pointerDef.target_type;
-  const endianness = pointerDef.endianness || globalEndianness;
+  const storage = backRefDef.storage;
+  const offsetMask = backRefDef.offset_mask;
+  const offsetFrom = backRefDef.offset_from;
+  const targetType = backRefDef.target_type;
+  const endianness = backRefDef.endianness || globalEndianness;
 
   let code = `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
 
   // Initialize visitedOffsets if needed
   code += `  if (!visitedOffsets) visitedOffsets = new Set<number>();\n\n`;
 
-  // Read pointer storage value
+  // Read back_reference storage value
   const storageMethodName = `read${capitalize(storage)}`;
   if (storage === "uint8") {
-    code += `  const pointerValue = stream.${storageMethodName}();\n`;
+    code += `  const referenceValue = stream.${storageMethodName}();\n`;
   } else {
-    code += `  const pointerValue = stream.${storageMethodName}('${endianness}');\n`;
+    code += `  const referenceValue = stream.${storageMethodName}('${endianness}');\n`;
   }
 
   // Extract offset using mask
-  code += `  const offset = pointerValue & ${offsetMask};\n\n`;
+  code += `  const offset = referenceValue & ${offsetMask};\n\n`;
 
   // Check for circular reference
   code += `  if (visitedOffsets.has(offset)) {\n`;
-  code += `    throw new Error(\`Circular pointer reference detected at offset \${offset}\`);\n`;
+  code += `    throw new Error(\`Circular back_reference detected at offset \${offset}\`);\n`;
   code += `  }\n`;
   code += `  visitedOffsets.add(offset);\n\n`;
 
@@ -670,22 +718,22 @@ function generateFunctionalDiscriminatedUnion(
 }
 
 /**
- * Generate functional-style pointer
+ * Generate functional-style back_reference
  */
-function generateFunctionalPointer(
+function generateFunctionalBackReference(
   typeName: string,
-  pointerDef: any,
+  backRefDef: any,
   schema: BinarySchema,
   globalEndianness: Endianness
 ): string {
-  const storage = pointerDef.storage;
-  const offsetMask = pointerDef.offset_mask;
-  const offsetFrom = pointerDef.offset_from;
-  const targetType = pointerDef.target_type;
-  const endianness = pointerDef.endianness || globalEndianness;
+  const storage = backRefDef.storage;
+  const offsetMask = backRefDef.offset_mask;
+  const offsetFrom = backRefDef.offset_from;
+  const targetType = backRefDef.target_type;
+  const endianness = backRefDef.endianness || globalEndianness;
 
   // Generate type alias (transparent to target type)
-  let code = generateJSDoc(pointerDef.description);
+  let code = generateJSDoc(backRefDef.description);
   code += `export type ${typeName} = ${targetType};\n\n`;
 
   // Generate encoder (just encode the target)
@@ -693,27 +741,27 @@ function generateFunctionalPointer(
   code += `  encode${targetType}(stream, value);\n`;
   code += `}\n\n`;
 
-  // Generate decoder (with pointer following logic)
+  // Generate decoder (with back_reference following logic)
   code += `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
 
   // Initialize visitedOffsets if needed
   code += `  if (!visitedOffsets) visitedOffsets = new Set<number>();\n`;
   code += `  visitedOffsets.clear();\n\n`;
 
-  // Read pointer storage value
+  // Read back_reference storage value
   const storageMethodName = `read${capitalize(storage)}`;
   if (storage === "uint8") {
-    code += `  const pointerValue = stream.${storageMethodName}();\n`;
+    code += `  const referenceValue = stream.${storageMethodName}();\n`;
   } else {
-    code += `  const pointerValue = stream.${storageMethodName}('${endianness}');\n`;
+    code += `  const referenceValue = stream.${storageMethodName}('${endianness}');\n`;
   }
 
   // Extract offset using mask
-  code += `  const offset = pointerValue & ${offsetMask};\n\n`;
+  code += `  const offset = referenceValue & ${offsetMask};\n\n`;
 
   // Check for circular reference
   code += `  if (visitedOffsets.has(offset)) {\n`;
-  code += `    throw new Error(\`Circular pointer reference detected at offset \${offset}\`);\n`;
+  code += `    throw new Error(\`Circular back_reference detected at offset \${offset}\`);\n`;
   code += `  }\n`;
   code += `  visitedOffsets.add(offset);\n\n`;
 
@@ -806,8 +854,8 @@ function generateFunctionalEncodeField(
           return code;
         }
       }
-      // Type reference - resolve pointers to their target type
-      const resolvedType = resolvePointerType(field.type, schema);
+      // Type reference - resolve back_reference types to their target type
+      const resolvedType = resolveBackReferenceType(field.type, schema);
       return `${indent}encode${resolvedType}(stream, ${fieldPath});\n`;
   }
 }
@@ -858,11 +906,11 @@ function generateFunctionalEncodeDiscriminatedUnionField(
 }
 
 /**
- * Resolve pointer types to their target type (for encoding - pointers are transparent)
+ * Resolve back_reference types to their target type (for encoding - references are transparent)
  */
-function resolvePointerType(typeName: string, schema: BinarySchema): string {
+function resolveBackReferenceType(typeName: string, schema: BinarySchema): string {
   const typeDef = schema.types[typeName];
-  if (typeDef && (typeDef as any).type === "pointer") {
+  if (typeDef && (typeDef as any).type === "back_reference") {
     return (typeDef as any).target_type;
   }
   return typeName;
@@ -1373,7 +1421,7 @@ function getElementTypeScriptType(element: any, schema: BinarySchema): string {
       case "discriminated_union":
         // Generate union type from variants
         return generateDiscriminatedUnionType(element, schema);
-      case "pointer":
+      case "back_reference":
         // Pointer is transparent - just the target type
         return resolveTypeReference(element.target_type, schema);
       default:
@@ -1541,7 +1589,7 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
       case "discriminated_union":
         // Generate union type from variants
         return generateDiscriminatedUnionType(field, schema);
-      case "pointer":
+      case "back_reference":
         // Pointer is transparent - just the target type
         return resolveTypeReference((field as any).target_type, schema);
       case "optional":
@@ -1607,20 +1655,40 @@ function isFieldConditional(field: Field): boolean {
  * For nested paths, basePath might be "value.maybe_id", so "present == 1" -> "value.maybe_id.present == 1"
  */
 function convertConditionalToTypeScript(condition: string, basePath: string = "value"): string {
-  // Replace field paths (including nested paths like "header.flags" or "settings.config.enabled")
-  // with basePath prefixed versions (e.g., "value.header.flags")
-  //
-  // Strategy: Match field paths (identifier sequences separated by dots) and prepend basePath
-  // Example: "header.flags & 0x01" matches "header.flags" as a field path
+  // First wrap numeric literals so they can be coerced to BigInt when appropriate.
+  const numberLiteralRegex = /(?<![\w$])(-?(?:0x[0-9a-fA-F]+|0b[01]+|0o[0-7]+|\d+(?:\.\d+)?))(?![\w$])/g;
+  let expression = condition.replace(numberLiteralRegex, (match) => `__bs_literal(${match})`);
 
-  return condition.replace(/\b([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\b/g, (match) => {
-    // Don't replace operators, keywords, or hex literals
-    if (['true', 'false', 'null', 'undefined'].includes(match)) {
+  const reservedIdentifiers = new Set([
+    "true",
+    "false",
+    "null",
+    "undefined",
+    "BigInt",
+    "Number",
+    "Math",
+    "__bs_literal",
+    "__bs_numeric",
+    "__bs_get",
+    "__bs_checkCondition"
+  ]);
+
+  // Replace field paths (identifier sequences separated by dots) with safe accessors.
+  const identifierRegex = /\b([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\b/g;
+  expression = expression.replace(identifierRegex, (match) => {
+    if (reservedIdentifiers.has(match)) {
       return match;
     }
-    // Prepend basePath to the field path
-    return `${basePath}.${match}`;
+    if (/^\d/.test(match)) {
+      return match;
+    }
+    if (match === basePath || match.startsWith(`${basePath}.`)) {
+      return `__bs_numeric(__bs_get(() => ${match}))`;
+    }
+    return `__bs_numeric(__bs_get(() => ${basePath}.${match}))`;
   });
+
+  return `__bs_checkCondition(() => (${expression}))`;
 }
 
 /**
@@ -1765,8 +1833,8 @@ function generateEncodeFieldCoreImpl(
     case "discriminated_union":
       return generateEncodeDiscriminatedUnion(field, schema, globalEndianness, valuePath, indent);
 
-    case "pointer":
-      return generateEncodePointer(field, schema, globalEndianness, valuePath, indent);
+    case "back_reference":
+      return generateEncodeBackReference(field, schema, globalEndianness, valuePath, indent);
 
     case "optional":
       return generateEncodeOptional(field, schema, globalEndianness, valuePath, indent);
@@ -1797,24 +1865,24 @@ function generateEncodeDiscriminatedUnion(
 
     code += `${indent}${ifKeyword} (${valuePath}.type === '${variant.type}') {\n`;
 
-    // Track non-pointer variants in compression dictionary
+    // Track non-back_reference variants in compression dictionary
     const variantTypeDef = schema.types[variant.type];
-    const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+    const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
 
-    if (!isPointer) {
-      // Check if variant is a string type that can be referenced by pointers
+    if (!isBackReference) {
+      // Check if variant is a string type that can be referenced by back references
       const variantTypeDef = schema.types[variant.type];
       const isStringType = variantTypeDef && (variantTypeDef as any).type === "string";
 
       if (isStringType) {
-        // Non-pointer string variant: Record offset before encoding so pointers can reference it
+        // Non-reference string variant: record offset before encoding so back references can reuse it
         code += `${indent}  const valueKey = JSON.stringify(${valuePath}.value);\n`;
         code += `${indent}  const currentOffset = this.byteOffset;\n`;
         code += `${indent}  this.compressionDict.set(valueKey, currentOffset);\n`;
       }
     }
 
-    // Encode the variant value (pointers handle their own compression via generateEncodePointer)
+    // Encode the variant value (back references handle their own compression via generateEncodeBackReference)
     code += generateEncodeTypeReference(variant.type, schema, `${valuePath}.value`, indent + "  ");
 
     code += `${indent}}`;
@@ -1883,13 +1951,13 @@ function generateEncodeOptional(
 }
 
 /**
- * Generate encoding for pointer with compression support
+ * Generate encoding for back_reference with compression support
  *
- * Pointers use compression by default:
- * - If value exists in compressionDict → encode as pointer bytes (0xC000 | offset)
- * - If not found → record current offset, encode target value, add to dictionary
+ * Back references use compression by default:
+ * - If value exists in compressionDict → emit compression pointer bytes (0xC000 | offset)
+ * - Otherwise record current offset, encode target value, add to dictionary
  */
-function generateEncodePointer(
+function generateEncodeBackReference(
   field: any,
   schema: BinarySchema,
   globalEndianness: Endianness,
@@ -1901,25 +1969,36 @@ function generateEncodePointer(
   const targetType = field.target_type;
   const endianness = field.endianness || globalEndianness;
 
+  if (typeof targetType !== "string" || targetType.length === 0) {
+    throw new Error(
+      [
+        "Back-reference field is missing a valid 'target_type'.",
+        `field: ${field?.name ?? "<unnamed>"}`,
+        `valuePath: ${valuePath}`,
+        `storage: ${storage}`,
+      ].join(" ")
+    );
+  }
+
   let code = "";
 
   // Serialize value for dictionary key (use JSON.stringify for structural equality)
   code += `${indent}const valueKey = JSON.stringify(${valuePath});\n`;
   code += `${indent}const existingOffset = this.compressionDict.get(valueKey);\n\n`;
 
-  // If found in dictionary, encode as pointer
+  // If found in dictionary, encode as compression pointer bytes
   code += `${indent}if (existingOffset !== undefined) {\n`;
-  code += `${indent}  // Encode pointer: set top bits (0xC0 for uint16) and mask offset\n`;
+  code += `${indent}  // Encode compression pointer: set top bits (0xC0 for uint16) and mask offset\n`;
 
   if (storage === "uint8") {
-    code += `${indent}  const pointerValue = 0xC0 | (existingOffset & ${offsetMask});\n`;
-    code += `${indent}  this.writeUint8(pointerValue);\n`;
+    code += `${indent}  const referenceValue = 0xC0 | (existingOffset & ${offsetMask});\n`;
+    code += `${indent}  this.writeUint8(referenceValue);\n`;
   } else if (storage === "uint16") {
-    code += `${indent}  const pointerValue = 0xC000 | (existingOffset & ${offsetMask});\n`;
-    code += `${indent}  this.writeUint16(pointerValue, "${endianness}");\n`;
+    code += `${indent}  const referenceValue = 0xC000 | (existingOffset & ${offsetMask});\n`;
+    code += `${indent}  this.writeUint16(referenceValue, "${endianness}");\n`;
   } else if (storage === "uint32") {
-    code += `${indent}  const pointerValue = 0xC0000000 | (existingOffset & ${offsetMask});\n`;
-    code += `${indent}  this.writeUint32(pointerValue, "${endianness}");\n`;
+    code += `${indent}  const referenceValue = 0xC0000000 | (existingOffset & ${offsetMask});\n`;
+    code += `${indent}  this.writeUint32(referenceValue, "${endianness}");\n`;
   }
 
   code += `${indent}} else {\n`;
@@ -2399,8 +2478,8 @@ function generateDecodeFieldCoreImpl(
     case "discriminated_union":
       return generateDecodeDiscriminatedUnion(field, schema, globalEndianness, fieldName, indent);
 
-    case "pointer":
-      return generateDecodePointer(field, schema, globalEndianness, fieldName, indent);
+    case "back_reference":
+      return generateDecodeBackReference(field, schema, globalEndianness, fieldName, indent);
 
     case "optional":
       return generateDecodeOptional(field, schema, globalEndianness, fieldName, indent);
@@ -2446,19 +2525,19 @@ function generateDecodeDiscriminatedUnion(
         const ifKeyword = i === 0 ? "if" : "else if";
 
         code += `${indent}${ifKeyword} (${condition}) {\n`;
-        // Check if variant type is a pointer - pointers need full bytes to seek backwards
+        // Check if variant type is a back_reference - these need full bytes to seek backwards
         const variantTypeDef = schema.types[variant.type];
-        const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
         // Determine the base object for context (usually "value" for top-level, or extract from target)
         const baseObject = target.includes(".") ? target.split(".")[0] : "value";
-        if (isPointer) {
-          // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
+        if (isBackReference) {
+          // Back-reference variant: pass full bytes (may seek to earlier offsets)
           code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
           code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
-          // Non-pointer variant: pass sliced bytes (standard pattern)
+          // Non-reference variant: pass sliced bytes (standard pattern)
           code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
           code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
@@ -2471,19 +2550,19 @@ function generateDecodeDiscriminatedUnion(
       } else {
         // Fallback variant (no 'when' condition)
         code += ` else {\n`;
-        // Check if variant type is a pointer - pointers need full bytes to seek backwards
+        // Check if variant type is a back_reference - these need full bytes to seek backwards
         const variantTypeDef = schema.types[variant.type];
-        const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
+        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
         // Determine the base object for context (usually "value" for top-level, or extract from target)
         const baseObject = target.includes(".") ? target.split(".")[0] : "value";
-        if (isPointer) {
-          // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
+        if (isBackReference) {
+          // Back-reference variant: pass full bytes (may seek to earlier offsets)
           code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
           code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
-          // Non-pointer variant: pass sliced bytes (standard pattern)
+          // Non-reference variant: pass sliced bytes (standard pattern)
           code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
           code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
@@ -2521,17 +2600,17 @@ function generateDecodeDiscriminatedUnion(
         code += `${indent}${ifKeyword} (${condition}) {\n`;
         // Determine base object for context
         const baseObject = target.includes(".") ? target.split(".")[0] : "value";
-        // Check if variant type is a pointer - pointers need full bytes to seek backwards
+        // Check if variant type is a back_reference - these need full bytes to seek backwards
         const variantTypeDef = schema.types[variant.type];
-        const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
-        if (isPointer) {
-          // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
+        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
+        if (isBackReference) {
+          // Back-reference variant: pass full bytes (may seek to earlier offsets)
           code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
           code += `${indent}  const payload = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
-          // Non-pointer variant: pass sliced bytes (standard pattern)
+          // Non-reference variant: pass sliced bytes (standard pattern)
           code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
           code += `${indent}  const payload = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
@@ -2546,17 +2625,17 @@ function generateDecodeDiscriminatedUnion(
         code += ` else {\n`;
         // Determine base object for context
         const baseObject = target.includes(".") ? target.split(".")[0] : "value";
-        // Check if variant type is a pointer - pointers need full bytes to seek backwards
+        // Check if variant type is a back_reference - these need full bytes to seek backwards
         const variantTypeDef = schema.types[variant.type];
-        const isPointer = variantTypeDef && (variantTypeDef as any).type === "pointer";
-        if (isPointer) {
-          // Pointer variant: pass full bytes (pointers may seek to earlier offsets)
+        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
+        if (isBackReference) {
+          // Back-reference variant: pass full bytes (may seek to earlier offsets)
           code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
           code += `${indent}  const payload = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
-          // Non-pointer variant: pass sliced bytes (standard pattern)
+          // Non-reference variant: pass sliced bytes (standard pattern)
           code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
           code += `${indent}  const payload = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
@@ -2622,9 +2701,9 @@ function generateDecodeOptional(
 }
 
 /**
- * Generate decoding for pointer
+ * Generate decoding for back_reference
  */
-function generateDecodePointer(
+function generateDecodeBackReference(
   field: any,
   schema: BinarySchema,
   globalEndianness: Endianness,
@@ -2641,24 +2720,24 @@ function generateDecodePointer(
 
   let code = "";
 
-  // Initialize visitedOffsets set (shared across all pointer decoders)
+  // Initialize visitedOffsets set (shared across all back_reference decoders)
   code += `${indent}if (!this.visitedOffsets) {\n`;
   code += `${indent}  this.visitedOffsets = new Set<number>();\n`;
   code += `${indent}}\n\n`;
 
-  // Read pointer storage value
+  // Read back_reference storage value
   if (storage === "uint8") {
-    code += `${indent}const pointerValue = this.read${capitalize(storage)}();\n`;
+    code += `${indent}const referenceValue = this.read${capitalize(storage)}();\n`;
   } else {
-    code += `${indent}const pointerValue = this.read${capitalize(storage)}(${endiannessArg});\n`;
+    code += `${indent}const referenceValue = this.read${capitalize(storage)}(${endiannessArg});\n`;
   }
 
   // Extract offset using mask
-  code += `${indent}const offset = pointerValue & ${offsetMask};\n\n`;
+  code += `${indent}const offset = referenceValue & ${offsetMask};\n\n`;
 
   // Check for circular reference
   code += `${indent}if (this.visitedOffsets.has(offset)) {\n`;
-  code += `${indent}  throw new Error(\`Circular pointer reference detected at offset \${offset}\`);\n`;
+  code += `${indent}  throw new Error(\`Circular back_reference detected at offset \${offset}\`);\n`;
   code += `${indent}}\n`;
   code += `${indent}this.visitedOffsets.add(offset);\n\n`;
 

@@ -277,6 +277,138 @@ export const conditionalEqualityTestSuite = defineTestSuite({
 });
 
 /**
+ * Conditional fields that rely on uint64 (BigInt) bitmasks
+ * Ensures decoder evaluates conditions without mixing number/BigInt types.
+ */
+export const conditionalBigIntBitmaskTestSuite = defineTestSuite({
+  name: "conditional_bigint_bitmask",
+  description: "Bitmask condition evaluated on uint64 BigInt flags",
+
+  schema: {
+    config: {
+      endianness: "big_endian",
+    },
+    types: {
+      "BigIntMaskMessage": {
+        sequence: [
+          { name: "flags", type: "uint64" },
+          {
+            name: "payload",
+            type: "uint16",
+            conditional: "flags & 0x01",
+          },
+        ]
+      }
+    }
+  },
+
+  test_type: "BigIntMaskMessage",
+
+  test_cases: [
+    {
+      description: "High bit value with least-significant bit set (payload present)",
+      value: { flags: 0x1000000000000001n, payload: 0xABCD },
+      bytes: [
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // flags = 0x1000000000000001
+        0xAB, 0xCD, // payload
+      ],
+    },
+    {
+      description: "High bit value without least-significant bit (no payload)",
+      value: { flags: 0x1000000000000000n },
+      bytes: [
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // flags = 0x1000000000000000
+      ],
+    },
+    {
+      description: "All zero flags (no payload)",
+      value: { flags: 0n },
+      bytes: [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // flags = 0
+      ],
+    },
+  ]
+});
+
+/**
+ * Conditional fields referencing nested optional parents.
+ * Ensures decoder handles undefined intermediate objects safely.
+ */
+export const conditionalNestedParentTestSuite = defineTestSuite({
+  name: "conditional_nested_parent",
+  description: "Nested condition that references optional parent fields",
+
+  schema: {
+    config: {
+      endianness: "big_endian",
+    },
+    types: {
+      "Header": {
+        sequence: [
+          { name: "flags", type: "uint8" },
+          { name: "reserved", type: "uint8" },
+        ]
+      },
+      "NestedConditionalMessage": {
+        sequence: [
+          { name: "has_header", type: "uint8" },
+          {
+            name: "header",
+            type: "Header",
+            conditional: "has_header == 1",
+          },
+          {
+            name: "payload_length",
+            type: "uint16",
+            conditional: "header.flags & 0x01",
+          },
+        ]
+      }
+    }
+  },
+
+  test_type: "NestedConditionalMessage",
+
+  test_cases: [
+    {
+      description: "No header present (payload_length skipped safely)",
+      value: {
+        has_header: 0,
+      },
+      bytes: [
+        0x00, // has_header = 0
+      ],
+    },
+    {
+      description: "Header present with low bit set (payload_length decoded)",
+      value: {
+        has_header: 1,
+        header: { flags: 0x01, reserved: 0x00 },
+        payload_length: 5,
+      },
+      bytes: [
+        0x01, // has_header = 1
+        0x01, // flags = 1
+        0x00, // reserved
+        0x00, 0x05, // payload_length = 5
+      ],
+    },
+    {
+      description: "Header present without low bit (payload_length absent)",
+      value: {
+        has_header: 1,
+        header: { flags: 0x00, reserved: 0x00 },
+      },
+      bytes: [
+        0x01, // has_header = 1
+        0x00, // flags = 0
+        0x00, // reserved
+      ],
+    },
+  ]
+});
+
+/**
  * Test suite for conditional based on comparison operators
  *
  * Demonstrates conditionals using >, <, >=, <= operators
