@@ -33,7 +33,8 @@
       "WebSearch",
       "Bash(npm run export:*)",
       "Bash(node debug-schema.js)",
-      "Bash(node debug-schema.cjs)"
+      "Bash(node debug-schema.cjs)",
+      "Bash(npm run docs:types:*)"
     ],
     "deny": [],
     "ask": []
