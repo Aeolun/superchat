@@ -10,11 +10,11 @@ client.lcov
 *.coverprofile
 
 # Build artifacts
-superchat-server
-superchat
-superchat-client
-client
-server
+/superchat-server
+/superchat
+/superchat-client
+/client
+/server
 *.exe
 *.dll
 *.so
