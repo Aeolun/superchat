@@ -135,7 +135,7 @@ function convertCombinedProtocolToLegacy(schemaPath: string, binarySchema: Binar
       discriminator_field: protocol.discriminator,
       field_descriptions: protocol.field_descriptions,
       messages,
-      message_groups,
+      message_groups: messageGroups,
       constants: protocol.constants,
       notes: protocol.notes,
     },

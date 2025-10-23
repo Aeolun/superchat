@@ -464,6 +464,74 @@ const DISCRIMINATED_UNION_CODEGEN_TESTS: CodegenTestCase[] = [
       }
     ]
   },
+
+  {
+    description: "Documentation and enums generated for discriminated unions",
+    shouldCompile: true,
+    schema: {
+      types: {
+        "AlphaPayload": {
+          sequence: [
+            { name: "value", type: "uint8", description: "Alpha payload value" }
+          ]
+        },
+        "BetaPayload": {
+          sequence: [
+            { name: "value", type: "uint8", description: "Beta payload value" }
+          ]
+        },
+        "TaggedUnion": {
+          type: "discriminated_union",
+          description: "Example tagged union",
+          discriminator: { peek: "uint8" },
+          variants: [
+            { when: "value === 0x01", type: "AlphaPayload", description: "Alpha payload" },
+            { type: "BetaPayload", description: "Fallback beta payload" }
+          ]
+        } as any,
+        "Container": {
+          description: "Container with inline discriminated union",
+          sequence: [
+            { name: "tag", type: "uint8", description: "Tag identifying payload type" },
+            {
+              name: "payload",
+              type: "discriminated_union",
+              description: "Inline discriminated payload",
+              discriminator: { field: "tag" },
+              variants: [
+                { when: "value === 0x01", type: "AlphaPayload", description: "Alpha payload" },
+                { type: "BetaPayload", description: "Fallback beta payload" }
+              ]
+            } as any
+          ]
+        }
+      }
+    },
+    expectedTypes: [
+      {
+        typeName: "TaggedUnion",
+        mustContain: [
+          "Discriminator: peek uint8",
+          "Variants:",
+          "export const enum TaggedUnionVariant",
+          "Variant tags for TaggedUnion",
+          "TaggedUnionVariant.AlphaPayload = 'AlphaPayload'",
+          "Alpha payload"
+        ]
+      },
+      {
+        typeName: "Container",
+        mustContain: [
+          "Discriminator: field \"tag\"",
+          "Variants:",
+          "Inline discriminated payload",
+          "export const enum ContainerPayloadVariant",
+          "Variant tags for Container.payload",
+          "ContainerPayloadVariant.BetaPayload = 'BetaPayload'"
+        ]
+      }
+    ]
+  },
 ];
 
 /**

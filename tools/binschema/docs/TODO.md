@@ -1,9 +1,9 @@
 # BinSchema TODO
 
 ## CODEGEN Improvements (from docs/CODEGEN_IMPROVEMENTS.md)
-- [ ] **Generate JSDoc for discriminated unions**
+- [x] **Generate JSDoc for discriminated unions**
 - [ ] **Extract inline anonymous types to named interfaces**
-- [ ] **Add const enums for discriminated union types**
+- [x] **Add const enums for discriminated union types**
 - [ ] **Add input validation for bitfields**
 - [ ] **Add const enums for well-known discriminator values**
 - [ ] **Generate helper type guards**

@@ -11,7 +11,7 @@
  */
 
 import { transformProtocolToBinary } from "../../schema/protocol-to-binary";
-import { ProtocolSchema } from "../../schema/protocol-schema";
+import { ProtocolSchema, normalizeMessageCode } from "../../schema/protocol-schema";
 import { BinarySchema } from "../../schema/binary-schema";
 
 interface TransformTestCase {
@@ -862,13 +862,26 @@ export function runProtocolTransformationTests() {
       // Merge protocol schema and binary schema into unified schema
       // Map old field names to new ones for backward compatibility with tests
       const protocol = tc.protocolSchema.protocol;
+      const header = (protocol as any).header_format || (protocol as any).header;
+      const discriminator = (protocol as any).discriminator_field || (protocol as any).discriminator;
+      const normalizedMessages = protocol.messages.map((msg) => ({
+        ...msg,
+        code: normalizeMessageCode(msg.code),
+      }));
+      const normalizedGroups = protocol.message_groups?.map((group) => ({
+        ...group,
+        messages: group.messages.map((code) => normalizeMessageCode(code)),
+      }));
+
       const unifiedSchema: BinarySchema = {
         ...tc.binarySchema,
         protocol: {
           ...protocol,
-          header: (protocol as any).header_format || (protocol as any).header,
-          discriminator: (protocol as any).discriminator_field || (protocol as any).discriminator
-        }
+          header,
+          discriminator,
+          messages: normalizedMessages,
+          message_groups: normalizedGroups,
+        } as any,
       };
       const result = transformProtocolToBinary(unifiedSchema, options);
 

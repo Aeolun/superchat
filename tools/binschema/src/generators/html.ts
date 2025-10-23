@@ -774,9 +774,10 @@ function generateMessageTable(messages: ProtocolMessage[]): string {
 `;
 
   for (const msg of messages) {
+    const code = String(msg.code);
     html += `          <tr>
-            <td><code>${escapeHtml(msg.code)}</code></td>
-            <td><a href="#msg-${msg.code}">${escapeHtml(msg.name)}</a></td>
+            <td><code>${escapeHtml(code)}</code></td>
+            <td><a href="#msg-${escapeHtml(code)}">${escapeHtml(msg.name)}</a></td>
             <td>${escapeHtml(msg.description)}</td>
           </tr>
 `;
@@ -802,10 +803,11 @@ function generateMessageDetails(
 
   for (const msg of messages) {
     const payloadType = binarySchema.types[msg.payload_type] as TypeDef;
+    const code = String(msg.code);
 
-    html += `      <details class="message-details" id="msg-${msg.code}">
+    html += `      <details class="message-details" id="msg-${escapeHtml(code)}">
         <summary>
-          <h4><code>${escapeHtml(msg.code)}</code> ${escapeHtml(msg.name)}</h4>
+          <h4><code>${escapeHtml(code)}</code> ${escapeHtml(msg.name)}</h4>
         </summary>
 
         <p class="message-description">${escapeHtml(msg.description)}</p>
