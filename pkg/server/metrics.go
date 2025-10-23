@@ -1,6 +1,9 @@
 package server
 
 import (
+	"fmt"
+
+	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -12,13 +15,13 @@ type Metrics struct {
 	threadSubscribers  *prometheus.GaugeVec
 
 	// Broadcast metrics
-	broadcastFanout    *prometheus.HistogramVec
-	messagesDelivered  *prometheus.CounterVec
-	messagesBroadcast  prometheus.Counter
+	broadcastFanout   *prometheus.HistogramVec
+	messagesDelivered *prometheus.CounterVec
+	messagesBroadcast prometheus.Counter
 
 	// Session metrics
-	activeSessions      prometheus.Gauge
-	sessionsCreated     prometheus.Counter
+	activeSessions       prometheus.Gauge
+	sessionsCreated      prometheus.Counter
 	sessionsDisconnected prometheus.Counter
 
 	// Message type metrics
@@ -188,53 +191,67 @@ func uint64ToString(n uint64) string {
 // Helper to convert message type to string
 func messageTypeToString(msgType uint8) string {
 	switch msgType {
-	case 0x01:
+	case protocol.TypeSetNickname:
 		return "SET_NICKNAME"
-	case 0x02:
+	case protocol.TypeListChannels:
 		return "LIST_CHANNELS"
-	case 0x03:
+	case protocol.TypeJoinChannel:
 		return "JOIN_CHANNEL"
-	case 0x04:
+	case protocol.TypeLeaveChannel:
 		return "LEAVE_CHANNEL"
-	case 0x05:
+	case protocol.TypeListMessages:
 		return "LIST_MESSAGES"
-	case 0x06:
+	case protocol.TypePostMessage:
 		return "POST_MESSAGE"
-	case 0x07:
+	case protocol.TypeDeleteMessage:
 		return "DELETE_MESSAGE"
-	case 0x08:
+	case protocol.TypePing:
 		return "PING"
-	case 0x09:
+	case protocol.TypeDisconnect:
 		return "DISCONNECT"
-	case 0x51:
+	case protocol.TypeSubscribeThread:
 		return "SUBSCRIBE_THREAD"
-	case 0x52:
+	case protocol.TypeUnsubscribeThread:
 		return "UNSUBSCRIBE_THREAD"
-	case 0x53:
+	case protocol.TypeSubscribeChannel:
 		return "SUBSCRIBE_CHANNEL"
-	case 0x54:
+	case protocol.TypeUnsubscribeChannel:
 		return "UNSUBSCRIBE_CHANNEL"
-	case 0x90:
+	case protocol.TypeListUsers:
+		return "LIST_USERS"
+	case protocol.TypeListChannelUsers:
+		return "LIST_CHANNEL_USERS"
+	case protocol.TypeNicknameResponse:
 		return "NICKNAME_RESPONSE"
-	case 0x91:
+	case protocol.TypeError:
 		return "ERROR"
-	case 0x92:
+	case protocol.TypeChannelList:
 		return "CHANNEL_LIST"
-	case 0x93:
+	case protocol.TypeJoinResponse:
 		return "JOIN_RESPONSE"
-	case 0x94:
+	case protocol.TypeLeaveResponse:
+		return "LEAVE_RESPONSE"
+	case protocol.TypeMessageList:
 		return "MESSAGE_LIST"
-	case 0x95:
+	case protocol.TypeMessagePosted:
 		return "MESSAGE_POSTED"
-	case 0x96:
+	case protocol.TypeNewMessage:
 		return "NEW_MESSAGE"
-	case 0x97:
+	case protocol.TypeMessageDeleted:
 		return "MESSAGE_DELETED"
-	case 0x98:
+	case protocol.TypeServerConfig:
 		return "SERVER_CONFIG"
-	case 0x99:
+	case protocol.TypeSubscribeOk:
 		return "SUBSCRIBE_OK"
+	case protocol.TypeUserList:
+		return "USER_LIST"
+	case protocol.TypeChannelUserList:
+		return "CHANNEL_USER_LIST"
+	case protocol.TypeChannelPresence:
+		return "CHANNEL_PRESENCE"
+	case protocol.TypeServerPresence:
+		return "SERVER_PRESENCE"
 	default:
-		return "UNKNOWN"
+		return fmt.Sprintf("0x%02X", msgType)
 	}
 }

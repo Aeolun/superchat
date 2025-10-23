@@ -32,6 +32,114 @@ func (s *Server) dbError(sess *Session, operation string, err error) error {
 	return s.sendError(sess, 9001, "Database error")
 }
 
+func optionalUint64FromInt64Ptr(v *int64) *uint64 {
+	if v == nil {
+		return nil
+	}
+	converted := uint64(*v)
+	return &converted
+}
+
+func (s *Server) buildServerPresenceMessage(sess *Session, online bool) *protocol.ServerPresenceMessage {
+	sess.mu.RLock()
+	nickname := sess.Nickname
+	userID := sess.UserID
+	userFlags := sess.UserFlags
+	sess.mu.RUnlock()
+
+	if nickname == "" {
+		return nil
+	}
+
+	msg := &protocol.ServerPresenceMessage{
+		SessionID:    sess.ID,
+		Nickname:     nickname,
+		IsRegistered: userID != nil,
+		UserFlags:    protocol.UserFlags(userFlags),
+		Online:       online,
+	}
+
+	if userID != nil {
+		msg.UserID = optionalUint64FromInt64Ptr(userID)
+	}
+
+	return msg
+}
+
+func (s *Server) notifyServerPresence(sess *Session, online bool) {
+	msg := s.buildServerPresenceMessage(sess, online)
+	if msg == nil {
+		return
+	}
+	targets := s.sessions.GetAllSessions()
+	for _, target := range targets {
+		if err := s.sendMessage(target, protocol.TypeServerPresence, msg); err != nil {
+			log.Printf("Failed to send SERVER_PRESENCE to session %d: %v", target.ID, err)
+			s.removeSession(target.ID)
+		}
+	}
+}
+
+func (s *Server) sendServerPresenceSnapshot(target *Session) {
+	sessions := s.sessions.GetAllSessions()
+	for _, sess := range sessions {
+		if sess.ID == target.ID {
+			continue
+		}
+		msg := s.buildServerPresenceMessage(sess, true)
+		if msg == nil {
+			continue
+		}
+		if err := s.sendMessage(target, protocol.TypeServerPresence, msg); err != nil {
+			log.Printf("Failed to send SERVER_PRESENCE snapshot to session %d: %v", target.ID, err)
+		}
+	}
+}
+
+func (s *Server) buildChannelPresenceMessage(channelID int64, subchannelID *uint64, sess *Session, joined bool) *protocol.ChannelPresenceMessage {
+	sess.mu.RLock()
+	nickname := sess.Nickname
+	userID := sess.UserID
+	userFlags := sess.UserFlags
+	sess.mu.RUnlock()
+
+	if nickname == "" {
+		return nil
+	}
+
+	msg := &protocol.ChannelPresenceMessage{
+		ChannelID:    uint64(channelID),
+		SubchannelID: subchannelID,
+		SessionID:    sess.ID,
+		Nickname:     nickname,
+		IsRegistered: userID != nil,
+		UserFlags:    protocol.UserFlags(userFlags),
+		Joined:       joined,
+	}
+
+	if userID != nil {
+		msg.UserID = optionalUint64FromInt64Ptr(userID)
+	}
+
+	return msg
+}
+
+func (s *Server) notifyChannelPresence(channelID int64, sess *Session, joined bool) {
+	msg := s.buildChannelPresenceMessage(channelID, nil, sess, joined)
+	if msg == nil {
+		return
+	}
+	if err := s.broadcastToChannel(channelID, protocol.TypeChannelPresence, msg); err != nil {
+		log.Printf("Failed to broadcast CHANNEL_PRESENCE for channel %d: %v", channelID, err)
+	}
+	if !joined {
+		// Leaving sessions won't receive the broadcast (they are removed before send). Send directly.
+		if err := s.sendMessage(sess, protocol.TypeChannelPresence, msg); err != nil {
+			log.Printf("Failed to send CHANNEL_PRESENCE to leaving session %d: %v", sess.ID, err)
+		}
+	}
+}
+
 // handleAuthRequest handles AUTH_REQUEST message (login)
 func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 	// Decode message
@@ -121,13 +229,20 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 	}
 
 	// Send success response
+	flags := protocol.UserFlags(user.UserFlags)
 	resp := &protocol.AuthResponseMessage{
-		Success:  true,
-		UserID:   uint64(user.ID),
-		Nickname: user.Nickname,
-		Message:  fmt.Sprintf("Welcome back, %s!", user.Nickname),
+		Success:   true,
+		UserID:    uint64(user.ID),
+		Nickname:  user.Nickname,
+		Message:   fmt.Sprintf("Welcome back, %s!", user.Nickname),
+		UserFlags: &flags,
 	}
-	return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
+	if err := s.sendMessage(sess, protocol.TypeAuthResponse, resp); err != nil {
+		return err
+	}
+	s.sendServerPresenceSnapshot(sess)
+	s.notifyServerPresence(sess, true)
+	return nil
 }
 
 // handleRegisterUser handles REGISTER_USER message
@@ -294,7 +409,22 @@ func (s *Server) handleSetNickname(sess *Session, frame *protocol.Frame) error {
 		Success: true,
 		Message: message,
 	}
-	return s.sendMessage(sess, protocol.TypeNicknameResponse, resp)
+	if err := s.sendMessage(sess, protocol.TypeNicknameResponse, resp); err != nil {
+		return err
+	}
+
+	if oldNickname == "" {
+		s.sendServerPresenceSnapshot(sess)
+	}
+	s.notifyServerPresence(sess, true)
+	sess.mu.RLock()
+	joined := sess.JoinedChannel
+	sess.mu.RUnlock()
+	if joined != nil {
+		s.notifyChannelPresence(*joined, sess, true)
+	}
+
+	return nil
 }
 
 // handleListChannels handles LIST_CHANNELS message
@@ -319,12 +449,15 @@ func (s *Server) handleListChannels(sess *Session, frame *protocol.Frame) error 
 			continue
 		}
 
+		channelSub := ChannelSubscription{ChannelID: uint64(dbCh.ID)}
+		userCount := uint32(len(s.sessions.GetChannelSubscribers(channelSub)))
+
 		// Convert to protocol format
 		ch := protocol.Channel{
 			ID:             uint64(dbCh.ID),
 			Name:           dbCh.Name,
 			Description:    safeDeref(dbCh.Description, ""),
-			UserCount:      0, // TODO: Track active user count
+			UserCount:      userCount,
 			IsOperator:     false,
 			Type:           dbCh.ChannelType,
 			RetentionHours: dbCh.MessageRetentionHours,
@@ -366,8 +499,15 @@ func (s *Server) handleJoinChannel(sess *Session, frame *protocol.Frame) error {
 		return s.sendMessage(sess, protocol.TypeJoinResponse, resp)
 	}
 
-	// Update session's joined channel
+	sess.mu.RLock()
+	previousJoined := sess.JoinedChannel
+	sess.mu.RUnlock()
 	channelID := int64(msg.ChannelID)
+	if previousJoined != nil && *previousJoined != channelID {
+		s.notifyChannelPresence(*previousJoined, sess, false)
+	}
+
+	// Update session's joined channel
 	if err := s.sessions.SetJoinedChannel(sess.ID, &channelID); err != nil {
 		return s.sendError(sess, 9000, "Failed to join channel")
 	}
@@ -380,20 +520,60 @@ func (s *Server) handleJoinChannel(sess *Session, frame *protocol.Frame) error {
 		Message:      "Joined channel",
 	}
 
-	return s.sendMessage(sess, protocol.TypeJoinResponse, resp)
+	if err := s.sendMessage(sess, protocol.TypeJoinResponse, resp); err != nil {
+		return err
+	}
+
+	s.notifyChannelPresence(channelID, sess, true)
+	return nil
 }
 
 // handleLeaveChannel handles LEAVE_CHANNEL message
 func (s *Server) handleLeaveChannel(sess *Session, frame *protocol.Frame) error {
-	// Update session to no longer be in a channel
+	msg := &protocol.LeaveChannelMessage{}
+	if len(frame.Payload) > 0 {
+		if err := msg.Decode(frame.Payload); err != nil {
+			return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+		}
+	}
+
+	sess.mu.RLock()
+	current := sess.JoinedChannel
+	sess.mu.RUnlock()
+	if current == nil {
+		resp := &protocol.LeaveResponseMessage{
+			Success:   false,
+			ChannelID: msg.ChannelID,
+			Message:   "Not currently joined to any channel",
+		}
+		return s.sendMessage(sess, protocol.TypeLeaveResponse, resp)
+	}
+
+	targetChannelID := *current
+	if msg.ChannelID != 0 && int64(msg.ChannelID) != targetChannelID {
+		resp := &protocol.LeaveResponseMessage{
+			Success:   false,
+			ChannelID: msg.ChannelID,
+			Message:   "Session is not joined to the requested channel",
+		}
+		return s.sendMessage(sess, protocol.TypeLeaveResponse, resp)
+	}
+
 	if err := s.sessions.SetJoinedChannel(sess.ID, nil); err != nil {
 		return s.sendError(sess, 9000, "Failed to leave channel")
 	}
 
-	// Send confirmation (LEAVE_RESPONSE)
-	// Note: LeaveResponseMessage doesn't exist yet in protocol, so we'll just send success via error code 0
-	// For now, we'll create a simple response
-	return s.sendError(sess, 0, "Left channel")
+	resp := &protocol.LeaveResponseMessage{
+		Success:   true,
+		ChannelID: uint64(targetChannelID),
+		Message:   "Left channel",
+	}
+	if err := s.sendMessage(sess, protocol.TypeLeaveResponse, resp); err != nil {
+		return err
+	}
+
+	s.notifyChannelPresence(targetChannelID, sess, false)
+	return nil
 }
 
 // handleCreateChannel handles CREATE_CHANNEL message (V2+)
@@ -490,15 +670,15 @@ func (s *Server) handleCreateChannel(sess *Session, frame *protocol.Frame) error
 	// Construct channel object for broadcast (we have all the data)
 	now := time.Now().UnixMilli()
 	createdChannel := &database.Channel{
-		ID:                     channelID,
-		Name:                   msg.Name,
-		DisplayName:            msg.DisplayName,
-		Description:            msg.Description,
-		ChannelType:            msg.ChannelType,
-		MessageRetentionHours:  msg.RetentionHours,
-		CreatedBy:              userID,
-		CreatedAt:              now,
-		IsPrivate:              false,
+		ID:                    channelID,
+		Name:                  msg.Name,
+		DisplayName:           msg.DisplayName,
+		Description:           msg.Description,
+		ChannelType:           msg.ChannelType,
+		MessageRetentionHours: msg.RetentionHours,
+		CreatedBy:             userID,
+		CreatedAt:             now,
+		IsPrivate:             false,
 	}
 
 	// Broadcast to all OTHER connected users (not the creator again)
@@ -1138,7 +1318,7 @@ func (s *Server) handlePing(sess *Session, frame *protocol.Frame) error {
 func (s *Server) handleDisconnect(sess *Session, frame *protocol.Frame) error {
 	// Client is disconnecting gracefully - remove from sessions map immediately
 	// to prevent broadcasts during the 100ms grace period before connection closes
-	s.sessions.RemoveSession(sess.ID)
+	s.removeSession(sess.ID)
 
 	// Return error to close the connection
 	return ErrClientDisconnecting
@@ -1246,7 +1426,7 @@ func (s *Server) broadcastToChannel(channelID int64, msgType uint8, msg interfac
 
 	// Remove dead sessions
 	for _, sessID := range deadSessions {
-		s.sessions.RemoveSession(sessID)
+		s.removeSession(sessID)
 	}
 
 	return nil
@@ -1395,7 +1575,7 @@ func (s *Server) broadcastNewMessage(authorSess *Session, msg *protocol.NewMessa
 
 	// Remove dead sessions
 	for _, sessID := range deadSessions {
-		s.sessions.RemoveSession(sessID)
+		s.removeSession(sessID)
 	}
 
 	// Metrics: record fan-out and duration
@@ -1768,6 +1948,70 @@ func (s *Server) handleListUsers(sess *Session, frame *protocol.Frame) error {
 	return s.sendMessage(sess, protocol.TypeUserList, resp)
 }
 
+// handleListChannelUsers returns the current roster for a channel/subchannel
+func (s *Server) handleListChannelUsers(sess *Session, frame *protocol.Frame) error {
+	msg := &protocol.ListChannelUsersMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	channelID := int64(msg.ChannelID)
+	if channelID == 0 {
+		return s.sendError(sess, protocol.ErrCodeChannelNotFound, "Channel not found")
+	}
+
+	exists, err := s.db.ChannelExists(channelID)
+	if err != nil {
+		return s.dbError(sess, "ChannelExists", err)
+	}
+	if !exists {
+		return s.sendError(sess, protocol.ErrCodeChannelNotFound, "Channel does not exist")
+	}
+
+	if msg.SubchannelID != nil {
+		subExists, err := s.db.SubchannelExists(int64(*msg.SubchannelID))
+		if err != nil {
+			return s.dbError(sess, "SubchannelExists", err)
+		}
+		if !subExists {
+			return s.sendError(sess, protocol.ErrCodeSubchannelNotFound, "Subchannel does not exist")
+		}
+	}
+
+	allSessions := s.sessions.GetAllSessions()
+	users := make([]protocol.ChannelUserEntry, 0)
+	for _, other := range allSessions {
+		other.mu.RLock()
+		joined := other.JoinedChannel
+		nickname := other.Nickname
+		userID := other.UserID
+		userFlags := other.UserFlags
+		other.mu.RUnlock()
+
+		if joined == nil || *joined != channelID {
+			continue
+		}
+
+		entry := protocol.ChannelUserEntry{
+			SessionID:    other.ID,
+			Nickname:     nickname,
+			IsRegistered: userID != nil,
+			UserFlags:    protocol.UserFlags(userFlags),
+		}
+		if userID != nil {
+			entry.UserID = optionalUint64FromInt64Ptr(userID)
+		}
+		users = append(users, entry)
+	}
+
+	resp := &protocol.ChannelUserListMessage{
+		ChannelID:    msg.ChannelID,
+		SubchannelID: msg.SubchannelID,
+		Users:        users,
+	}
+	return s.sendMessage(sess, protocol.TypeChannelUserList, resp)
+}
+
 // broadcastChannelCreated broadcasts a CHANNEL_CREATED message to all connected users (except creator)
 func (s *Server) broadcastChannelCreated(ch *database.Channel, creatorSessionID uint64) {
 	msg := &protocol.ChannelCreatedMessage{
@@ -1831,7 +2075,7 @@ func (s *Server) broadcastToAll(msgType uint8, msg interface{}) error {
 
 	// Remove dead sessions
 	for _, sessID := range deadSessions {
-		s.sessions.RemoveSession(sessID)
+		s.removeSession(sessID)
 	}
 
 	return nil
@@ -1952,8 +2196,8 @@ func (s *Server) handleRegisterServer(sess *Session, frame *protocol.Frame) erro
 	// Send immediate response (verification happens async)
 	// Server will be added after successful verification
 	resp := &protocol.RegisterAckMessage{
-		Success:           false,
-		Message:           "Verification in progress...",
+		Success: false,
+		Message: "Verification in progress...",
 	}
 	return s.sendMessage(sess, protocol.TypeRegisterAck, resp)
 }
@@ -2559,7 +2803,7 @@ func (s *Server) handleDeleteUser(sess *Session, frame *protocol.Frame) error {
 	// Disconnect all active sessions for this user
 	for _, targetSess := range targetSessions {
 		log.Printf("Disconnecting session %d for deleted user %s (id=%d)", targetSess.ID, deletedNickname, msg.UserID)
-		s.sessions.RemoveSession(targetSess.ID)
+		s.removeSession(targetSess.ID)
 	}
 
 	// Send success response

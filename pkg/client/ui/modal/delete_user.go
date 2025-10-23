@@ -5,14 +5,15 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/aeolun/superchat/pkg/protocol"
 )
 
 // DeleteUserModal handles deleting a user
 type DeleteUserModal struct {
 	nickname     string
+	userID       *uint64
+	userIDValue  uint64
 	errorMessage string
-	onSubmit     func(*protocol.DeleteUserMessage) tea.Cmd
+	onSubmit     func(nickname string, userID *uint64) tea.Cmd
 }
 
 // NewDeleteUserModal creates a new delete user modal
@@ -21,13 +22,25 @@ func NewDeleteUserModal() *DeleteUserModal {
 }
 
 // SetSubmitHandler sets the callback for when the form is submitted
-func (m *DeleteUserModal) SetSubmitHandler(handler func(*protocol.DeleteUserMessage) tea.Cmd) {
+func (m *DeleteUserModal) SetSubmitHandler(handler func(nickname string, userID *uint64) tea.Cmd) {
 	m.onSubmit = handler
 }
 
 // SetNickname pre-fills the nickname field
 func (m *DeleteUserModal) SetNickname(nickname string) {
 	m.nickname = nickname
+	m.userID = nil
+}
+
+// SetUser pre-fills nickname and user ID when known
+func (m *DeleteUserModal) SetUser(user UserEntry) {
+	m.nickname = user.Nickname
+	if user.UserID != nil {
+		m.userIDValue = *user.UserID
+		m.userID = &m.userIDValue
+	} else {
+		m.userID = nil
+	}
 }
 
 // Type returns the modal type
@@ -69,17 +82,10 @@ func (m *DeleteUserModal) submit() (bool, Modal, tea.Cmd) {
 		return true, m, nil
 	}
 
-	// Create message (we don't have user ID, server will look it up)
-	// Note: We'll need to enhance this to work with user IDs from ban list
-	// For now, this is a stub that assumes nickname lookup
-	msg := &protocol.DeleteUserMessage{
-		UserID: 0, // TODO: Server needs to support nickname-based deletion or we need user ID
-	}
-
 	// Call submit handler if set and get the command
 	var cmd tea.Cmd
 	if m.onSubmit != nil {
-		cmd = m.onSubmit(msg)
+		cmd = m.onSubmit(m.nickname, m.userID)
 	}
 
 	// Close modal and return the command to be executed

@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,15 +53,23 @@ const (
 	AuthStateRegistering                     // Registration in progress
 )
 
+type presenceEntry struct {
+	SessionID    uint64
+	Nickname     string
+	IsRegistered bool
+	UserID       *uint64
+	UserFlags    protocol.UserFlags
+}
+
 // Model represents the application state
 type Model struct {
 	// Connection and state
-	conn                  client.ConnectionInterface
-	state                 client.StateInterface
-	connectionState       ConnectionState
-	reconnectAttempt      int
-	switchingMethod       bool   // True when user is trying a different connection method
-	connGeneration        uint64 // Incremented each time we replace the connection
+	conn             client.ConnectionInterface
+	state            client.StateInterface
+	connectionState  ConnectionState
+	reconnectAttempt int
+	switchingMethod  bool   // True when user is trying a different connection method
+	connGeneration   uint64 // Incremented each time we replace the connection
 
 	// Directory mode (for server discovery)
 	directoryMode      bool
@@ -74,13 +84,20 @@ type Model struct {
 	currentView ViewState // DEPRECATED: will be removed during migration
 
 	// Server state
-	serverConfig   *protocol.ServerConfigMessage
-	channels       []protocol.Channel
-	currentChannel *protocol.Channel
-	threads        []protocol.Message // Root messages
-	currentThread  *protocol.Message
-	threadReplies  []protocol.Message // All replies in current thread
-	onlineUsers    uint32
+	serverConfig     *protocol.ServerConfigMessage
+	channels         []protocol.Channel
+	currentChannel   *protocol.Channel
+	threads          []protocol.Message // Root messages
+	currentThread    *protocol.Message
+	threadReplies    []protocol.Message // All replies in current thread
+	onlineUsers      uint32
+	userDirectory    map[string]uint64
+	hasActiveChannel bool
+	activeChannelID  uint64
+	channelRoster    map[uint64]map[uint64]presenceEntry // channelID -> sessionID -> entry
+	serverRoster     map[uint64]presenceEntry            // sessionID -> entry
+	selfSessionID    *uint64
+	showUserSidebar  bool
 
 	// Loading states
 	loadingChannels      bool // True if fetching channel list
@@ -119,7 +136,8 @@ type Model struct {
 	pendingNickname      string  // Nickname we sent to server, waiting for confirmation
 	nicknameIsRegistered bool    // True if current nickname belongs to a registered user
 	userID               *uint64 // Set when authenticated (V2), nil for anonymous
-	composeInput         string  // Temporary storage for compose state
+	userFlags            protocol.UserFlags
+	composeInput         string // Temporary storage for compose state
 	composeParentID      *uint64
 	composeMessageID     *uint64 // Message ID when editing
 
@@ -225,10 +243,13 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 		spinner:                s,
 		chatTextarea:           ta,
 		newMessageIDs:          make(map[uint64]bool),
+		userDirectory:          make(map[string]uint64),
 		threadRepliesCache:     make(map[uint64][]protocol.Message),
 		threadHighestMessageID: make(map[uint64]uint64),
 		pingInterval:           18 * time.Second, // Send ping every 18 seconds (3 pings within 60s timeout)
 		lastPingSent:           time.Now(),
+		channelRoster:          make(map[uint64]map[uint64]presenceEntry),
+		serverRoster:           make(map[uint64]presenceEntry),
 	}
 
 	// Initialize state machine - detect SSH connection by address prefix
@@ -672,6 +693,7 @@ func (m *Model) registerCommands() {
 					model.sendLeaveChannel(),
 					model.sendUnsubscribeChannel(model.currentChannel.ID),
 				)
+				model.clearActiveChannel()
 			}
 			model.currentChannel = nil
 			model.threads = []protocol.Message{}
@@ -901,6 +923,33 @@ func (m *Model) registerCommands() {
 		Priority(10).
 		Build())
 
+	// Toggle user sidebar with U key
+	m.commands.Register(commands.NewCommand().
+		Keys("u").
+		Name("Users Sidebar").
+		Help("Toggle user sidebar").
+		Global().
+		InModals(modal.ModalNone).
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			model.showUserSidebar = !model.showUserSidebar
+
+			var cmds []tea.Cmd
+			if model.showUserSidebar {
+				if model.currentChannel != nil && model.hasActiveChannel {
+					cmds = append(cmds, model.sendListChannelUsers(model.currentChannel.ID))
+				} else {
+					cmds = append(cmds, model.sendListUsers(false))
+				}
+				cmds = append(cmds, func() tea.Msg { return ForceRenderMsg{} })
+				return model, tea.Batch(cmds...)
+			}
+			cmds = append(cmds, func() tea.Msg { return ForceRenderMsg{} })
+			return model, tea.Batch(cmds...)
+		}).
+		Priority(60).
+		Build())
+
 	// Admin panel with A key
 	m.commands.Register(commands.NewCommand().
 		Keys("A").
@@ -908,6 +957,10 @@ func (m *Model) registerCommands() {
 		Help("Open admin panel").
 		Global().
 		InModals(modal.ModalNone). // Only available when no modal is open
+		When(func(i interface{}) bool {
+			model := i.(*Model)
+			return model.isAdmin()
+		}).
 		Do(func(i interface{}) (interface{}, tea.Cmd) {
 			model := i.(*Model)
 			model.showAdminPanel()
@@ -1040,6 +1093,7 @@ func (m *Model) showGoAnonymousModal() {
 		func(newNickname string) tea.Cmd {
 			// Clear authentication locally first
 			m.userID = nil
+			m.userFlags = 0
 			m.authState = AuthStateAnonymous
 			m.state.SetUserID(nil)
 			m.state.SetLastNickname(newNickname)
@@ -1220,8 +1274,15 @@ func (m *Model) shouldShowRegistrationWarning() bool {
 
 // Admin modal helper methods
 
+func (m *Model) isAdmin() bool {
+	return m.authState == AuthStateAuthenticated && m.userFlags.IsAdmin()
+}
+
 // showAdminPanel displays the admin panel modal
 func (m *Model) showAdminPanel() {
+	if !m.isAdmin() {
+		return
+	}
 	m.modalStack.Push(m.createConfiguredAdminPanel())
 }
 
@@ -1304,11 +1365,11 @@ func (m *Model) createListUsersModal() (modal.Modal, tea.Cmd) {
 		}
 		m.modalStack.Push(banModal)
 	})
-	listUsersModal.SetDeleteUserHandler(func(nickname string) {
-		// Create and push delete user modal with pre-filled nickname
+	listUsersModal.SetDeleteUserHandler(func(entry modal.UserEntry) {
+		// Create and push delete user modal with pre-filled values
 		deleteModal, _ := m.createDeleteUserModal()
 		if deleteUserModal, ok := deleteModal.(*modal.DeleteUserModal); ok {
-			deleteUserModal.SetNickname(nickname)
+			deleteUserModal.SetUser(entry)
 		}
 		m.modalStack.Push(deleteModal)
 	})
@@ -1319,9 +1380,19 @@ func (m *Model) createListUsersModal() (modal.Modal, tea.Cmd) {
 // createDeleteUserModal creates a delete user modal with submit handler
 func (m *Model) createDeleteUserModal() (modal.Modal, tea.Cmd) {
 	deleteUserModal := modal.NewDeleteUserModal()
-	deleteUserModal.SetSubmitHandler(func(msg *protocol.DeleteUserMessage) tea.Cmd {
-		m.statusMessage = "Deleting user..."
-		return m.sendDeleteUser(msg)
+	deleteUserModal.SetSubmitHandler(func(nickname string, userID *uint64) tea.Cmd {
+		var targetID uint64
+		if userID != nil {
+			targetID = *userID
+		} else if id, ok := m.lookupUserID(nickname); ok {
+			targetID = id
+		} else {
+			m.errorMessage = fmt.Sprintf("Unknown user '%s'. Refresh the user list (press [R]) and try again.", nickname)
+			return nil
+		}
+
+		m.statusMessage = fmt.Sprintf("Deleting user %s...", nickname)
+		return m.sendDeleteUser(&protocol.DeleteUserMessage{UserID: targetID})
 	})
 	return deleteUserModal, nil
 }
@@ -1345,6 +1416,199 @@ func (m *Model) createDeleteChannelModal() (modal.Modal, tea.Cmd) {
 		return m.sendDeleteChannel(msg)
 	})
 	return deleteChannelModal, nil
+}
+
+func (m *Model) lookupUserID(nickname string) (uint64, bool) {
+	if m.userDirectory == nil {
+		return 0, false
+	}
+	key := strings.ToLower(strings.TrimSpace(nickname))
+	if key == "" {
+		return 0, false
+	}
+	id, ok := m.userDirectory[key]
+	return id, ok
+}
+
+func cloneUint64Ptr(src *uint64) *uint64 {
+	if src == nil {
+		return nil
+	}
+	val := *src
+	return &val
+}
+
+func makeUint64Ptr(v uint64) *uint64 {
+	val := v
+	return &val
+}
+
+func (m *Model) ensureChannelRoster(channelID uint64) map[uint64]presenceEntry {
+	roster, ok := m.channelRoster[channelID]
+	if !ok {
+		roster = make(map[uint64]presenceEntry)
+		m.channelRoster[channelID] = roster
+	}
+	return roster
+}
+
+func (m *Model) upsertChannelPresence(channelID uint64, entry presenceEntry) {
+	entry.UserID = cloneUint64Ptr(entry.UserID)
+	roster := m.ensureChannelRoster(channelID)
+	roster[entry.SessionID] = entry
+	if entry.Nickname == m.nickname {
+		m.selfSessionID = makeUint64Ptr(entry.SessionID)
+	}
+}
+
+func (m *Model) removeChannelPresence(channelID uint64, sessionID uint64) {
+	roster, ok := m.channelRoster[channelID]
+	if !ok {
+		return
+	}
+	delete(roster, sessionID)
+	if len(roster) == 0 {
+		delete(m.channelRoster, channelID)
+	}
+	if m.selfSessionID != nil && *m.selfSessionID == sessionID {
+		m.selfSessionID = nil
+	}
+}
+
+func (m *Model) upsertServerPresence(entry presenceEntry) {
+	entry.UserID = cloneUint64Ptr(entry.UserID)
+	m.serverRoster[entry.SessionID] = entry
+	if entry.Nickname == m.nickname {
+		m.selfSessionID = makeUint64Ptr(entry.SessionID)
+	}
+	m.onlineUsers = uint32(len(m.serverRoster))
+}
+
+func (m *Model) removeServerPresence(sessionID uint64) {
+	delete(m.serverRoster, sessionID)
+	m.onlineUsers = uint32(len(m.serverRoster))
+	if m.selfSessionID != nil && *m.selfSessionID == sessionID {
+		m.selfSessionID = nil
+	}
+	for channelID := range m.channelRoster {
+		m.removeChannelPresence(channelID, sessionID)
+	}
+}
+
+func (m *Model) sortedChannelPresence(channelID uint64) []presenceEntry {
+	roster, ok := m.channelRoster[channelID]
+	if !ok || len(roster) == 0 {
+		return nil
+	}
+	entries := make([]presenceEntry, 0, len(roster))
+	for _, entry := range roster {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Nickname) < strings.ToLower(entries[j].Nickname)
+	})
+	return entries
+}
+
+func (m *Model) sortedServerPresence() []presenceEntry {
+	if len(m.serverRoster) == 0 {
+		return nil
+	}
+	entries := make([]presenceEntry, 0, len(m.serverRoster))
+	for _, entry := range m.serverRoster {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Nickname) < strings.ToLower(entries[j].Nickname)
+	})
+	return entries
+}
+
+func (m *Model) isSelfSession(sessionID uint64) bool {
+	return m.selfSessionID != nil && *m.selfSessionID == sessionID
+}
+
+func (m *Model) buildUserSidebarContent() string {
+	var entries []presenceEntry
+	var title string
+
+	if m.currentChannel != nil && m.hasActiveChannel {
+		entries = m.sortedChannelPresence(m.currentChannel.ID)
+		title = fmt.Sprintf("Channel Users (%d)", len(entries))
+	} else {
+		entries = m.sortedServerPresence()
+		title = fmt.Sprintf("Online Users (%d)", len(entries))
+	}
+
+	b := strings.Builder{}
+	b.WriteString(UserSidebarTitleStyle.Render(title))
+	b.WriteString("\n\n")
+
+	if len(entries) == 0 {
+		b.WriteString(MutedTextStyle.Render("  No users yet"))
+		return b.String()
+	}
+
+	for i, entry := range entries {
+		b.WriteString(m.formatPresenceEntry(entry))
+		if i < len(entries)-1 {
+			b.WriteString("\n")
+		}
+	}
+
+	return b.String()
+}
+
+func (m *Model) formatPresenceEntry(entry presenceEntry) string {
+	prefix := entry.UserFlags.DisplayPrefix()
+	displayName := entry.Nickname
+	if !entry.IsRegistered {
+		displayName = "~" + displayName
+	}
+	display := prefix + displayName
+	if m.isSelfSession(entry.SessionID) {
+		display += " (you)"
+		return PresenceSelfStyle.Render(display)
+	}
+	return PresenceItemStyle.Render(display)
+}
+
+func (m *Model) adjustChannelUserCount(channelID uint64, delta int) {
+	for i := range m.channels {
+		if m.channels[i].ID == channelID {
+			newCount := int(m.channels[i].UserCount) + delta
+			if newCount < 0 {
+				newCount = 0
+			}
+			m.channels[i].UserCount = uint32(newCount)
+			if m.currentChannel != nil && m.currentChannel.ID == channelID {
+				m.currentChannel.UserCount = uint32(newCount)
+			}
+			break
+		}
+	}
+}
+
+func (m *Model) setActiveChannel(channelID uint64) {
+	if m.hasActiveChannel && m.activeChannelID == channelID {
+		return
+	}
+	if m.hasActiveChannel && m.activeChannelID != channelID {
+		m.adjustChannelUserCount(m.activeChannelID, -1)
+	}
+	m.adjustChannelUserCount(channelID, 1)
+	m.activeChannelID = channelID
+	m.hasActiveChannel = true
+}
+
+func (m *Model) clearActiveChannel() {
+	if !m.hasActiveChannel {
+		return
+	}
+	delete(m.channelRoster, m.activeChannelID)
+	m.adjustChannelUserCount(m.activeChannelID, -1)
+	m.hasActiveChannel = false
+	m.activeChannelID = 0
 }
 
 // showComposeWithWarning shows the compose modal, potentially with registration warning first

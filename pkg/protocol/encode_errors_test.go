@@ -466,7 +466,9 @@ func TestAllMessageTypesEncodeToWithFailingWriter(t *testing.T) {
 		{"NicknameResponse", func() error { return (&NicknameResponseMessage{}).EncodeTo(w) }},
 		{"ListChannels", func() error { return (&ListChannelsMessage{}).EncodeTo(w) }},
 		{"JoinChannel", func() error { return (&JoinChannelMessage{}).EncodeTo(w) }},
+		{"LeaveChannel", func() error { return (&LeaveChannelMessage{}).EncodeTo(w) }},
 		{"JoinResponse", func() error { return (&JoinResponseMessage{}).EncodeTo(w) }},
+		{"LeaveResponse", func() error { return (&LeaveResponseMessage{}).EncodeTo(w) }},
 		{"ListMessages", func() error { return (&ListMessagesMessage{}).EncodeTo(w) }},
 		{"PostMessage", func() error { return (&PostMessageMessage{ChannelID: 1, Content: "x"}).EncodeTo(w) }},
 		{"MessagePosted", func() error { return (&MessagePostedMessage{}).EncodeTo(w) }},
@@ -480,11 +482,17 @@ func TestAllMessageTypesEncodeToWithFailingWriter(t *testing.T) {
 		{"UserInfo", func() error { return (&UserInfoMessage{Nickname: "alice"}).EncodeTo(w) }},
 		{"ListUsers", func() error { return (&ListUsersMessage{}).EncodeTo(w) }},
 		{"UserList", func() error { return (&UserListMessage{Users: []UserListEntry{}}).EncodeTo(w) }},
+		{"ListChannelUsers", func() error { return (&ListChannelUsersMessage{}).EncodeTo(w) }},
+		{"ChannelUserList", func() error { return (&ChannelUserListMessage{Users: []ChannelUserEntry{}}).EncodeTo(w) }},
+		{"ChannelPresence", func() error { return (&ChannelPresenceMessage{Nickname: "alice"}).EncodeTo(w) }},
+		{"ServerPresence", func() error { return (&ServerPresenceMessage{Nickname: "alice"}).EncodeTo(w) }},
 		{"AuthRequest", func() error { return (&AuthRequestMessage{Nickname: "alice", Password: "pwd"}).EncodeTo(w) }},
 		{"AuthResponse", func() error { return (&AuthResponseMessage{Success: true, UserID: 1}).EncodeTo(w) }},
 		{"RegisterUser", func() error { return (&RegisterUserMessage{Password: "pwd"}).EncodeTo(w) }},
 		{"RegisterResponse", func() error { return (&RegisterResponseMessage{Success: true, UserID: 1}).EncodeTo(w) }},
-		{"CreateChannel", func() error { return (&CreateChannelMessage{Name: "test", DisplayName: "#test", ChannelType: 1}).EncodeTo(w) }},
+		{"CreateChannel", func() error {
+			return (&CreateChannelMessage{Name: "test", DisplayName: "#test", ChannelType: 1}).EncodeTo(w)
+		}},
 		{"ChannelCreated", func() error { return (&ChannelCreatedMessage{Success: true, ChannelID: 1}).EncodeTo(w) }},
 	}
 

@@ -163,21 +163,38 @@ func (m Model) renderChannelList() string {
 		PaddingLeft(2).
 		Render(lipgloss.JoinVertical(lipgloss.Left, welcomeLines...))
 
-	// Column 1: Channel pane (ratioX=1 = 25% of width)
+	channelWidth := m.width/4 - 2
+	if channelWidth < 20 {
+		channelWidth = 20
+	}
 	channelCol := layout.NewColumn().AddCells(
 		flexbox.NewCell(1, 1).
-			SetStyle(ChannelPaneStyle).
+			SetStyle(ChannelPaneStyle.Width(channelWidth).Height(m.height - 4)).
 			SetContent(channelPaneContent),
 	)
 
-	// Column 2: Main pane (ratioX=3 = 75% of width)
 	mainCol := layout.NewColumn().AddCells(
 		flexbox.NewCell(3, 1).
 			SetStyle(ThreadPaneStyle).
 			SetContent(instructions),
 	)
 
-	layout.AddColumns([]*flexbox.Column{channelCol, mainCol})
+	columns := []*flexbox.Column{channelCol, mainCol}
+	if m.showUserSidebar {
+		sidebarContent := m.buildUserSidebarContent()
+		sidebarWidth := m.width/4 - 2
+		if sidebarWidth < 20 {
+			sidebarWidth = 20
+		}
+		userCol := layout.NewColumn().AddCells(
+			flexbox.NewCell(1, 1).
+				SetStyle(UserSidebarStyle.Width(sidebarWidth).Height(m.height - 4)).
+				SetContent(sidebarContent),
+		)
+		columns = append(columns, userCol)
+	}
+
+	layout.AddColumns(columns)
 
 	// Combine header, content, and footer
 	header := m.renderHeader()
@@ -204,21 +221,38 @@ func (m Model) renderThreadList() string {
 		PaddingLeft(2).
 		Render(m.threadListViewport.View())
 
-	// Column 1: Channel pane (ratioX=1 = 25% of width)
+	channelWidth := m.width/4 - 2
+	if channelWidth < 20 {
+		channelWidth = 20
+	}
 	channelCol := layout.NewColumn().AddCells(
 		flexbox.NewCell(1, 1).
-			SetStyle(ChannelPaneStyle).
+			SetStyle(ChannelPaneStyle.Width(channelWidth).Height(m.height - 4)).
 			SetContent(channelPaneContent),
 	)
 
-	// Column 2: Thread list pane (ratioX=3 = 75% of width)
 	threadCol := layout.NewColumn().AddCells(
 		flexbox.NewCell(3, 1).
 			SetStyle(ThreadPaneStyle).
 			SetContent(threadListContent),
 	)
 
-	layout.AddColumns([]*flexbox.Column{channelCol, threadCol})
+	columns := []*flexbox.Column{channelCol, threadCol}
+	if m.showUserSidebar {
+		sidebarContent := m.buildUserSidebarContent()
+		sidebarWidth := m.width/4 - 2
+		if sidebarWidth < 20 {
+			sidebarWidth = 20
+		}
+		userCol := layout.NewColumn().AddCells(
+			flexbox.NewCell(1, 1).
+				SetStyle(UserSidebarStyle.Width(sidebarWidth).Height(m.height - 4)).
+				SetContent(sidebarContent),
+		)
+		columns = append(columns, userCol)
+	}
+
+	layout.AddColumns(columns)
 
 	// Combine header, content, and footer
 	header := m.renderHeader()
@@ -276,9 +310,32 @@ func (m Model) renderChatChannel() string {
 	// Row 2: Chat content (flexible = remaining height)
 	contentHeight := m.height - 2 // Subtract header(1) + footer(1)
 	chatContent := m.renderChatContent()
+	var chatCellContent string
+	if m.showUserSidebar {
+		sidebarContent := m.buildUserSidebarContent()
+		sidebarWidth := m.width/4 - 2
+		if sidebarWidth < 20 {
+			sidebarWidth = 20
+		}
+		contentLayout := flexbox.NewHorizontal(m.width, contentHeight)
+		mainCol := contentLayout.NewColumn().AddCells(
+			flexbox.NewCell(3, 1).
+				SetStyle(ThreadPaneStyle).
+				SetContent(chatContent),
+		)
+		userCol := contentLayout.NewColumn().AddCells(
+			flexbox.NewCell(1, 1).
+				SetStyle(UserSidebarStyle.Width(sidebarWidth).Height(contentHeight)).
+				SetContent(sidebarContent),
+		)
+		contentLayout.AddColumns([]*flexbox.Column{mainCol, userCol})
+		chatCellContent = contentLayout.Render()
+	} else {
+		chatCellContent = chatContent
+	}
 
 	contentRow := layout.NewRow().AddCells(
-		flexbox.NewCell(1, contentHeight).SetContent(chatContent),
+		flexbox.NewCell(1, contentHeight).SetContent(chatCellContent),
 	)
 
 	// Row 3: Footer (fixed height = 1)
@@ -582,12 +639,15 @@ func (m Model) buildChannelPaneContentString() string {
 			} else {
 				prefix = "#"
 			}
-			item := prefix + channel.Name
+			base := prefix + channel.Name
+			countLabel := MutedTextStyle.Render(fmt.Sprintf(" %d", channel.UserCount))
+			var item string
 			if i == m.channelCursor {
-				item = SelectedItemStyle.Render("▶ " + item)
+				item = SelectedItemStyle.Render("▶ " + base)
 			} else {
-				item = UnselectedItemStyle.Render("  " + item)
+				item = UnselectedItemStyle.Render("  " + base)
 			}
+			item = lipgloss.JoinHorizontal(lipgloss.Left, item, countLabel)
 			items = append(items, item)
 		}
 
@@ -687,10 +747,36 @@ func (m Model) renderThreadContent() string {
 	}
 	threadHeight := contentHeight - indicatorLines
 
+	var threadCellContent string
+	threadCellStyle := ActualThreadStyle
+	if m.showUserSidebar {
+		sidebarContent := m.buildUserSidebarContent()
+		sidebarWidth := m.width/4 - 2
+		if sidebarWidth < 20 {
+			sidebarWidth = 20
+		}
+		contentLayout := flexbox.NewHorizontal(m.width, threadHeight)
+		mainCol := contentLayout.NewColumn().AddCells(
+			flexbox.NewCell(3, 1).
+				SetStyle(ActualThreadStyle).
+				SetContent(viewportContent),
+		)
+		userCol := contentLayout.NewColumn().AddCells(
+			flexbox.NewCell(1, 1).
+				SetStyle(UserSidebarStyle.Width(sidebarWidth).Height(threadHeight)).
+				SetContent(sidebarContent),
+		)
+		contentLayout.AddColumns([]*flexbox.Column{mainCol, userCol})
+		threadCellContent = contentLayout.Render()
+		threadCellStyle = BaseStyle
+	} else {
+		threadCellContent = viewportContent
+	}
+
 	threadRow := layout.NewRow().AddCells(
 		flexbox.NewCell(1, threadHeight).
-			SetStyle(ActualThreadStyle).
-			SetContent(viewportContent),
+			SetStyle(threadCellStyle).
+			SetContent(threadCellContent),
 	)
 	rows = append(rows, threadRow)
 

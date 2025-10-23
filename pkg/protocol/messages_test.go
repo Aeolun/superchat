@@ -51,16 +51,20 @@ func TestAuthRequestMessage(t *testing.T) {
 }
 
 func TestAuthResponseMessage(t *testing.T) {
+	makeFlags := func(f UserFlags) *UserFlags {
+		return &f
+	}
 	tests := []struct {
-		name    string
-		msg     AuthResponseMessage
+		name string
+		msg  AuthResponseMessage
 	}{
 		{
 			name: "success response",
 			msg: AuthResponseMessage{
-				Success: true,
-				UserID:  42,
-				Message: "Welcome back!",
+				Success:  true,
+				UserID:   42,
+				Nickname: "alice",
+				Message:  "Welcome back!",
 			},
 		},
 		{
@@ -73,9 +77,20 @@ func TestAuthResponseMessage(t *testing.T) {
 		{
 			name: "success with user ID 0",
 			msg: AuthResponseMessage{
-				Success: true,
-				UserID:  0,
-				Message: "Authenticated",
+				Success:  true,
+				UserID:   0,
+				Nickname: "bob",
+				Message:  "Authenticated",
+			},
+		},
+		{
+			name: "success with admin flag",
+			msg: AuthResponseMessage{
+				Success:   true,
+				UserID:    99,
+				Nickname:  "carol",
+				Message:   "Admin access granted",
+				UserFlags: makeFlags(UserFlagAdmin),
 			},
 		},
 	}
@@ -92,6 +107,15 @@ func TestAuthResponseMessage(t *testing.T) {
 			assert.Equal(t, tt.msg.Message, decoded.Message)
 			if tt.msg.Success {
 				assert.Equal(t, tt.msg.UserID, decoded.UserID)
+				assert.Equal(t, tt.msg.Nickname, decoded.Nickname)
+				if tt.msg.UserFlags != nil {
+					require.NotNil(t, decoded.UserFlags)
+					assert.Equal(t, *tt.msg.UserFlags, *decoded.UserFlags)
+				} else {
+					assert.Nil(t, decoded.UserFlags)
+				}
+			} else {
+				assert.Nil(t, decoded.UserFlags)
 			}
 		})
 	}
@@ -135,8 +159,8 @@ func TestRegisterUserMessage(t *testing.T) {
 
 func TestRegisterResponseMessage(t *testing.T) {
 	tests := []struct {
-		name    string
-		msg     RegisterResponseMessage
+		name string
+		msg  RegisterResponseMessage
 	}{
 		{
 			name: "success response",
@@ -313,8 +337,8 @@ func TestSetNicknameMessage(t *testing.T) {
 
 func TestNicknameResponseMessage(t *testing.T) {
 	tests := []struct {
-		name    string
-		msg     NicknameResponseMessage
+		name string
+		msg  NicknameResponseMessage
 	}{
 		{
 			name: "success response",
@@ -563,6 +587,105 @@ func TestJoinResponseMessage(t *testing.T) {
 			assert.Equal(t, tt.msg.ChannelID, decoded.ChannelID)
 			assert.Equal(t, tt.msg.Message, decoded.Message)
 
+			if tt.msg.SubchannelID == nil {
+				assert.Nil(t, decoded.SubchannelID)
+			} else {
+				require.NotNil(t, decoded.SubchannelID)
+				assert.Equal(t, *tt.msg.SubchannelID, *decoded.SubchannelID)
+			}
+		})
+	}
+}
+
+func TestLeaveChannelMessage(t *testing.T) {
+	subchannelID := uint64(7)
+
+	tests := []struct {
+		name string
+		msg  LeaveChannelMessage
+	}{
+		{
+			name: "leave root channel",
+			msg: LeaveChannelMessage{
+				ChannelID:    2,
+				SubchannelID: nil,
+			},
+		},
+		{
+			name: "leave subchannel",
+			msg: LeaveChannelMessage{
+				ChannelID:    3,
+				SubchannelID: &subchannelID,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &LeaveChannelMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.msg.ChannelID, decoded.ChannelID)
+			if tt.msg.SubchannelID == nil {
+				assert.Nil(t, decoded.SubchannelID)
+			} else {
+				require.NotNil(t, decoded.SubchannelID)
+				assert.Equal(t, *tt.msg.SubchannelID, *decoded.SubchannelID)
+			}
+		})
+	}
+}
+
+func TestLeaveResponseMessage(t *testing.T) {
+	subchannelID := uint64(8)
+
+	tests := []struct {
+		name string
+		msg  LeaveResponseMessage
+	}{
+		{
+			name: "success leave root",
+			msg: LeaveResponseMessage{
+				Success:      true,
+				ChannelID:    4,
+				SubchannelID: nil,
+				Message:      "Left channel",
+			},
+		},
+		{
+			name: "success leave subchannel",
+			msg: LeaveResponseMessage{
+				Success:      true,
+				ChannelID:    5,
+				SubchannelID: &subchannelID,
+				Message:      "",
+			},
+		},
+		{
+			name: "failure to leave",
+			msg: LeaveResponseMessage{
+				Success:      false,
+				ChannelID:    6,
+				SubchannelID: nil,
+				Message:      "Failed to leave",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &LeaveResponseMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+			assert.Equal(t, tt.msg.Success, decoded.Success)
+			assert.Equal(t, tt.msg.ChannelID, decoded.ChannelID)
+			assert.Equal(t, tt.msg.Message, decoded.Message)
 			if tt.msg.SubchannelID == nil {
 				assert.Nil(t, decoded.SubchannelID)
 			} else {
@@ -1216,12 +1339,12 @@ func TestErrorMessage(t *testing.T) {
 
 func TestServerConfigMessage(t *testing.T) {
 	msg := &ServerConfigMessage{
-		ProtocolVersion:      1,
-		MaxMessageRate:       10,
-		MaxChannelCreates:    5,
-		InactiveCleanupDays:  90,
-		MaxConnectionsPerIP:  10,
-		MaxMessageLength:     4096,
+		ProtocolVersion:     1,
+		MaxMessageRate:      10,
+		MaxChannelCreates:   5,
+		InactiveCleanupDays: 90,
+		MaxConnectionsPerIP: 10,
+		MaxMessageLength:    4096,
 	}
 
 	payload, err := msg.Encode()
@@ -1642,6 +1765,115 @@ func TestUserListMessage(t *testing.T) {
 	}
 }
 
+func TestChannelUserListMessage(t *testing.T) {
+	userID := uint64(10)
+	subchannelID := uint64(5)
+	msg := ChannelUserListMessage{
+		ChannelID:    3,
+		SubchannelID: &subchannelID,
+		Users: []ChannelUserEntry{
+			{
+				SessionID:    101,
+				Nickname:     "alice",
+				IsRegistered: true,
+				UserID:       &userID,
+				UserFlags:    UserFlagAdmin,
+			},
+			{
+				SessionID:    102,
+				Nickname:     "guest",
+				IsRegistered: false,
+				UserFlags:    0,
+			},
+		},
+	}
+
+	payload, err := msg.Encode()
+	require.NoError(t, err)
+
+	decoded := &ChannelUserListMessage{}
+	err = decoded.Decode(payload)
+	require.NoError(t, err)
+
+	assert.Equal(t, msg.ChannelID, decoded.ChannelID)
+	require.NotNil(t, decoded.SubchannelID)
+	assert.Equal(t, *msg.SubchannelID, *decoded.SubchannelID)
+	require.Equal(t, len(msg.Users), len(decoded.Users))
+
+	for i := range msg.Users {
+		assert.Equal(t, msg.Users[i].SessionID, decoded.Users[i].SessionID)
+		assert.Equal(t, msg.Users[i].Nickname, decoded.Users[i].Nickname)
+		assert.Equal(t, msg.Users[i].IsRegistered, decoded.Users[i].IsRegistered)
+		assert.Equal(t, msg.Users[i].UserFlags, decoded.Users[i].UserFlags)
+		if msg.Users[i].UserID == nil {
+			assert.Nil(t, decoded.Users[i].UserID)
+		} else {
+			require.NotNil(t, decoded.Users[i].UserID)
+			assert.Equal(t, *msg.Users[i].UserID, *decoded.Users[i].UserID)
+		}
+	}
+}
+
+func TestChannelPresenceMessage(t *testing.T) {
+	userID := uint64(42)
+	subchannelID := uint64(8)
+	msg := ChannelPresenceMessage{
+		ChannelID:    7,
+		SubchannelID: &subchannelID,
+		SessionID:    555,
+		Nickname:     "carol",
+		IsRegistered: true,
+		UserID:       &userID,
+		UserFlags:    UserFlagModerator,
+		Joined:       true,
+	}
+
+	payload, err := msg.Encode()
+	require.NoError(t, err)
+
+	decoded := &ChannelPresenceMessage{}
+	err = decoded.Decode(payload)
+	require.NoError(t, err)
+
+	assert.Equal(t, msg.ChannelID, decoded.ChannelID)
+	require.NotNil(t, decoded.SubchannelID)
+	assert.Equal(t, *msg.SubchannelID, *decoded.SubchannelID)
+	assert.Equal(t, msg.SessionID, decoded.SessionID)
+	assert.Equal(t, msg.Nickname, decoded.Nickname)
+	assert.Equal(t, msg.IsRegistered, decoded.IsRegistered)
+	require.NotNil(t, decoded.UserID)
+	assert.Equal(t, *msg.UserID, *decoded.UserID)
+	assert.Equal(t, msg.UserFlags, decoded.UserFlags)
+	assert.Equal(t, msg.Joined, decoded.Joined)
+}
+
+func TestServerPresenceMessage(t *testing.T) {
+	userID := uint64(12)
+	msg := ServerPresenceMessage{
+		SessionID:    777,
+		Nickname:     "dave",
+		IsRegistered: true,
+		UserID:       &userID,
+		UserFlags:    UserFlagAdmin,
+		Online:       false,
+	}
+
+	payload, err := msg.Encode()
+	require.NoError(t, err)
+
+	decoded := &ServerPresenceMessage{}
+	err = decoded.Decode(payload)
+	require.NoError(t, err)
+
+	assert.Equal(t, msg.SessionID, decoded.SessionID)
+	assert.Equal(t, msg.Nickname, decoded.Nickname)
+	assert.Equal(t, msg.IsRegistered, decoded.IsRegistered)
+	require.NotNil(t, decoded.UserID)
+	assert.Equal(t, *msg.UserID, *decoded.UserID)
+	assert.Equal(t, msg.UserFlags, decoded.UserFlags)
+	assert.Equal(t, msg.Online, decoded.Online)
+}
+
 func TestMessageTypeConstants(t *testing.T) {
 	// Test that message type constants have expected values
 	assert.Equal(t, 0x02, TypeSetNickname)
@@ -1654,6 +1886,7 @@ func TestMessageTypeConstants(t *testing.T) {
 	assert.Equal(t, 0x0F, TypeGetUserInfo)
 	assert.Equal(t, 0x10, TypePing)
 	assert.Equal(t, 0x16, TypeListUsers)
+	assert.Equal(t, 0x17, TypeListChannelUsers)
 
 	assert.Equal(t, 0x82, TypeNicknameResponse)
 	assert.Equal(t, 0x84, TypeChannelList)
@@ -1669,6 +1902,9 @@ func TestMessageTypeConstants(t *testing.T) {
 	assert.Equal(t, 0x91, TypeError)
 	assert.Equal(t, 0x98, TypeServerConfig)
 	assert.Equal(t, 0x9A, TypeUserList)
+	assert.Equal(t, 0xAB, TypeChannelUserList)
+	assert.Equal(t, 0xAC, TypeChannelPresence)
+	assert.Equal(t, 0xAD, TypeServerPresence)
 }
 
 func TestErrorCodeConstants(t *testing.T) {

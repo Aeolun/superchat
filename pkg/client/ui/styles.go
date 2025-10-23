@@ -59,6 +59,22 @@ var (
 
 	ChannelItemStyle = BaseStyle.Copy()
 
+	UserSidebarStyle = BaseStyle.Copy().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(BorderColor).
+				Padding(0, 1)
+
+	UserSidebarTitleStyle = BaseStyle.Copy().
+				Bold(true).
+				Foreground(PrimaryColor)
+
+	PresenceItemStyle = BaseStyle.Copy().
+				Foreground(lipgloss.Color("252"))
+
+	PresenceSelfStyle = PresenceItemStyle.Copy().
+				Foreground(SuccessColor).
+				Bold(true)
+
 	// Thread list styles (exported for view package)
 	ThreadPaneStyle = BaseStyle.Copy().
 			Border(lipgloss.RoundedBorder()).

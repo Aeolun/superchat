@@ -96,16 +96,27 @@ func readProtocolMessage(t *testing.T, conn net.Conn, timeout time.Duration) (*p
 func expectMessageType(t *testing.T, conn net.Conn, expectedType uint8, timeout time.Duration) *protocol.Frame {
 	t.Helper()
 
-	frame, err := readProtocolMessage(t, conn, timeout)
-	if err != nil {
-		t.Fatalf("Failed to read message: %v", err)
+	ignored := map[uint8]bool{
+		protocol.TypeServerPresence: true,
+		protocol.TypeChannelPresence: true,
 	}
 
-	if frame.Type != expectedType {
-		t.Fatalf("Expected message type 0x%02X, got 0x%02X", expectedType, frame.Type)
-	}
+	for {
+		frame, err := readProtocolMessage(t, conn, timeout)
+		if err != nil {
+			t.Fatalf("Failed to read message: %v", err)
+		}
 
-	return frame
+		if ignored[frame.Type] {
+			continue
+		}
+
+		if frame.Type != expectedType {
+			t.Fatalf("Expected message type 0x%02X, got 0x%02X", expectedType, frame.Type)
+		}
+
+		return frame
+	}
 }
 
 // encodeMessage encodes a message using EncodeTo pattern

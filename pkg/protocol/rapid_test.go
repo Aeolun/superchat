@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"pgregory.net/rapid"
@@ -425,12 +426,23 @@ func TestAuthResponseRoundTrip(t *testing.T) {
 		if success {
 			userID = rapid.Uint64().Draw(t, "user_id")
 		}
+		var nickname string
+		if success {
+			nickname = rapid.StringN(0, 32, 256).Draw(t, "nickname")
+		}
 		message := rapid.StringN(0, 100, 256).Draw(t, "message")
+		var userFlags *UserFlags
+		if success && rapid.Bool().Draw(t, "include_flags") {
+			flags := UserFlags(rapid.Byte().Draw(t, "user_flags"))
+			userFlags = &flags
+		}
 
 		original := &AuthResponseMessage{
-			Success: success,
-			UserID:  userID,
-			Message: message,
+			Success:   success,
+			UserID:    userID,
+			Nickname:  nickname,
+			Message:   message,
+			UserFlags: userFlags,
 		}
 
 		var buf bytes.Buffer
@@ -453,6 +465,309 @@ func TestAuthResponseRoundTrip(t *testing.T) {
 		}
 		if success && decoded.UserID != original.UserID {
 			t.Fatalf("user_id mismatch")
+		}
+		if success && decoded.Nickname != original.Nickname {
+			t.Fatalf("nickname mismatch")
+		}
+		if success {
+			if (decoded.UserFlags == nil) != (original.UserFlags == nil) {
+				t.Fatalf("user_flags presence mismatch")
+			}
+			if decoded.UserFlags != nil && *decoded.UserFlags != *original.UserFlags {
+				t.Fatalf("user_flags mismatch")
+			}
+		} else if decoded.UserFlags != nil {
+			t.Fatalf("user_flags unexpectedly present on failure response")
+		}
+	})
+}
+
+// TestLeaveChannelRoundTrip tests LeaveChannelMessage encoding
+func TestLeaveChannelRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		channelID := rapid.Uint64().Draw(t, "channel_id")
+		var subchannelID *uint64
+		if rapid.Bool().Draw(t, "has_subchannel") {
+			id := rapid.Uint64().Draw(t, "subchannel_id")
+			subchannelID = &id
+		}
+
+		original := &LeaveChannelMessage{
+			ChannelID:    channelID,
+			SubchannelID: subchannelID,
+		}
+
+		var buf bytes.Buffer
+		if err := original.EncodeTo(&buf); err != nil {
+			t.Fatalf("encode failed: %v", err)
+		}
+
+		decoded := &LeaveChannelMessage{}
+		if err := decoded.Decode(buf.Bytes()); err != nil {
+			t.Fatalf("decode failed: %v", err)
+		}
+
+		if decoded.ChannelID != original.ChannelID {
+			t.Fatalf("channel_id mismatch")
+		}
+		if (decoded.SubchannelID == nil) != (original.SubchannelID == nil) {
+			t.Fatalf("subchannel presence mismatch")
+		}
+		if decoded.SubchannelID != nil && *decoded.SubchannelID != *original.SubchannelID {
+			t.Fatalf("subchannel mismatch")
+		}
+	})
+}
+
+// TestLeaveResponseRoundTrip tests LeaveResponseMessage encoding
+func TestLeaveResponseRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		success := rapid.Bool().Draw(t, "success")
+		channelID := rapid.Uint64().Draw(t, "channel_id")
+		var subchannelID *uint64
+		if rapid.Bool().Draw(t, "has_subchannel") {
+			id := rapid.Uint64().Draw(t, "subchannel_id")
+			subchannelID = &id
+		}
+		message := rapid.StringN(0, 64, 256).Draw(t, "message")
+
+		original := &LeaveResponseMessage{
+			Success:      success,
+			ChannelID:    channelID,
+			SubchannelID: subchannelID,
+			Message:      message,
+		}
+
+		var buf bytes.Buffer
+		if err := original.EncodeTo(&buf); err != nil {
+			t.Fatalf("encode failed: %v", err)
+		}
+
+		decoded := &LeaveResponseMessage{}
+		if err := decoded.Decode(buf.Bytes()); err != nil {
+			t.Fatalf("decode failed: %v", err)
+		}
+
+		if decoded.Success != original.Success {
+			t.Fatalf("success mismatch")
+		}
+		if decoded.ChannelID != original.ChannelID {
+			t.Fatalf("channel mismatch")
+		}
+		if decoded.Message != original.Message {
+			t.Fatalf("message mismatch")
+		}
+		if (decoded.SubchannelID == nil) != (original.SubchannelID == nil) {
+			t.Fatalf("subchannel presence mismatch")
+		}
+		if decoded.SubchannelID != nil && *decoded.SubchannelID != *original.SubchannelID {
+			t.Fatalf("subchannel mismatch")
+		}
+	})
+}
+
+// TestChannelUserListRoundTrip tests ChannelUserListMessage encoding
+func TestChannelUserListRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		channelID := rapid.Uint64().Draw(t, "channel_id")
+		var subchannelID *uint64
+		if rapid.Bool().Draw(t, "has_subchannel") {
+			id := rapid.Uint64().Draw(t, "subchannel_id")
+			subchannelID = &id
+		}
+		userCount := rapid.IntRange(0, 5).Draw(t, "user_count")
+		users := make([]ChannelUserEntry, userCount)
+		for i := range users {
+			users[i].SessionID = rapid.Uint64().Draw(t, fmt.Sprintf("session_id_%d", i))
+			users[i].Nickname = rapid.StringN(1, 20, 256).Draw(t, fmt.Sprintf("nickname_%d", i))
+			users[i].IsRegistered = rapid.Bool().Draw(t, fmt.Sprintf("is_registered_%d", i))
+			if users[i].IsRegistered && rapid.Bool().Draw(t, fmt.Sprintf("has_user_id_%d", i)) {
+				id := rapid.Uint64().Draw(t, fmt.Sprintf("user_id_%d", i))
+				users[i].UserID = &id
+			}
+			users[i].UserFlags = UserFlags(rapid.Byte().Draw(t, fmt.Sprintf("user_flags_%d", i)))
+		}
+
+		original := &ChannelUserListMessage{
+			ChannelID:    channelID,
+			SubchannelID: subchannelID,
+			Users:        users,
+		}
+
+		var buf bytes.Buffer
+		if err := original.EncodeTo(&buf); err != nil {
+			t.Fatalf("encode failed: %v", err)
+		}
+
+		decoded := &ChannelUserListMessage{}
+		if err := decoded.Decode(buf.Bytes()); err != nil {
+			t.Fatalf("decode failed: %v", err)
+		}
+
+		if decoded.ChannelID != original.ChannelID {
+			t.Fatalf("channel mismatch")
+		}
+		if (decoded.SubchannelID == nil) != (original.SubchannelID == nil) {
+			t.Fatalf("subchannel presence mismatch")
+		}
+		if decoded.SubchannelID != nil && *decoded.SubchannelID != *original.SubchannelID {
+			t.Fatalf("subchannel mismatch")
+		}
+		if len(decoded.Users) != len(original.Users) {
+			t.Fatalf("user len mismatch")
+		}
+		for i := range original.Users {
+			ou := original.Users[i]
+			du := decoded.Users[i]
+			if du.SessionID != ou.SessionID {
+				t.Fatalf("session mismatch")
+			}
+			if du.Nickname != ou.Nickname {
+				t.Fatalf("nickname mismatch")
+			}
+			if du.IsRegistered != ou.IsRegistered {
+				t.Fatalf("is_registered mismatch")
+			}
+			if (du.UserID == nil) != (ou.UserID == nil) {
+				t.Fatalf("user_id presence mismatch")
+			}
+			if du.UserID != nil && *du.UserID != *ou.UserID {
+				t.Fatalf("user_id mismatch")
+			}
+			if du.UserFlags != ou.UserFlags {
+				t.Fatalf("user_flags mismatch")
+			}
+		}
+	})
+}
+
+// TestChannelPresenceRoundTrip tests ChannelPresenceMessage encoding
+func TestChannelPresenceRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		channelID := rapid.Uint64().Draw(t, "channel_id")
+		var subchannelID *uint64
+		if rapid.Bool().Draw(t, "has_subchannel") {
+			id := rapid.Uint64().Draw(t, "subchannel_id")
+			subchannelID = &id
+		}
+		sessionID := rapid.Uint64().Draw(t, "session_id")
+		nickname := rapid.StringN(1, 20, 256).Draw(t, "nickname")
+		isRegistered := rapid.Bool().Draw(t, "is_registered")
+		var userID *uint64
+		if isRegistered && rapid.Bool().Draw(t, "has_user_id") {
+			id := rapid.Uint64().Draw(t, "user_id")
+			userID = &id
+		}
+		userFlags := UserFlags(rapid.Byte().Draw(t, "user_flags"))
+		joined := rapid.Bool().Draw(t, "joined")
+
+		original := &ChannelPresenceMessage{
+			ChannelID:    channelID,
+			SubchannelID: subchannelID,
+			SessionID:    sessionID,
+			Nickname:     nickname,
+			IsRegistered: isRegistered,
+			UserID:       userID,
+			UserFlags:    userFlags,
+			Joined:       joined,
+		}
+
+		var buf bytes.Buffer
+		if err := original.EncodeTo(&buf); err != nil {
+			t.Fatalf("encode failed: %v", err)
+		}
+
+		decoded := &ChannelPresenceMessage{}
+		if err := decoded.Decode(buf.Bytes()); err != nil {
+			t.Fatalf("decode failed: %v", err)
+		}
+
+		if decoded.ChannelID != original.ChannelID {
+			t.Fatalf("channel mismatch")
+		}
+		if (decoded.SubchannelID == nil) != (original.SubchannelID == nil) {
+			t.Fatalf("subchannel presence mismatch")
+		}
+		if decoded.SubchannelID != nil && *decoded.SubchannelID != *original.SubchannelID {
+			t.Fatalf("subchannel mismatch")
+		}
+		if decoded.SessionID != original.SessionID {
+			t.Fatalf("session mismatch")
+		}
+		if decoded.Nickname != original.Nickname {
+			t.Fatalf("nickname mismatch")
+		}
+		if decoded.IsRegistered != original.IsRegistered {
+			t.Fatalf("is_registered mismatch")
+		}
+		if (decoded.UserID == nil) != (original.UserID == nil) {
+			t.Fatalf("user_id presence mismatch")
+		}
+		if decoded.UserID != nil && *decoded.UserID != *original.UserID {
+			t.Fatalf("user_id mismatch")
+		}
+		if decoded.UserFlags != original.UserFlags {
+			t.Fatalf("user_flags mismatch")
+		}
+		if decoded.Joined != original.Joined {
+			t.Fatalf("joined mismatch")
+		}
+	})
+}
+
+// TestServerPresenceRoundTrip tests ServerPresenceMessage encoding
+func TestServerPresenceRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		sessionID := rapid.Uint64().Draw(t, "session_id")
+		nickname := rapid.StringN(1, 20, 256).Draw(t, "nickname")
+		isRegistered := rapid.Bool().Draw(t, "is_registered")
+		var userID *uint64
+		if isRegistered && rapid.Bool().Draw(t, "has_user_id") {
+			id := rapid.Uint64().Draw(t, "user_id")
+			userID = &id
+		}
+		userFlags := UserFlags(rapid.Byte().Draw(t, "user_flags"))
+		online := rapid.Bool().Draw(t, "online")
+
+		original := &ServerPresenceMessage{
+			SessionID:    sessionID,
+			Nickname:     nickname,
+			IsRegistered: isRegistered,
+			UserID:       userID,
+			UserFlags:    userFlags,
+			Online:       online,
+		}
+
+		var buf bytes.Buffer
+		if err := original.EncodeTo(&buf); err != nil {
+			t.Fatalf("encode failed: %v", err)
+		}
+
+		decoded := &ServerPresenceMessage{}
+		if err := decoded.Decode(buf.Bytes()); err != nil {
+			t.Fatalf("decode failed: %v", err)
+		}
+
+		if decoded.SessionID != original.SessionID {
+			t.Fatalf("session mismatch")
+		}
+		if decoded.Nickname != original.Nickname {
+			t.Fatalf("nickname mismatch")
+		}
+		if decoded.IsRegistered != original.IsRegistered {
+			t.Fatalf("is_registered mismatch")
+		}
+		if (decoded.UserID == nil) != (original.UserID == nil) {
+			t.Fatalf("user_id presence mismatch")
+		}
+		if decoded.UserID != nil && *decoded.UserID != *original.UserID {
+			t.Fatalf("user_id mismatch")
+		}
+		if decoded.UserFlags != original.UserFlags {
+			t.Fatalf("user_flags mismatch")
+		}
+		if decoded.Online != original.Online {
+			t.Fatalf("online mismatch")
 		}
 	})
 }

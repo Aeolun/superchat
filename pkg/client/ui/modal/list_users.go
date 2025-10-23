@@ -10,14 +10,14 @@ import (
 
 // ListUsersModal displays the list of users with online status
 type ListUsersModal struct {
-	users          []UserEntry
-	selectedIndex  int
-	showOffline    bool
-	loading        bool
-	errorMessage   string
-	onRefresh      func(includeOffline bool) tea.Cmd
-	onBanUser      func(nickname string)
-	onDeleteUser   func(nickname string)
+	users         []UserEntry
+	selectedIndex int
+	showOffline   bool
+	loading       bool
+	errorMessage  string
+	onRefresh     func(includeOffline bool) tea.Cmd
+	onBanUser     func(nickname string)
+	onDeleteUser  func(UserEntry)
 }
 
 type UserEntry struct {
@@ -57,7 +57,7 @@ func (m *ListUsersModal) SetBanUserHandler(handler func(nickname string)) {
 }
 
 // SetDeleteUserHandler sets the callback for deleting a user
-func (m *ListUsersModal) SetDeleteUserHandler(handler func(nickname string)) {
+func (m *ListUsersModal) SetDeleteUserHandler(handler func(UserEntry)) {
 	m.onDeleteUser = handler
 }
 
@@ -123,7 +123,7 @@ func (m *ListUsersModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
 		if len(m.users) > 0 && m.onDeleteUser != nil {
 			selectedUser := m.users[m.selectedIndex]
 			if selectedUser.IsRegistered {
-				m.onDeleteUser(selectedUser.Nickname)
+				m.onDeleteUser(selectedUser)
 			}
 		}
 		return true, m, nil

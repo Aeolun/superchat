@@ -40,6 +40,7 @@ const (
 	TypePing               = 0x10
 	TypeDisconnect         = 0x11
 	TypeListUsers          = 0x16
+	TypeListChannelUsers   = 0x17
 	TypeSubscribeThread    = 0x51
 	TypeUnsubscribeThread  = 0x52
 	TypeSubscribeChannel   = 0x53
@@ -50,38 +51,38 @@ const (
 	TypeVerifyResponse     = 0x58
 
 	// Admin commands (Client → Server)
-	TypeBanUser    = 0x59
-	TypeBanIP      = 0x5A
-	TypeUnbanUser  = 0x5B
-	TypeUnbanIP    = 0x5C
-	TypeListBans   = 0x5D
+	TypeBanUser       = 0x59
+	TypeBanIP         = 0x5A
+	TypeUnbanUser     = 0x5B
+	TypeUnbanIP       = 0x5C
+	TypeListBans      = 0x5D
 	TypeDeleteUser    = 0x5E
 	TypeDeleteChannel = 0x5F
 )
 
 // Message type constants (Server → Client)
 const (
-	TypeAuthResponse      = 0x81
-	TypeNicknameResponse  = 0x82
-	TypeRegisterResponse  = 0x83
-	TypeChannelList       = 0x84
-	TypeJoinResponse      = 0x85
-	TypeLeaveResponse     = 0x86
-	TypeChannelCreated    = 0x87
-	TypeSubchannelCreated = 0x88
-	TypeMessageList       = 0x89
-	TypeMessagePosted     = 0x8A
-	TypeMessageEdited     = 0x8B
-	TypeMessageDeleted    = 0x8C
-	TypeNewMessage        = 0x8D
-	TypePasswordChanged   = 0x8E
-	TypeUserInfo          = 0x8F
-	TypePong              = 0x90
-	TypeError             = 0x91
+	TypeAuthResponse       = 0x81
+	TypeNicknameResponse   = 0x82
+	TypeRegisterResponse   = 0x83
+	TypeChannelList        = 0x84
+	TypeJoinResponse       = 0x85
+	TypeLeaveResponse      = 0x86
+	TypeChannelCreated     = 0x87
+	TypeSubchannelCreated  = 0x88
+	TypeMessageList        = 0x89
+	TypeMessagePosted      = 0x8A
+	TypeMessageEdited      = 0x8B
+	TypeMessageDeleted     = 0x8C
+	TypeNewMessage         = 0x8D
+	TypePasswordChanged    = 0x8E
+	TypeUserInfo           = 0x8F
+	TypePong               = 0x90
+	TypeError              = 0x91
 	TypeSSHKeyLabelUpdated = 0x92
-	TypeSSHKeyDeleted     = 0x93
-	TypeSSHKeyList        = 0x94
-	TypeSSHKeyAdded       = 0x95
+	TypeSSHKeyDeleted      = 0x93
+	TypeSSHKeyList         = 0x94
+	TypeSSHKeyAdded        = 0x95
 	TypeServerConfig       = 0x98
 	TypeSubscribeOk        = 0x99
 	TypeUserList           = 0x9A
@@ -89,21 +90,24 @@ const (
 	TypeRegisterAck        = 0x9C
 	TypeHeartbeatAck       = 0x9D
 	TypeVerifyRegistration = 0x9E
+	TypeChannelUserList    = 0xAB
+	TypeChannelPresence    = 0xAC
+	TypeServerPresence     = 0xAD
 
 	// Admin responses (Server → Client)
-	TypeUserBanned    = 0x9F
-	TypeIPBanned      = 0xA5
-	TypeUserUnbanned  = 0xA6
-	TypeIPUnbanned    = 0xA7
-	TypeBanList       = 0xA8
-	TypeUserDeleted     = 0xA9
-	TypeChannelDeleted  = 0xAA
+	TypeUserBanned     = 0x9F
+	TypeIPBanned       = 0xA5
+	TypeUserUnbanned   = 0xA6
+	TypeIPUnbanned     = 0xA7
+	TypeBanList        = 0xA8
+	TypeUserDeleted    = 0xA9
+	TypeChannelDeleted = 0xAA
 )
 
 // Error codes
 const (
 	// Protocol errors (1xxx)
-	ErrCodeInvalidFormat     = 1000
+	ErrCodeInvalidFormat      = 1000
 	ErrCodeUnsupportedVersion = 1001
 	ErrCodeInvalidFrame       = 1002
 
@@ -114,22 +118,22 @@ const (
 	ErrCodePermissionDenied = 3000
 
 	// Resource errors (4xxx)
-	ErrCodeNotFound        = 4000
-	ErrCodeChannelNotFound = 4001
-	ErrCodeMessageNotFound = 4002
-	ErrCodeThreadNotFound  = 4003
+	ErrCodeNotFound           = 4000
+	ErrCodeChannelNotFound    = 4001
+	ErrCodeMessageNotFound    = 4002
+	ErrCodeThreadNotFound     = 4003
 	ErrCodeSubchannelNotFound = 4004
 
 	// Rate limit errors (5xxx)
-	ErrCodeRateLimitExceeded = 5000
-	ErrCodeMessageRateLimit  = 5001
-	ErrCodeThreadSubscriptionLimit = 5004
+	ErrCodeRateLimitExceeded        = 5000
+	ErrCodeMessageRateLimit         = 5001
+	ErrCodeThreadSubscriptionLimit  = 5004
 	ErrCodeChannelSubscriptionLimit = 5005
 
 	// Validation errors (6xxx)
-	ErrCodeInvalidInput   = 6000
-	ErrCodeMessageTooLong = 6001
-	ErrCodeInvalidNickname = 6003
+	ErrCodeInvalidInput     = 6000
+	ErrCodeMessageTooLong   = 6001
+	ErrCodeInvalidNickname  = 6003
 	ErrCodeNicknameRequired = 6004
 
 	// Server errors (9xxx)
@@ -183,10 +187,11 @@ func (m *AuthRequestMessage) Decode(payload []byte) error {
 
 // AuthResponseMessage (0x81) - Authentication result
 type AuthResponseMessage struct {
-	Success  bool
-	UserID   uint64 // Only present if success=true
-	Nickname string // Only present if success=true
-	Message  string
+	Success   bool
+	UserID    uint64 // Only present if success=true
+	Nickname  string // Only present if success=true
+	Message   string
+	UserFlags *UserFlags // Optional: present when Success=true and server includes flags
 }
 
 func (m *AuthResponseMessage) EncodeTo(w io.Writer) error {
@@ -201,7 +206,15 @@ func (m *AuthResponseMessage) EncodeTo(w io.Writer) error {
 			return err
 		}
 	}
-	return WriteString(w, m.Message)
+	if err := WriteString(w, m.Message); err != nil {
+		return err
+	}
+	if m.Success && m.UserFlags != nil {
+		if err := WriteUint8(w, uint8(*m.UserFlags)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *AuthResponseMessage) Encode() ([]byte, error) {
@@ -220,6 +233,7 @@ func (m *AuthResponseMessage) Decode(payload []byte) error {
 	}
 
 	m.Success = success
+	m.UserFlags = nil
 
 	if success {
 		userID, err := ReadUint64(buf)
@@ -240,6 +254,15 @@ func (m *AuthResponseMessage) Decode(payload []byte) error {
 		return err
 	}
 	m.Message = message
+
+	if success && buf.Len() > 0 {
+		flags, err := ReadUint8(buf)
+		if err != nil {
+			return err
+		}
+		f := UserFlags(flags)
+		m.UserFlags = &f
+	}
 
 	return nil
 }
@@ -462,12 +485,12 @@ func (m *ListChannelsMessage) Decode(payload []byte) error {
 
 // Channel represents a channel in CHANNEL_LIST
 type Channel struct {
-	ID           uint64
-	Name         string
-	Description  string
-	UserCount    uint32
-	IsOperator   bool
-	Type         uint8
+	ID             uint64
+	Name           string
+	Description    string
+	UserCount      uint32
+	IsOperator     bool
+	Type           uint8
 	RetentionHours uint32
 }
 
@@ -560,13 +583,13 @@ func (m *ChannelListMessage) Decode(payload []byte) error {
 		}
 
 		m.Channels[i] = Channel{
-			ID:              id,
-			Name:            name,
-			Description:     desc,
-			UserCount:       userCount,
-			IsOperator:      isOp,
-			Type:            chType,
-			RetentionHours:  retention,
+			ID:             id,
+			Name:           name,
+			Description:    desc,
+			UserCount:      userCount,
+			IsOperator:     isOp,
+			Type:           chType,
+			RetentionHours: retention,
 		}
 	}
 
@@ -595,6 +618,43 @@ func (m *JoinChannelMessage) Encode() ([]byte, error) {
 }
 
 func (m *JoinChannelMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+
+	m.ChannelID = channelID
+	m.SubchannelID = subchannelID
+	return nil
+}
+
+// LeaveChannelMessage (0x06) - Leave a channel
+type LeaveChannelMessage struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+}
+
+func (m *LeaveChannelMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	return WriteOptionalUint64(w, m.SubchannelID)
+}
+
+func (m *LeaveChannelMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *LeaveChannelMessage) Decode(payload []byte) error {
 	buf := bytes.NewReader(payload)
 	channelID, err := ReadUint64(buf)
 	if err != nil {
@@ -665,13 +725,68 @@ func (m *JoinResponseMessage) Decode(payload []byte) error {
 	return nil
 }
 
+// LeaveResponseMessage (0x86) - Response to LEAVE_CHANNEL
+type LeaveResponseMessage struct {
+	Success      bool
+	ChannelID    uint64
+	SubchannelID *uint64
+	Message      string
+}
+
+func (m *LeaveResponseMessage) EncodeTo(w io.Writer) error {
+	if err := WriteBool(w, m.Success); err != nil {
+		return err
+	}
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	if err := WriteOptionalUint64(w, m.SubchannelID); err != nil {
+		return err
+	}
+	return WriteString(w, m.Message)
+}
+
+func (m *LeaveResponseMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *LeaveResponseMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	success, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	message, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+
+	m.Success = success
+	m.ChannelID = channelID
+	m.SubchannelID = subchannelID
+	m.Message = message
+	return nil
+}
+
 // CreateChannelMessage (0x07) - Create a new channel (V2+, requires registered user)
 type CreateChannelMessage struct {
-	Name              string // URL-friendly name (e.g., "general", "random")
-	DisplayName       string // Human-readable name (e.g., "#general", "#random")
-	Description       *string
-	ChannelType       uint8  // 1=forum, 2=chat (V2+ only supports forum)
-	RetentionHours    uint32 // Message retention in hours
+	Name           string // URL-friendly name (e.g., "general", "random")
+	DisplayName    string // Human-readable name (e.g., "#general", "#random")
+	Description    *string
+	ChannelType    uint8  // 1=forum, 2=chat (V2+ only supports forum)
+	RetentionHours uint32 // Message retention in hours
 }
 
 func (m *CreateChannelMessage) EncodeTo(w io.Writer) error {
@@ -2092,6 +2207,313 @@ func (m *UserListMessage) Decode(payload []byte) error {
 	return nil
 }
 
+// ListChannelUsersMessage (0x17) - Request list of users in a channel
+type ListChannelUsersMessage struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+}
+
+func (m *ListChannelUsersMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	return WriteOptionalUint64(w, m.SubchannelID)
+}
+
+func (m *ListChannelUsersMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ListChannelUsersMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	m.ChannelID = channelID
+	m.SubchannelID = subchannelID
+	return nil
+}
+
+// ChannelUserEntry represents a single user currently present in a channel
+type ChannelUserEntry struct {
+	SessionID    uint64
+	Nickname     string
+	IsRegistered bool
+	UserID       *uint64
+	UserFlags    UserFlags
+}
+
+// ChannelUserListMessage (0xAB) - Snapshot of users in a channel
+type ChannelUserListMessage struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+	Users        []ChannelUserEntry
+}
+
+func (m *ChannelUserListMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	if err := WriteOptionalUint64(w, m.SubchannelID); err != nil {
+		return err
+	}
+	if err := WriteUint16(w, uint16(len(m.Users))); err != nil {
+		return err
+	}
+	for _, user := range m.Users {
+		if err := WriteUint64(w, user.SessionID); err != nil {
+			return err
+		}
+		if err := WriteString(w, user.Nickname); err != nil {
+			return err
+		}
+		if err := WriteBool(w, user.IsRegistered); err != nil {
+			return err
+		}
+		if err := WriteOptionalUint64(w, user.UserID); err != nil {
+			return err
+		}
+		if err := WriteUint8(w, uint8(user.UserFlags)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ChannelUserListMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ChannelUserListMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	userCount, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+
+	users := make([]ChannelUserEntry, userCount)
+	for i := uint16(0); i < userCount; i++ {
+		sessionID, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		nickname, err := ReadString(buf)
+		if err != nil {
+			return err
+		}
+		isRegistered, err := ReadBool(buf)
+		if err != nil {
+			return err
+		}
+		userID, err := ReadOptionalUint64(buf)
+		if err != nil {
+			return err
+		}
+		flags, err := ReadUint8(buf)
+		if err != nil {
+			return err
+		}
+
+		users[i] = ChannelUserEntry{
+			SessionID:    sessionID,
+			Nickname:     nickname,
+			IsRegistered: isRegistered,
+			UserID:       userID,
+			UserFlags:    UserFlags(flags),
+		}
+	}
+
+	m.ChannelID = channelID
+	m.SubchannelID = subchannelID
+	m.Users = users
+	return nil
+}
+
+// ChannelPresenceMessage (0xAC) - User joined or left a channel
+type ChannelPresenceMessage struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+	SessionID    uint64
+	Nickname     string
+	IsRegistered bool
+	UserID       *uint64
+	UserFlags    UserFlags
+	Joined       bool
+}
+
+func (m *ChannelPresenceMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	if err := WriteOptionalUint64(w, m.SubchannelID); err != nil {
+		return err
+	}
+	if err := WriteUint64(w, m.SessionID); err != nil {
+		return err
+	}
+	if err := WriteString(w, m.Nickname); err != nil {
+		return err
+	}
+	if err := WriteBool(w, m.IsRegistered); err != nil {
+		return err
+	}
+	if err := WriteOptionalUint64(w, m.UserID); err != nil {
+		return err
+	}
+	if err := WriteUint8(w, uint8(m.UserFlags)); err != nil {
+		return err
+	}
+	return WriteBool(w, m.Joined)
+}
+
+func (m *ChannelPresenceMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ChannelPresenceMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	sessionID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	nickname, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	isRegistered, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	userID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	flags, err := ReadUint8(buf)
+	if err != nil {
+		return err
+	}
+	joined, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+
+	m.ChannelID = channelID
+	m.SubchannelID = subchannelID
+	m.SessionID = sessionID
+	m.Nickname = nickname
+	m.IsRegistered = isRegistered
+	m.UserID = userID
+	m.UserFlags = UserFlags(flags)
+	m.Joined = joined
+	return nil
+}
+
+// ServerPresenceMessage (0xAD) - User connected or disconnected from the server
+type ServerPresenceMessage struct {
+	SessionID    uint64
+	Nickname     string
+	IsRegistered bool
+	UserID       *uint64
+	UserFlags    UserFlags
+	Online       bool
+}
+
+func (m *ServerPresenceMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.SessionID); err != nil {
+		return err
+	}
+	if err := WriteString(w, m.Nickname); err != nil {
+		return err
+	}
+	if err := WriteBool(w, m.IsRegistered); err != nil {
+		return err
+	}
+	if err := WriteOptionalUint64(w, m.UserID); err != nil {
+		return err
+	}
+	if err := WriteUint8(w, uint8(m.UserFlags)); err != nil {
+		return err
+	}
+	return WriteBool(w, m.Online)
+}
+
+func (m *ServerPresenceMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *ServerPresenceMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	sessionID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	nickname, err := ReadString(buf)
+	if err != nil {
+		return err
+	}
+	isRegistered, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+	userID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	flags, err := ReadUint8(buf)
+	if err != nil {
+		return err
+	}
+	online, err := ReadBool(buf)
+	if err != nil {
+		return err
+	}
+
+	m.SessionID = sessionID
+	m.Nickname = nickname
+	m.IsRegistered = isRegistered
+	m.UserID = userID
+	m.UserFlags = UserFlags(flags)
+	m.Online = online
+	return nil
+}
+
 // ===== Server Discovery Messages =====
 
 // ListServersMessage (0x55) - Request server list from directory
@@ -2123,15 +2545,15 @@ func (m *ListServersMessage) Decode(payload []byte) error {
 
 // ServerInfo represents a single server in the server list
 type ServerInfo struct {
-	Hostname       string
-	Port           uint16
-	Name           string
-	Description    string
-	UserCount      uint32
-	MaxUsers       uint32
-	UptimeSeconds  uint64
-	IsPublic       bool
-	ChannelCount   uint32
+	Hostname      string
+	Port          uint16
+	Name          string
+	Description   string
+	UserCount     uint32
+	MaxUsers      uint32
+	UptimeSeconds uint64
+	IsPublic      bool
+	ChannelCount  uint32
 }
 
 // ServerListMessage (0x9B) - List of discoverable servers
@@ -3086,7 +3508,7 @@ func (m *UserBannedMessage) Decode(payload []byte) error {
 
 // BanIPMessage (0x5A) - Ban an IP address or CIDR range
 type BanIPMessage struct {
-	IPCIDR          string  // IP address or CIDR range (e.g., "10.0.0.5/32", "192.168.1.0/24")
+	IPCIDR          string // IP address or CIDR range (e.g., "10.0.0.5/32", "192.168.1.0/24")
 	Reason          string
 	DurationSeconds *uint64 // NULL = permanent ban
 }
@@ -3357,9 +3779,9 @@ type BanEntry struct {
 	IPCIDR      *string // NULL for user bans
 	Reason      string
 	Shadowban   bool
-	BannedAt    int64   // Unix milliseconds
-	BannedUntil *int64  // NULL = permanent, Unix milliseconds for timed bans
-	BannedBy    string  // Admin nickname
+	BannedAt    int64  // Unix milliseconds
+	BannedUntil *int64 // NULL = permanent, Unix milliseconds for timed bans
+	BannedBy    string // Admin nickname
 }
 
 // BanListMessage (0xA8) - List of active bans
@@ -3643,6 +4065,7 @@ var (
 	_ ProtocolMessage = (*LogoutMessage)(nil)
 	_ ProtocolMessage = (*ListChannelsMessage)(nil)
 	_ ProtocolMessage = (*JoinChannelMessage)(nil)
+	_ ProtocolMessage = (*LeaveChannelMessage)(nil)
 	_ ProtocolMessage = (*CreateChannelMessage)(nil)
 	_ ProtocolMessage = (*ListMessagesMessage)(nil)
 	_ ProtocolMessage = (*PostMessageMessage)(nil)
@@ -3656,6 +4079,7 @@ var (
 	_ ProtocolMessage = (*UnsubscribeChannelMessage)(nil)
 	_ ProtocolMessage = (*GetUserInfoMessage)(nil)
 	_ ProtocolMessage = (*ListUsersMessage)(nil)
+	_ ProtocolMessage = (*ListChannelUsersMessage)(nil)
 	_ ProtocolMessage = (*ListServersMessage)(nil)
 	_ ProtocolMessage = (*RegisterServerMessage)(nil)
 	_ ProtocolMessage = (*VerifyRegistrationMessage)(nil)
@@ -3678,6 +4102,7 @@ var (
 	_ ProtocolMessage = (*RegisterResponseMessage)(nil)
 	_ ProtocolMessage = (*ChannelListMessage)(nil)
 	_ ProtocolMessage = (*JoinResponseMessage)(nil)
+	_ ProtocolMessage = (*LeaveResponseMessage)(nil)
 	_ ProtocolMessage = (*ChannelCreatedMessage)(nil)
 	_ ProtocolMessage = (*MessageListMessage)(nil)
 	_ ProtocolMessage = (*MessagePostedMessage)(nil)
@@ -3689,6 +4114,9 @@ var (
 	_ ProtocolMessage = (*SubscribeOkMessage)(nil)
 	_ ProtocolMessage = (*UserInfoMessage)(nil)
 	_ ProtocolMessage = (*UserListMessage)(nil)
+	_ ProtocolMessage = (*ChannelUserListMessage)(nil)
+	_ ProtocolMessage = (*ChannelPresenceMessage)(nil)
+	_ ProtocolMessage = (*ServerPresenceMessage)(nil)
 	_ ProtocolMessage = (*ServerListMessage)(nil)
 	_ ProtocolMessage = (*RegisterAckMessage)(nil)
 	_ ProtocolMessage = (*VerifyResponseMessage)(nil)

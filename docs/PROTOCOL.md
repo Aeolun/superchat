@@ -208,7 +208,7 @@ Challenge-response authentication was considered but rejected because:
 | 0x14 | LIST_SSH_KEYS | Request list of user's SSH keys |
 | 0x15 | GET_SUBCHANNELS | Request subchannels for a channel |
 | 0x16 | LIST_USERS | Request list of online users |
-| 0x17 | UPDATE_READ_STATE | Update last read position |
+| 0x17 | LIST_CHANNEL_USERS | Request active users in a specific channel |
 | 0x18 | GET_UNREAD_COUNTS | Request unread counts for specific channels |
 | 0x19 | START_DM | Initiate a direct message conversation |
 | 0x1A | PROVIDE_PUBLIC_KEY | Upload public key for encryption |
@@ -276,6 +276,9 @@ Challenge-response authentication was considered but rejected because:
 | 0xA8 | BAN_LIST | List of bans response (admin) |
 | 0xA9 | USER_DELETED | User deletion result (admin response) |
 | 0xAA | CHANNEL_DELETED | Channel deletion result (admin response) |
+| 0xAB | CHANNEL_USER_LIST | Snapshot of users currently in a channel |
+| 0xAC | CHANNEL_PRESENCE | Channel join/leave notification |
+| 0xAD | SERVER_PRESENCE | Server-wide presence notification |
 
 ## Message Payloads
 
@@ -301,16 +304,18 @@ Used when connecting to use a registered nickname.
 ### 0x81 - AUTH_RESPONSE (Server → Client)
 
 ```
-+-------------------+-------------------+----------------------+----------------------+
-| success (bool)    | user_id (uint64)  | nickname (String)    | message (String)     |
-|                   | (only if success) | (only if success)    | (error if failed)    |
-+-------------------+-------------------+----------------------+----------------------+
++-------------------+-------------------+----------------------+----------------------+--------------------+
+| success (bool)    | user_id (uint64)  | nickname (String)    | message (String)     | user_flags (uint8) |
+|                   | (only if success) | (only if success)    | (error if failed)    | (success only, optional) |
++-------------------+-------------------+----------------------+----------------------+--------------------+
 ```
 
 If success:
 - `user_id`: The registered user's ID
 - `nickname`: The authenticated user's registered nickname
 - `message`: Welcome message or empty
+- `user_flags`: Optional bitfield describing user capabilities (admins, moderators, etc.). Servers SHOULD include this when known so clients can tailor privileged UI. Bits: `0x01` (admin), `0x02` (moderator). Remaining bits are reserved for future roles.
+- Clients receiving an AUTH_RESPONSE without `user_flags` MUST treat the value as `0x00` (regular user) for backward compatibility.
 
 If failed:
 - `user_id`: Omitted
@@ -486,6 +491,16 @@ Each subchannel:
 
 If `subchannel_id` is not present, join the channel at the root level (for channels without subchannels).
 
+### 0x06 - LEAVE_CHANNEL (Client → Server)
+
+```
++-------------------+-----------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)|
++-------------------+-----------------------------+
+```
+
+Requests that the server remove the session from the given channel/subchannel. When `subchannel_id` is omitted the user leaves the root-level channel subscription.
+
 ### 0x85 - JOIN_RESPONSE (Server → Client)
 
 ```
@@ -498,6 +513,16 @@ If `subchannel_id` is not present, join the channel at the root level (for chann
 ```
 
 If failed, `message` contains error description.
+
+### 0x86 - LEAVE_RESPONSE (Server → Client)
+
+```
++-------------------+-------------------+-----------------------------+-------------------+
+| success (bool)    | channel_id (u64)  | subchannel_id (Optional u64)| message (String)  |
++-------------------+-------------------+-----------------------------+-------------------+
+```
+
+Acknowledges a `LEAVE_CHANNEL` request. On success, the session is no longer counted as present in the channel. On failure, `message` describes why the leave operation was rejected.
 
 ### 0x09 - LIST_MESSAGES (Client → Server)
 
@@ -936,6 +961,21 @@ Request list of online or all users.
 - Results sorted by connection time for online users (most recent first)
 - Server returns ERROR 1005 (permission denied) if non-admin requests with `include_offline = true`
 
+### 0x17 - LIST_CHANNEL_USERS (Client → Server)
+
+Request a snapshot of all sessions currently present in a channel or subchannel.
+
+```
++-------------------+-----------------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)|
++-------------------+-----------------------------+
+```
+
+**Notes:**
+- Clients typically request this immediately after a successful `JOIN_CHANNEL` to pre-populate their roster UI.
+- When `subchannel_id` is omitted, the request targets the root-level channel membership.
+- Older servers may not implement this request; clients should handle `ERROR 3000` (permission denied) or `ERROR 4001` (not found) gracefully.
+
 ### 0x9A - USER_LIST (Server → Client)
 
 Response with list of users (online or all registered users if admin requested with include_offline).
@@ -965,6 +1005,54 @@ Each user:
 - Offline registered users appear with `is_registered = true`, `online = false`
 - Same user_id may appear multiple times if user has multiple sessions (all with `online = true`)
 - Useful for admin features to show all users, not just online ones
+
+### 0xAB - CHANNEL_USER_LIST (Server → Client)
+
+Snapshot roster for a channel/subchannel, typically sent in response to `LIST_CHANNEL_USERS`.
+
+```
++-------------------+-----------------------------+-------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| user_count (u16)  |
++-------------------+-----------------------------+-------------------+
+
+Each user:
++-------------------+----------------------+-------------------+----------------------+------------------+
+| session_id (u64)  | nickname (String)    | is_registered(bool)| user_id (Optional u64)| user_flags (u8) |
++-------------------+----------------------+-------------------+----------------------+------------------+
+```
+
+**Notes:**
+- `session_id` distinguishes multiple simultaneous connections from the same account.
+- `user_flags` reuses the standard bitfield (`0x01` = admin, `0x02` = moderator). Unknown bits should be ignored for forward compatibility.
+- A follow-up `CHANNEL_PRESENCE` event will be sent for subsequent joins/leaves so clients can keep the roster current without polling.
+
+### 0xAC - CHANNEL_PRESENCE (Server → Client)
+
+Real-time join/leave event for a channel or subchannel.
+
+```
++-------------------+-----------------------------+-------------------+----------------------+-------------------+----------------------+------------------+---------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| session_id (u64)  | nickname (String)    | is_registered(bool)| user_id (Optional u64)| user_flags (u8) | joined (bool) |
++-------------------+-----------------------------+-------------------+----------------------+-------------------+----------------------+------------------+---------------+
+```
+
+- `joined = true` indicates the session entered the channel (via join, subscribe promotion, or reconnect).
+- `joined = false` indicates the session left or disconnected.
+- Clients should treat missing support by older servers as an absence of presence updates and may fall back to manual refreshes.
+
+### 0xAD - SERVER_PRESENCE (Server → Client)
+
+Server-wide presence event for connection lifecycle changes.
+
+```
++-------------------+----------------------+-------------------+----------------------+------------------+---------------+
+| session_id (u64)  | nickname (String)    | is_registered(bool)| user_id (Optional u64)| user_flags (u8) | online (bool) |
++-------------------+----------------------+-------------------+----------------------+------------------+---------------+
+```
+
+- `online = true` signals a new active session; `online = false` signals termination.
+- Enables clients to keep a global roster synchronized after an initial `USER_LIST` snapshot.
+- Servers MAY omit this message when no listeners have requested presence updates; clients must be resilient to its absence.
 
 ### 0x1C - LOGOUT (Client → Server)
 

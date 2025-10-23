@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,17 +46,19 @@ type Server struct {
 	disconnectionsSinceReport atomic.Int64
 
 	// Server discovery
-	verificationMu          sync.Mutex
-	verificationChallenges  map[uint64]uint64 // sessionID -> challenge
-	discoveryRateLimits     map[string]*discoveryRateLimiter
-	discoveryRateLimitMu    sync.Mutex
+	verificationMu         sync.Mutex
+	verificationChallenges map[uint64]uint64 // sessionID -> challenge
+	discoveryRateLimits    map[string]*discoveryRateLimiter
+	discoveryRateLimitMu   sync.Mutex
+	autoRegisterMu         sync.Mutex
+	autoRegisterAttempts   map[string][]time.Time
 }
 
 // ServerConfig holds server configuration
 type ServerConfig struct {
 	TCPPort                 int
 	SSHPort                 int
-	HTTPPort                int    // Public HTTP port for /servers.json (default: 8080, 0 = disabled)
+	HTTPPort                int // Public HTTP port for /servers.json (default: 8080, 0 = disabled)
 	SSHHostKeyPath          string
 	MaxConnectionsPerIP     uint8
 	MessageRateLimit        uint16
@@ -92,8 +95,8 @@ func DefaultConfig() ServerConfig {
 		MaxMessageLength:        4096, // bytes
 		SessionTimeoutSeconds:   120,  // 2 minutes
 		ProtocolVersion:         1,
-		MaxThreadSubscriptions:  50, // max thread subscriptions per session
-		MaxChannelSubscriptions: 10, // max channel subscriptions per session
+		MaxThreadSubscriptions:  50,   // max thread subscriptions per session
+		MaxChannelSubscriptions: 10,   // max channel subscriptions per session
 		DirectoryEnabled:        true, // Default: directory mode enabled
 
 		// Server discovery metadata
@@ -146,6 +149,7 @@ func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, 
 		startTime:              time.Now(),
 		verificationChallenges: make(map[uint64]uint64),
 		discoveryRateLimits:    make(map[string]*discoveryRateLimiter),
+		autoRegisterAttempts:   make(map[string][]time.Time),
 	}
 
 	return server, nil
@@ -461,7 +465,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// Send SERVER_CONFIG immediately after connection
 	if err := s.sendServerConfig(sess); err != nil {
 		// Debug log already shows the send attempt, clean up and return
-		s.sessions.RemoveSession(sess.ID)
+		s.removeSession(sess.ID)
 		conn.Close()
 		return
 	}
@@ -486,7 +490,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 // messageLoop handles messages for an established connection
 func (s *Server) messageLoop(sess *Session, conn net.Conn) {
 	defer conn.Close()
-	defer s.sessions.RemoveSession(sess.ID)
+	defer s.removeSession(sess.ID)
 
 	// Message loop
 	for {
@@ -497,7 +501,7 @@ func (s *Server) messageLoop(sess *Session, conn net.Conn) {
 			_, exists := s.sessions.GetSession(sess.ID)
 
 			// Remove from sessions map immediately to prevent broadcast attempts
-			s.sessions.RemoveSession(sess.ID)
+			s.removeSession(sess.ID)
 
 			// Only log if we're the ones who discovered the error (session existed)
 			if exists {
@@ -577,6 +581,8 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleGetUserInfo(sess, frame)
 	case protocol.TypeListUsers:
 		return s.handleListUsers(sess, frame)
+	case protocol.TypeListChannelUsers:
+		return s.handleListChannelUsers(sess, frame)
 	case protocol.TypePing:
 		return s.handlePing(sess, frame)
 	case protocol.TypeDisconnect:
@@ -614,6 +620,25 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 	default:
 		// Unknown or unimplemented message type
 		return s.sendError(sess, 1001, "Unsupported message type")
+	}
+}
+
+func (s *Server) removeSession(sessionID uint64) {
+	sess, ok := s.sessions.GetSession(sessionID)
+	var joined *int64
+	if ok {
+		sess.mu.RLock()
+		joined = sess.JoinedChannel
+		sess.mu.RUnlock()
+	}
+
+	s.sessions.RemoveSession(sessionID)
+
+	if ok {
+		if joined != nil {
+			s.notifyChannelPresence(*joined, sess, false)
+		}
+		s.notifyServerPresence(sess, false)
 	}
 }
 
@@ -752,7 +777,7 @@ func (s *Server) cleanupStaleSessions() {
 		if dbSess.LastActivity < cutoff {
 			s.disconnectionsSinceReport.Add(1)
 			debugLog.Printf("Closing stale session %d (inactive for %v)", sess.ID, timeout)
-			s.sessions.RemoveSession(sess.ID)
+			s.removeSession(sess.ID)
 		}
 	}
 }
@@ -840,20 +865,28 @@ func (s *Server) AnnounceToDirectory(directoryAddr, serverName, serverDescriptio
 		return
 	}
 
-	// Get our external hostname (from config or listener)
-	ourHostname := host // TODO: Get from config or detect external IP
+	// Determine the hostname we advertise to the directory.
+	ourHostname := strings.TrimSpace(s.config.PublicHostname)
+	if ourHostname == "" {
+		ourHostname = host
+	}
+
+	// Determine the port we actually listen on (handles dynamic ports)
+	var ourPort uint16
 	if s.listener != nil {
-		if addr := s.listener.Addr().String(); addr != "" {
-			// Extract just the port from our listener
-			_, ourPort, _ := net.SplitHostPort(addr)
-			if ourPort != "" {
-				// Use the directory's host as a guess for our hostname
-				// In production, this should be configurable
-				ourHostname = host
+		if tcpAddr, ok := s.listener.Addr().(*net.TCPAddr); ok && tcpAddr.Port > 0 {
+			ourPort = uint16(tcpAddr.Port)
+		} else if addr := s.listener.Addr().String(); addr != "" {
+			if _, portStr, err := net.SplitHostPort(addr); err == nil {
+				if p, err := strconv.Atoi(portStr); err == nil && p > 0 && p <= int(^uint16(0)) {
+					ourPort = uint16(p)
+				}
 			}
 		}
 	}
-	ourPort := uint16(s.config.TCPPort)
+	if ourPort == 0 {
+		ourPort = uint16(s.config.TCPPort)
+	}
 
 	// Start announcement loop
 	go s.maintainDirectoryAnnouncement(directoryAddr, ourHostname, ourPort, serverName, serverDescription)

@@ -101,6 +101,29 @@ func TestJoinResponseDecodeErrors(t *testing.T) {
 	})
 }
 
+func TestLeaveChannelDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &LeaveChannelMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+}
+
+func TestLeaveResponseDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &LeaveResponseMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing channel", func(t *testing.T) {
+		msg := &LeaveResponseMessage{}
+		payload := []byte{0x01} // success flag only
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
 func TestListMessagesDecodeErrors(t *testing.T) {
 	t.Run("invalid payload - empty", func(t *testing.T) {
 		msg := &ListMessagesMessage{}
@@ -126,11 +149,11 @@ func TestMessageListDecodeErrors(t *testing.T) {
 	t.Run("invalid payload - incomplete message", func(t *testing.T) {
 		msg := &MessageListMessage{}
 		buf := new(bytes.Buffer)
-		WriteUint64(buf, 1)                 // channel_id
-		WriteOptionalUint64(buf, nil)       // subchannel_id
-		WriteOptionalUint64(buf, nil)       // parent_id
-		WriteUint16(buf, 1)                 // message count = 1
-		WriteUint64(buf, 1)                 // message id
+		WriteUint64(buf, 1)           // channel_id
+		WriteOptionalUint64(buf, nil) // subchannel_id
+		WriteOptionalUint64(buf, nil) // parent_id
+		WriteUint16(buf, 1)           // message count = 1
+		WriteUint64(buf, 1)           // message id
 		// Missing rest of message fields
 
 		err := msg.Decode(buf.Bytes())
@@ -148,10 +171,10 @@ func TestPostMessageDecodeErrors(t *testing.T) {
 	t.Run("decode empty content", func(t *testing.T) {
 		msg := &PostMessageMessage{}
 		buf := new(bytes.Buffer)
-		WriteUint64(buf, 1)                 // channel_id
-		WriteOptionalUint64(buf, nil)       // subchannel_id
-		WriteOptionalUint64(buf, nil)       // parent_id
-		WriteString(buf, "")                // empty content
+		WriteUint64(buf, 1)           // channel_id
+		WriteOptionalUint64(buf, nil) // subchannel_id
+		WriteOptionalUint64(buf, nil) // parent_id
+		WriteString(buf, "")          // empty content
 
 		err := msg.Decode(buf.Bytes())
 		assert.Error(t, err)
@@ -161,9 +184,9 @@ func TestPostMessageDecodeErrors(t *testing.T) {
 	t.Run("decode too long content", func(t *testing.T) {
 		msg := &PostMessageMessage{}
 		buf := new(bytes.Buffer)
-		WriteUint64(buf, 1)                        // channel_id
-		WriteOptionalUint64(buf, nil)              // subchannel_id
-		WriteOptionalUint64(buf, nil)              // parent_id
+		WriteUint64(buf, 1)                          // channel_id
+		WriteOptionalUint64(buf, nil)                // subchannel_id
+		WriteOptionalUint64(buf, nil)                // parent_id
 		WriteString(buf, string(make([]byte, 4097))) // too long
 
 		err := msg.Decode(buf.Bytes())
@@ -270,8 +293,8 @@ func TestNewMessageDecodeErrors(t *testing.T) {
 	t.Run("invalid payload - incomplete", func(t *testing.T) {
 		msg := &NewMessageMessage{}
 		buf := new(bytes.Buffer)
-		WriteUint64(buf, 1)           // ID
-		WriteUint64(buf, 1)           // ChannelID
+		WriteUint64(buf, 1) // ID
+		WriteUint64(buf, 1) // ChannelID
 		// Missing rest of fields
 
 		err := msg.Decode(buf.Bytes())
@@ -552,6 +575,62 @@ func TestUserListDecodeErrors(t *testing.T) {
 		msg := &UserListMessage{}
 		// Count says 1 user, has nickname + is_registered but missing optional user_id
 		payload := []byte{0x00, 0x01, 0x00, 0x05, 'a', 'l', 'i', 'c', 'e', 0x01}
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestListChannelUsersDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &ListChannelUsersMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+}
+
+func TestChannelUserListDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &ChannelUserListMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - missing users", func(t *testing.T) {
+		msg := &ChannelUserListMessage{}
+		buf := new(bytes.Buffer)
+		WriteUint64(buf, 1)           // channel id
+		WriteOptionalUint64(buf, nil) // subchannel
+		// missing user count
+		err := msg.Decode(buf.Bytes())
+		assert.Error(t, err)
+	})
+}
+
+func TestChannelPresenceDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &ChannelPresenceMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - incomplete", func(t *testing.T) {
+		msg := &ChannelPresenceMessage{}
+		payload := []byte{0x00, 0x00} // partial channel id
+		err := msg.Decode(payload)
+		assert.Error(t, err)
+	})
+}
+
+func TestServerPresenceDecodeErrors(t *testing.T) {
+	t.Run("invalid payload - empty", func(t *testing.T) {
+		msg := &ServerPresenceMessage{}
+		err := msg.Decode([]byte{})
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid payload - incomplete", func(t *testing.T) {
+		msg := &ServerPresenceMessage{}
+		payload := []byte{0x00, 0x00} // partial session id
 		err := msg.Decode(payload)
 		assert.Error(t, err)
 	})

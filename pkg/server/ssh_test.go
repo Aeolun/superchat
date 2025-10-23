@@ -192,8 +192,22 @@ func readSSHMessageWithTimeout(t *testing.T, channel ssh.Channel, timeout time.D
 	resultChan := make(chan result, 1)
 
 	go func() {
-		frame, err := protocol.DecodeFrame(channel)
-		resultChan <- result{frame: frame, err: err}
+		ignored := map[uint8]bool{
+			protocol.TypeServerPresence:  true,
+			protocol.TypeChannelPresence: true,
+		}
+		for {
+			frame, err := protocol.DecodeFrame(channel)
+			if err != nil {
+				resultChan <- result{frame: frame, err: err}
+				return
+			}
+			if ignored[frame.Type] {
+				continue
+			}
+			resultChan <- result{frame: frame, err: nil}
+			return
+		}
 	}()
 
 	select {
@@ -853,5 +867,36 @@ func TestSSHHostKeyPathExpansion(t *testing.T) {
 
 	if key == nil {
 		t.Error("Key should not be nil")
+	}
+}
+
+func TestCheckAutoRegisterRateLimit(t *testing.T) {
+	srv := &Server{
+		autoRegisterAttempts: make(map[string][]time.Time),
+	}
+
+	addr := "203.0.113.10:2222"
+
+	for i := 0; i < maxAutoRegistrationsPerHour; i++ {
+		if !srv.checkAutoRegisterRateLimit(addr) {
+			t.Fatalf("expected attempt %d to be allowed", i+1)
+		}
+	}
+
+	if srv.checkAutoRegisterRateLimit(addr) {
+		t.Fatal("expected rate limit to block additional attempts")
+	}
+
+	srv.autoRegisterMu.Lock()
+	attempts := srv.autoRegisterAttempts["203.0.113.10"]
+	if len(attempts) == 0 {
+		t.Fatal("expected attempts to be recorded for host")
+	}
+	attempts[0] = time.Now().Add(-2 * time.Hour)
+	srv.autoRegisterAttempts["203.0.113.10"] = attempts
+	srv.autoRegisterMu.Unlock()
+
+	if !srv.checkAutoRegisterRateLimit(addr) {
+		t.Fatal("expected rate limit to allow attempt after window expires")
 	}
 }

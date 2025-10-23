@@ -120,13 +120,17 @@ func buildChannelPaneContent(
 			} else {
 				prefix = "#"
 			}
-			item := prefix + channel.Name
+			base := prefix + channel.Name
+			countLabel := ui.MutedTextStyle.Render(fmt.Sprintf(" %d online", channel.UserCount))
 			if i == channelCursor {
-				item = ui.SelectedItemStyle.Render("▶ " + item)
+				label := ui.SelectedItemStyle.Render("▶ " + base)
+				item := lipgloss.JoinHorizontal(lipgloss.Left, label, countLabel)
+				items = append(items, item)
 			} else {
-				item = ui.UnselectedItemStyle.Render("  " + item)
+				label := ui.UnselectedItemStyle.Render("  " + base)
+				item := lipgloss.JoinHorizontal(lipgloss.Left, label, countLabel)
+				items = append(items, item)
 			}
-			items = append(items, item)
 		}
 
 		if len(items) == 0 {

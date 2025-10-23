@@ -543,6 +543,7 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.sendLeaveChannel(),
 				m.sendUnsubscribeChannel(m.currentChannel.ID),
 			)
+			m.clearActiveChannel()
 		}
 		m.currentChannel = nil
 		m.threads = []protocol.Message{}
@@ -605,16 +606,24 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleChatChannelKeys handles keyboard input in chat channel view
 func (m Model) handleChatChannelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-
 	switch msg.String() {
 	case "esc":
 		// Exit chat and return to channel list
 		m.currentView = ViewChannelList
+		var cmd tea.Cmd
+		if m.currentChannel != nil {
+			channelID := m.currentChannel.ID
+			m.clearActiveChannel()
+			cmd = tea.Batch(
+				m.sendLeaveChannel(),
+				m.sendUnsubscribeChannel(channelID),
+			)
+		}
 		m.currentChannel = nil
 		m.chatMessages = []protocol.Message{}
 		m.chatTextarea.Reset()
 		m.chatTextarea.Blur() // Unfocus when leaving
-		return m, nil
+		return m, cmd
 
 	case "enter":
 		// Send message if input is not empty
@@ -736,6 +745,8 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleChannelDeleted(frame)
 	case protocol.TypeJoinResponse:
 		return m.handleJoinResponse(frame)
+	case protocol.TypeLeaveResponse:
+		return m.handleLeaveResponse(frame)
 	case protocol.TypeMessageList:
 		return m.handleMessageList(frame)
 	case protocol.TypeMessagePosted:
@@ -774,6 +785,12 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleUserDeleted(frame)
 	case protocol.TypeDisconnect:
 		return m.handleDisconnect(frame)
+	case protocol.TypeChannelUserList:
+		return m.handleChannelUserList(frame)
+	case protocol.TypeChannelPresence:
+		return m.handleChannelPresence(frame)
+	case protocol.TypeServerPresence:
+		return m.handleServerPresence(frame)
 	}
 
 	// Continue listening
@@ -860,7 +877,7 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 	} else {
 		// Check if nickname is registered (V2)
 		if strings.Contains(strings.ToLower(msg.Message), "registered") ||
-		   strings.Contains(strings.ToLower(msg.Message), "password") {
+			strings.Contains(strings.ToLower(msg.Message), "password") {
 			// Nickname is registered - only show password modal if NOT in directory mode
 			// (directory connections are just for browsing servers, not authenticating)
 			if !m.directoryMode {
@@ -930,6 +947,11 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		// Successfully authenticated
 		m.authState = AuthStateAuthenticated
 		m.userID = &msg.UserID
+		if msg.UserFlags != nil {
+			m.userFlags = *msg.UserFlags
+		} else {
+			m.userFlags = 0
+		}
 		m.authAttempts = 0
 		m.authErrorMessage = ""
 
@@ -957,6 +979,7 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		// Close password modal if it's open
 		m.modalStack.RemoveByType(modal.ModalPasswordAuth)
 	} else {
+		m.userFlags = 0
 		// Authentication failed
 		m.authState = AuthStatePrompting
 		m.authAttempts++
@@ -994,6 +1017,7 @@ func (m Model) handleRegisterResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 		// Successfully registered
 		m.authState = AuthStateAuthenticated
 		m.userID = &msg.UserID
+		m.userFlags = 0
 		m.statusMessage = fmt.Sprintf("Registered as %s", m.nickname)
 
 		// Save user ID to state
@@ -1002,6 +1026,7 @@ func (m Model) handleRegisterResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 		// Close registration modal if it's open
 		m.modalStack.RemoveByType(modal.ModalRegistration)
 	} else {
+		m.userFlags = 0
 		// Registration failed - close modal and show error
 		m.modalStack.RemoveByType(modal.ModalRegistration)
 		m.errorMessage = "Registration failed. Please try again."
@@ -1113,6 +1138,7 @@ func (m Model) handleChannelDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 
 				// If we were in the deleted channel, navigate to channel list
 				if m.currentChannel != nil && m.currentChannel.ID == msg.ChannelID {
+					m.clearActiveChannel()
 					m.currentChannel = nil
 					m.threads = nil
 					m.currentThread = nil
@@ -1143,6 +1169,32 @@ func (m Model) handleJoinResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 	if msg.Success {
 		m.statusMessage = msg.Message
+		m.setActiveChannel(msg.ChannelID)
+		cmds := []tea.Cmd{listenForServerFrames(m.conn, m.connGeneration)}
+		if m.showUserSidebar {
+			cmds = append(cmds, m.sendListChannelUsers(msg.ChannelID))
+			cmds = append(cmds, func() tea.Msg { return ForceRenderMsg{} })
+		}
+		return m, tea.Batch(cmds...)
+	} else {
+		m.errorMessage = msg.Message
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
+}
+
+// handleLeaveResponse processes LEAVE_RESPONSE
+func (m Model) handleLeaveResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.LeaveResponseMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode leave response: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	if msg.Success {
+		m.statusMessage = msg.Message
+		m.clearActiveChannel()
+		delete(m.channelRoster, msg.ChannelID)
 	} else {
 		m.errorMessage = msg.Message
 	}
@@ -1564,8 +1616,8 @@ func (m Model) sendSetNickname() tea.Cmd {
 
 // NicknameSentMsg is sent after we send a nickname change request
 type NicknameSentMsg struct {
-	Nickname     string
-	GoAnonymous  bool // If true, clear userID and authState when nickname changes
+	Nickname    string
+	GoAnonymous bool // If true, clear userID and authState when nickname changes
 }
 
 func (m Model) sendSetNicknameWith(nickname string) tea.Cmd {
@@ -1724,7 +1776,29 @@ func (m Model) sendJoinChannel(channelID uint64) tea.Cmd {
 
 func (m Model) sendLeaveChannel() tea.Cmd {
 	return func() tea.Msg {
-		// V1: Leave channel message (not fully implemented on server yet)
+		if m.activeChannelID == 0 {
+			return nil
+		}
+		msg := &protocol.LeaveChannelMessage{
+			ChannelID:    m.activeChannelID,
+			SubchannelID: nil,
+		}
+		if err := m.conn.SendMessage(protocol.TypeLeaveChannel, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func (m Model) sendListChannelUsers(channelID uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := &protocol.ListChannelUsersMessage{
+			ChannelID:    channelID,
+			SubchannelID: nil,
+		}
+		if err := m.conn.SendMessage(protocol.TypeListChannelUsers, msg); err != nil {
+			return ErrorMsg{Err: err}
+		}
 		return nil
 	}
 }
@@ -1741,7 +1815,7 @@ func (m Model) sendCreateChannel(name, displayName, description string, channelT
 			DisplayName:    displayName,
 			Description:    desc,
 			ChannelType:    channelType, // 0=chat, 1=forum
-			RetentionHours: 168,          // 7 days default
+			RetentionHours: 168,         // 7 days default
 		}
 		if err := m.conn.SendMessage(protocol.TypeCreateChannel, msg); err != nil {
 			return ErrorMsg{Err: err}
@@ -2128,7 +2202,7 @@ func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
 	// If we're in a channel, rejoin and reload threads
 	if m.currentChannel != nil {
 		m.loadingThreadList = true
-		m.threads = []protocol.Message{} // Clear threads
+		m.threads = []protocol.Message{}                            // Clear threads
 		m.threadListViewport.SetContent(m.buildThreadListContent()) // Show initial spinner
 		cmds = append(cmds, m.sendJoinChannel(m.currentChannel.ID))
 		cmds = append(cmds, m.requestThreadList(m.currentChannel.ID))
@@ -2141,7 +2215,7 @@ func (m Model) handleReconnected() (tea.Model, tea.Cmd) {
 		// If we're viewing a specific thread, reload replies and re-subscribe
 		if m.currentThread != nil && m.currentView == ViewThreadView {
 			m.loadingThreadReplies = true
-			m.threadReplies = []protocol.Message{} // Clear replies
+			m.threadReplies = []protocol.Message{}              // Clear replies
 			m.threadViewport.SetContent(m.buildThreadContent()) // Show initial spinner
 			cmds = append(cmds, m.requestThreadReplies(m.currentThread.ID))
 			cmds = append(cmds, m.sendSubscribeThread(m.currentThread.ID))
@@ -2198,7 +2272,7 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 
 	// Use helper function to resolve connection method based on history
 	address := client.ResolveConnectionMethod(serverAddr, m.state, m.logger)
-	
+
 	// For SSH and WebSocket connections, we may need to strip the port
 	// since the connection handler will add the default port
 	if strings.HasPrefix(address, "ssh://") || strings.HasPrefix(address, "ws://") || strings.HasPrefix(address, "wss://") {
@@ -2206,7 +2280,7 @@ func (m Model) handleServerSelected(server protocol.ServerInfo) (tea.Model, tea.
 		if idx := strings.Index(address, "://"); idx != -1 {
 			scheme := address[:idx+3]
 			hostPart := address[idx+3:]
-			
+
 			// Strip port if present for SSH and WebSocket
 			if scheme == "ssh://" || scheme == "ws://" || scheme == "wss://" {
 				if host, _, err := net.SplitHostPort(hostPart); err == nil {
@@ -2858,6 +2932,14 @@ func (m Model) handleUserList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		m.logger.Printf("[DEBUG] Received USER_LIST with %d users", len(msg.Users))
 	}
 
+	updatedDirectory := make(map[string]uint64, len(msg.Users))
+	for _, user := range msg.Users {
+		if user.UserID != nil && user.Nickname != "" {
+			updatedDirectory[strings.ToLower(user.Nickname)] = *user.UserID
+		}
+	}
+	m.userDirectory = updatedDirectory
+
 	// Find and update the list users modal directly on the stack
 	topModal := m.modalStack.Top()
 	if topModal != nil && topModal.Type() == modal.ModalListUsers {
@@ -2884,6 +2966,105 @@ func (m Model) handleUserList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
+func (m Model) handleChannelUserList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.ChannelUserListMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode CHANNEL_USER_LIST: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	roster := make(map[uint64]presenceEntry, len(msg.Users))
+	for _, user := range msg.Users {
+		entry := presenceEntry{
+			SessionID:    user.SessionID,
+			Nickname:     user.Nickname,
+			IsRegistered: user.IsRegistered,
+			UserID:       cloneUint64Ptr(user.UserID),
+			UserFlags:    user.UserFlags,
+		}
+		roster[user.SessionID] = entry
+		if entry.Nickname == m.nickname {
+			id := entry.SessionID
+			m.selfSessionID = &id
+		}
+	}
+	if len(roster) == 0 {
+		delete(m.channelRoster, msg.ChannelID)
+	} else {
+		m.channelRoster[msg.ChannelID] = roster
+	}
+
+	cmd := tea.Batch(
+		listenForServerFrames(m.conn, m.connGeneration),
+		func() tea.Msg { return ForceRenderMsg{} },
+	)
+	return m, cmd
+}
+
+func (m Model) handleChannelPresence(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.ChannelPresenceMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode CHANNEL_PRESENCE: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	entry := presenceEntry{
+		SessionID:    msg.SessionID,
+		Nickname:     msg.Nickname,
+		IsRegistered: msg.IsRegistered,
+		UserID:       cloneUint64Ptr(msg.UserID),
+		UserFlags:    msg.UserFlags,
+	}
+
+	if msg.Joined {
+		m.upsertChannelPresence(msg.ChannelID, entry)
+	} else {
+		m.removeChannelPresence(msg.ChannelID, msg.SessionID)
+	}
+
+	if m.hasActiveChannel && m.activeChannelID == msg.ChannelID && m.currentChannel != nil {
+		action := "left"
+		if msg.Joined {
+			action = "joined"
+		}
+		m.statusMessage = fmt.Sprintf("%s has %s %s", entry.Nickname, action, m.currentChannel.Name)
+	}
+
+	cmd := tea.Batch(
+		listenForServerFrames(m.conn, m.connGeneration),
+		func() tea.Msg { return ForceRenderMsg{} },
+	)
+	return m, cmd
+}
+
+func (m Model) handleServerPresence(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.ServerPresenceMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode SERVER_PRESENCE: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	entry := presenceEntry{
+		SessionID:    msg.SessionID,
+		Nickname:     msg.Nickname,
+		IsRegistered: msg.IsRegistered,
+		UserID:       cloneUint64Ptr(msg.UserID),
+		UserFlags:    msg.UserFlags,
+	}
+
+	if msg.Online {
+		m.upsertServerPresence(entry)
+	} else {
+		m.removeServerPresence(msg.SessionID)
+	}
+
+	cmd := tea.Batch(
+		listenForServerFrames(m.conn, m.connGeneration),
+		func() tea.Msg { return ForceRenderMsg{} },
+	)
+	return m, cmd
+}
+
 func (m Model) handleUserDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	msg := &protocol.UserDeletedMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
@@ -2891,13 +3072,16 @@ func (m Model) handleUserDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m, listenForServerFrames(m.conn, m.connGeneration)
 	}
 
+	cmds := []tea.Cmd{listenForServerFrames(m.conn, m.connGeneration)}
+
 	if msg.Success {
 		m.statusMessage = msg.Message
 		// Close the delete user modal
 		m.modalStack.RemoveByType(modal.ModalDeleteUser)
+		cmds = append(cmds, m.sendListUsers(true))
 	} else {
 		m.errorMessage = msg.Message
 	}
 
-	return m, listenForServerFrames(m.conn, m.connGeneration)
+	return m, tea.Batch(cmds...)
 }

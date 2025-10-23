@@ -22,6 +22,11 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const (
+	maxAutoRegistrationsPerHour = 10
+	autoRegisterWindow          = time.Hour
+)
+
 // startSSHServer starts the SSH server on the configured port
 func (s *Server) startSSHServer() error {
 	if s.config.SSHPort <= 0 {
@@ -170,7 +175,7 @@ func (s *Server) handleSSHSession(channel ssh.Channel, permissions *ssh.Permissi
 		log.Printf("Failed to create SSH session: %v", err)
 		return
 	}
-	defer s.sessions.RemoveSession(sess.ID)
+	defer s.removeSession(sess.ID)
 
 	// Track connection for periodic metrics
 	s.connectionsSinceReport.Add(1)
@@ -201,17 +206,21 @@ func (s *Server) handleSSHSession(channel ssh.Channel, permissions *ssh.Permissi
 			debugLog.Printf("Session %d: SSH user %s (ID: %d) is shadowbanned", sess.ID, nickname, *userID)
 		}
 
+		flags := protocol.UserFlags(userFlags)
 		authResp := &protocol.AuthResponseMessage{
-			Success:  true,
-			UserID:   uint64(*userID),
-			Nickname: nickname,
-			Message:  fmt.Sprintf("Authenticated via SSH as %s", nickname),
+			Success:   true,
+			UserID:    uint64(*userID),
+			Nickname:  nickname,
+			Message:   fmt.Sprintf("Authenticated via SSH as %s", nickname),
+			UserFlags: &flags,
 		}
 		if err := s.sendMessage(sess, protocol.TypeAuthResponse, authResp); err != nil {
 			log.Printf("Failed to send AUTH_RESPONSE for SSH user %s: %v", nickname, err)
 			return
 		}
 		debugLog.Printf("Session %d: Auto-authenticated SSH user %s (ID: %d)", sess.ID, nickname, *userID)
+		s.sendServerPresenceSnapshot(sess)
+		s.notifyServerPresence(sess, true)
 	}
 
 	// Message loop
@@ -223,7 +232,7 @@ func (s *Server) handleSSHSession(channel ssh.Channel, permissions *ssh.Permissi
 			_, exists := s.sessions.GetSession(sess.ID)
 
 			// Remove from sessions map immediately to prevent broadcast attempts
-			s.sessions.RemoveSession(sess.ID)
+			s.removeSession(sess.ID)
 
 			// Only log if we're the ones who discovered the error (session existed)
 			if exists {
@@ -464,10 +473,10 @@ func (s *Server) authenticateSSHKey(conn ssh.ConnMetadata, pubKey ssh.PublicKey)
 
 	return &ssh.Permissions{
 		Extensions: map[string]string{
-			"user_id":   fmt.Sprintf("%d", userID),
-			"nickname":  username,
+			"user_id":    fmt.Sprintf("%d", userID),
+			"nickname":   username,
 			"user_flags": "0",
-			"pubkey_fp": fingerprint,
+			"pubkey_fp":  fingerprint,
 		},
 	}, nil
 }
@@ -486,12 +495,47 @@ func generateSecureRandomPassword(length int) string {
 }
 
 // checkAutoRegisterRateLimit checks if auto-registration is allowed from this IP
-// TODO: Implement actual rate limiting with in-memory map and cleanup goroutine
-// For now, always allow (to be implemented in follow-up)
 func (s *Server) checkAutoRegisterRateLimit(remoteAddr string) bool {
-	// TODO: Track IP → [timestamp, timestamp, ...] (last 10 registrations)
-	// Allow if < 10 registrations in last hour
-	return true // For now, no rate limiting
+	host := strings.TrimSpace(remoteAddr)
+	if host == "" {
+		return true
+	}
+
+	if parsedIP := net.ParseIP(host); parsedIP == nil {
+		if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+			host = h
+		}
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		log.Printf("SSH auto-register: unable to parse remote address %q; skipping rate limit", remoteAddr)
+		return true
+	}
+
+	now := time.Now()
+	cutoff := now.Add(-autoRegisterWindow)
+
+	s.autoRegisterMu.Lock()
+	defer s.autoRegisterMu.Unlock()
+
+	attempts := s.autoRegisterAttempts[ip.String()]
+	pruned := attempts[:0]
+	for _, ts := range attempts {
+		if ts.After(cutoff) {
+			pruned = append(pruned, ts)
+		}
+	}
+
+	if len(pruned) >= maxAutoRegistrationsPerHour {
+		s.autoRegisterAttempts[ip.String()] = pruned
+		return false
+	}
+
+	pruned = append(pruned, now)
+	s.autoRegisterAttempts[ip.String()] = pruned
+
+	return true
 }
 
 // stringPtr returns a pointer to a string
