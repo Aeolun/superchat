@@ -23,6 +23,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+const defaultDirectoryPort = 6465
+
 var (
 	errorLog *log.Logger
 	debugLog *log.Logger
@@ -599,6 +601,8 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleListServers(sess, frame)
 	case protocol.TypeRegisterServer:
 		return s.handleRegisterServer(sess, frame)
+	case protocol.TypeVerifyRegistration:
+		return s.handleVerifyRegistration(sess, frame)
 	case protocol.TypeVerifyResponse:
 		return s.handleVerifyResponse(sess, frame)
 	case protocol.TypeHeartbeat:
@@ -852,18 +856,36 @@ func (s *Server) AnnounceToDirectory(directoryAddr, serverName, serverDescriptio
 		}
 	}
 
-	// Parse directory address
-	host, portStr, err := net.SplitHostPort(directoryAddr)
-	if err != nil {
-		log.Printf("Failed to parse directory address %s: %v", directoryAddr, err)
+	directoryAddr = strings.TrimSpace(directoryAddr)
+	if directoryAddr == "" {
+		log.Printf("Directory address is empty; skipping announcement")
 		return
 	}
 
-	port := 0
-	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+	// Parse directory address (allow host-only, defaulting to SuperChat TCP port)
+	host, portStr, err := net.SplitHostPort(directoryAddr)
+	if err != nil {
+		if strings.Contains(err.Error(), "missing port in address") {
+			host = directoryAddr
+			portStr = strconv.Itoa(defaultDirectoryPort)
+			log.Printf("No port specified for directory %s; defaulting to port %d", directoryAddr, defaultDirectoryPort)
+		} else {
+			log.Printf("Failed to parse directory address %s: %v", directoryAddr, err)
+			return
+		}
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
 		log.Printf("Invalid port in directory address %s: %v", directoryAddr, err)
 		return
 	}
+	if port <= 0 || port > int(^uint16(0)) {
+		log.Printf("Invalid port in directory address %s: %d (out of range)", directoryAddr, port)
+		return
+	}
+
+	normalizedAddr := net.JoinHostPort(host, strconv.Itoa(port))
 
 	// Determine the hostname we advertise to the directory.
 	ourHostname := strings.TrimSpace(s.config.PublicHostname)
@@ -889,7 +911,7 @@ func (s *Server) AnnounceToDirectory(directoryAddr, serverName, serverDescriptio
 	}
 
 	// Start announcement loop
-	go s.maintainDirectoryAnnouncement(directoryAddr, ourHostname, ourPort, serverName, serverDescription)
+	go s.maintainDirectoryAnnouncement(normalizedAddr, ourHostname, ourPort, serverName, serverDescription)
 }
 
 // maintainDirectoryAnnouncement maintains connection to directory with registration and heartbeats
@@ -914,6 +936,47 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 		}
 
 		log.Printf("Connected to directory %s", directoryAddr)
+
+		// Read initial SERVER_CONFIG frame to validate protocol compatibility
+		if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			log.Printf("Failed to set read deadline for %s: %v", directoryAddr, err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		handshakeFrame, err := protocol.DecodeFrame(conn)
+		conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			log.Printf("Failed to read SERVER_CONFIG from %s: %v (retrying in 60s)", directoryAddr, err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		if handshakeFrame.Type != protocol.TypeServerConfig {
+			log.Printf("Expected SERVER_CONFIG from %s, got 0x%02x", directoryAddr, handshakeFrame.Type)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		serverConfigMsg := &protocol.ServerConfigMessage{}
+		if err := serverConfigMsg.Decode(handshakeFrame.Payload); err != nil {
+			log.Printf("Failed to decode SERVER_CONFIG from %s: %v", directoryAddr, err)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		if serverConfigMsg.ProtocolVersion != protocol.ProtocolVersion {
+			log.Printf("Protocol version mismatch with %s (server=%d, directory=%d)", directoryAddr, serverConfigMsg.ProtocolVersion, protocol.ProtocolVersion)
+			conn.Close()
+			time.Sleep(60 * time.Second)
+			continue
+		}
+
+		log.Printf("Handshake with directory %s succeeded (protocol v%d)", directoryAddr, serverConfigMsg.ProtocolVersion)
 
 		// Send REGISTER_SERVER
 		registerMsg := &protocol.RegisterServerMessage{
@@ -949,22 +1012,49 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 
 		log.Printf("Sent REGISTER_SERVER to %s", directoryAddr)
 
-		// Wait for VERIFY_REGISTRATION challenge
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		verifyFrame, err := protocol.DecodeFrame(conn)
-		if err != nil {
-			log.Printf("Failed to receive verification from %s: %v (retrying in 60s)", directoryAddr, err)
-			conn.Close()
-			time.Sleep(60 * time.Second)
-			continue
+		// Wait for REGISTER_ACK (optional) and VERIFY_REGISTRATION challenge
+		var verifyFrame *protocol.Frame
+		for {
+			conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+			frame, err := protocol.DecodeFrame(conn)
+			if err != nil {
+				log.Printf("Failed to receive response from %s: %v (retrying in 60s)", directoryAddr, err)
+				conn.Close()
+				time.Sleep(60 * time.Second)
+				continue
+			}
+
+			switch frame.Type {
+			case protocol.TypeRegisterAck:
+				ackMsg := &protocol.RegisterAckMessage{}
+				if err := ackMsg.Decode(frame.Payload); err != nil {
+					log.Printf("Failed to decode REGISTER_ACK from %s: %v", directoryAddr, err)
+					conn.Close()
+					time.Sleep(60 * time.Second)
+					continue
+				}
+
+				if ackMsg.Success {
+					log.Printf("Directory %s accepted registration immediately: %s", directoryAddr, ackMsg.Message)
+				} else {
+					log.Printf("Directory %s ack: %s", directoryAddr, ackMsg.Message)
+				}
+				// Continue waiting for VERIFY_REGISTRATION
+
+			case protocol.TypeVerifyRegistration:
+				verifyFrame = frame
+				goto verifyChallenge
+
+			default:
+				log.Printf("Unexpected frame from %s while awaiting verification: 0x%02x", directoryAddr, frame.Type)
+				conn.Close()
+				time.Sleep(60 * time.Second)
+				continue
+			}
 		}
 
-		if verifyFrame.Type != protocol.TypeVerifyRegistration {
-			log.Printf("Expected VERIFY_REGISTRATION from %s, got 0x%02x", directoryAddr, verifyFrame.Type)
-			conn.Close()
-			time.Sleep(60 * time.Second)
-			continue
-		}
+	verifyChallenge:
+		conn.SetReadDeadline(time.Time{})
 
 		// Decode challenge
 		verifyMsg := &protocol.VerifyRegistrationMessage{}

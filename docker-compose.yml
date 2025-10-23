@@ -29,8 +29,8 @@ services:
   website:
     image: aeolun/superchat-website:latest
     build:
-      context: ./website
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: website/Dockerfile
     ports:
       - "8080:80" # Nginx serves on port 80 internally
     restart: unless-stopped

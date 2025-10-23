@@ -1,8 +1,9 @@
 # Docker Deployment Guide
 
-SuperChat provides two Docker images:
+SuperChat provides three Docker images:
 - **Server**: `aeolun/superchat:latest` - The chat server
 - **Website**: `aeolun/superchat-website:latest` - The marketing website
+- **BinSchema Website**: `aeolun/binschema-website:latest` - Static docs + examples for BinSchema
 
 ## Quick Start
 
@@ -120,16 +121,17 @@ All data is stored in `/data` inside the container:
 
 SuperChat uses [Depot](https://depot.dev) for fast multi-platform builds via `depot bake`.
 
-### Build all images (server + website)
+### Build all images (server + website + BinSchema site)
 ```bash
-make docker-build        # Build both images locally
-make docker-build-push   # Build and push to Docker Hub
+make docker-build        # Build all images locally
+make docker-build-push   # Build and push all images to Docker Hub
 ```
 
 ### Build individual images
 ```bash
 make docker-build-server   # Build only server
 make docker-build-website  # Build only website
+make docker-build-binschema  # Build only BinSchema site
 ```
 
 ### Manual build without Depot
@@ -137,8 +139,11 @@ make docker-build-website  # Build only website
 # Server
 docker build -t aeolun/superchat:latest .
 
-# Website
-docker build -t aeolun/superchat-website:latest ./website
+# Website (run from repo root to include shared docs)
+docker build -f website/Dockerfile -t aeolun/superchat-website:latest .
+
+# BinSchema site (must run from repo root to include docs tooling)
+docker build -f binschema-website/Dockerfile -t aeolun/binschema-website:latest .
 ```
 
 ## Publishing to Docker Hub
@@ -170,6 +175,13 @@ Images are built for both `linux/amd64` and `linux/arm64` platforms.
 - **Port:** 80 (HTTP)
 - **Platforms:** linux/amd64, linux/arm64
 
+### BinSchema Website Image (`aeolun/binschema-website`)
+- **Base Image:** nginx:alpine
+- **Size:** ~30MB
+- **User:** Runs as nginx default user
+- **Port:** 80 (HTTP)
+- **Platforms:** linux/amd64, linux/arm64
+- **Notes:** Builds static docs by copying content from `tools/binschema` during the build stage.
 ## Security
 
 The container:

@@ -2202,6 +2202,27 @@ func (s *Server) handleRegisterServer(sess *Session, frame *protocol.Frame) erro
 	return s.sendMessage(sess, protocol.TypeRegisterAck, resp)
 }
 
+// handleVerifyRegistration responds to verification challenges from directories
+func (s *Server) handleVerifyRegistration(sess *Session, frame *protocol.Frame) error {
+	msg := &protocol.VerifyRegistrationMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	log.Printf("Received VERIFY_REGISTRATION challenge %d from %s", msg.Challenge, sess.RemoteAddr)
+
+	resp := &protocol.VerifyResponseMessage{
+		Challenge: msg.Challenge,
+	}
+
+	if err := s.sendMessage(sess, protocol.TypeVerifyResponse, resp); err != nil {
+		return err
+	}
+
+	log.Printf("Sent VERIFY_RESPONSE (challenge %d) to %s", msg.Challenge, sess.RemoteAddr)
+	return nil
+}
+
 // handleVerifyResponse handles VERIFY_RESPONSE message (verification challenge response)
 func (s *Server) handleVerifyResponse(sess *Session, frame *protocol.Frame) error {
 	// Decode message
@@ -2388,23 +2409,70 @@ func (s *Server) verifyAndRegisterServer(msg *protocol.RegisterServerMessage, so
 		return
 	}
 
-	// Wait for VERIFY_RESPONSE (with timeout)
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	respFrame, err := protocol.DecodeFrame(conn)
-	if err != nil {
-		log.Printf("Verification failed for %s: could not read response: %v", addr, err)
-		return
+	// Wait for server response (expect REGISTER_ACK optional, VERIFY_RESPONSE required)
+	var verifyFrame *protocol.Frame
+	for {
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		respFrame, err := protocol.DecodeFrame(conn)
+		if err != nil {
+			log.Printf("Verification failed for %s: could not read response: %v", addr, err)
+			return
+		}
+
+		switch respFrame.Type {
+		case protocol.TypeServerConfig:
+			serverConfig := &protocol.ServerConfigMessage{}
+			if err := serverConfig.Decode(respFrame.Payload); err != nil {
+				log.Printf("Verification failed for %s: could not decode SERVER_CONFIG: %v", addr, err)
+				return
+			}
+
+			if serverConfig.ProtocolVersion != protocol.ProtocolVersion {
+				log.Printf("Verification failed for %s: protocol mismatch (server=%d, directory=%d)", addr, serverConfig.ProtocolVersion, protocol.ProtocolVersion)
+				return
+			}
+
+			log.Printf("Verification handshake with %s succeeded (protocol v%d)", addr, serverConfig.ProtocolVersion)
+			// Wait for the actual verification response
+
+		case protocol.TypeError:
+			errorMsg := &protocol.ErrorMessage{}
+			if err := errorMsg.Decode(respFrame.Payload); err != nil {
+				log.Printf("Verification failed for %s: could not decode ERROR frame: %v", addr, err)
+			} else {
+				log.Printf("Verification failed for %s: directory reported error (code=%d, message=%s)", addr, errorMsg.ErrorCode, errorMsg.Message)
+			}
+			return
+
+		case protocol.TypeRegisterAck:
+			ackMsg := &protocol.RegisterAckMessage{}
+			if err := ackMsg.Decode(respFrame.Payload); err != nil {
+				log.Printf("Verification failed for %s: could not decode REGISTER_ACK: %v", addr, err)
+				return
+			}
+			if ackMsg.Success {
+				log.Printf("Server %s acknowledged verification request: %s", addr, ackMsg.Message)
+			} else {
+				log.Printf("Server %s acknowledged verification request (pending): %s", addr, ackMsg.Message)
+			}
+			// Continue waiting for VERIFY_RESPONSE
+
+		case protocol.TypeVerifyResponse:
+			verifyFrame = respFrame
+			goto verifyResponse
+
+		default:
+			log.Printf("Verification failed for %s: unexpected response type 0x%02x", addr, respFrame.Type)
+			return
+		}
 	}
 
-	// Check message type
-	if respFrame.Type != protocol.TypeVerifyResponse {
-		log.Printf("Verification failed for %s: expected VERIFY_RESPONSE, got 0x%02x", addr, respFrame.Type)
-		return
-	}
+verifyResponse:
+	conn.SetReadDeadline(time.Time{})
 
 	// Decode response
 	respMsg := &protocol.VerifyResponseMessage{}
-	if err := respMsg.Decode(respFrame.Payload); err != nil {
+	if err := respMsg.Decode(verifyFrame.Payload); err != nil {
 		log.Printf("Verification failed for %s: could not decode response: %v", addr, err)
 		return
 	}
