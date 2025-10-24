@@ -144,7 +144,7 @@ function validateTypeDef(
   const fields = getTypeFields(typeDef);
   const fieldsKey = 'sequence';
 
-  // Check for duplicate field names
+  // Check for duplicate field names (sequence)
   const fieldNames = new Set<string>();
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
@@ -159,11 +159,283 @@ function validateTypeDef(
     }
   }
 
-  // Validate each field
+  // Validate each sequence field
+  // Pass typeName as rootTypeName so nested types can use _root references
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
-    validateField(field, `types.${typeName}.${fieldsKey}[${i}]`, schema, errors, typeName, fields);
+    validateField(field, `types.${typeName}.${fieldsKey}[${i}]`, schema, errors, typeName, fields, typeName);
   }
+
+  // Validate instances (position fields)
+  const typeDefAny = typeDef as any;
+  if (typeDefAny.instances && Array.isArray(typeDefAny.instances)) {
+    for (let i = 0; i < typeDefAny.instances.length; i++) {
+      const instance = typeDefAny.instances[i];
+
+      // Check for duplicate instance names (with sequence fields)
+      if (instance.name && fieldNames.has(instance.name)) {
+        errors.push({
+          path: `types.${typeName}.instances[${i}]`,
+          message: `Duplicate field name '${instance.name}' conflicts with sequence field (field names must be unique)`
+        });
+      }
+      fieldNames.add(instance.name);
+
+      validatePositionField(instance, `types.${typeName}.instances[${i}]`, schema, errors, typeName, fields, typeDefAny.instances);
+    }
+  }
+}
+
+/**
+ * Check if a field type is numeric
+ */
+function isNumericType(fieldType: string): boolean {
+  const numericTypes = [
+    "uint8", "uint16", "uint32", "uint64",
+    "int8", "int16", "int32", "int64",
+    "bit"  // bit fields can also be used as positions
+  ];
+  return numericTypes.includes(fieldType);
+}
+
+/**
+ * Validate a position field (instance)
+ */
+function validatePositionField(
+  instance: any,
+  path: string,
+  schema: BinarySchema,
+  errors: ValidationError[],
+  typeName: string,
+  sequenceFields: Field[],
+  allInstances?: any[]  // Include instance fields for nested refs
+): void {
+  // Validate required fields
+  if (!instance.name) {
+    errors.push({ path, message: "Position field missing 'name' property" });
+    return;
+  }
+
+  if (!instance.type) {
+    errors.push({ path: `${path} (${instance.name})`, message: "Position field missing 'type' property" });
+    return;
+  }
+
+  if (instance.position === undefined) {
+    errors.push({ path: `${path} (${instance.name})`, message: "Position field missing 'position' property" });
+    return;
+  }
+
+  // Validate target type exists
+  if (!schema.types[instance.type]) {
+    errors.push({
+      path: `${path} (${instance.name})`,
+      message: `Position field type '${instance.type}' not found in schema.types`
+    });
+  }
+
+  // Validate position
+  if (typeof instance.position === 'string') {
+    // Field reference - validate it exists and is numeric
+    const positionRef = instance.position;
+
+    // Check for dot notation (nested field reference)
+    const dotIndex = positionRef.indexOf('.');
+    if (dotIndex > 0) {
+      const fieldName = positionRef.substring(0, dotIndex);
+      const subFieldName = positionRef.substring(dotIndex + 1);
+
+      // Check both sequence fields and instance fields
+      let referencedField = sequenceFields.find((f: any) => f.name === fieldName);
+      let referencedInstance = allInstances?.find((inst: any) => inst.name === fieldName);
+
+      if (!referencedField && !referencedInstance) {
+        const fieldNames = [
+          ...sequenceFields.map((f: any) => f.name),
+          ...(allInstances?.map((inst: any) => inst.name) || [])
+        ].join(', ');
+        errors.push({
+          path: `${path} (${instance.name})`,
+          message: `Position field reference '${fieldName}' not found in type '${typeName}' (available fields: ${fieldNames})`
+        });
+      } else if (referencedInstance) {
+        // Referencing an instance field - need to look up its type and check for sub-field
+        const instanceType = schema.types[referencedInstance.type];
+        if (!instanceType) {
+          errors.push({
+            path: `${path} (${instance.name})`,
+            message: `Referenced instance '${fieldName}' has unknown type '${referencedInstance.type}'`
+          });
+        } else {
+          // Get the fields from the instance's type
+          const instanceFields = getTypeFields(instanceType);
+          const subField = instanceFields.find((f: any) => f.name === subFieldName);
+          if (!subField) {
+            const availableFields = instanceFields.map((f: any) => f.name).join(', ');
+            errors.push({
+              path: `${path} (${instance.name})`,
+              message: `Sub-field '${subFieldName}' not found in instance '${fieldName}' of type '${referencedInstance.type}' (available: ${availableFields})`
+            });
+          } else {
+            // Validate that the sub-field is numeric
+            const subFieldType = (subField as any).type;
+            if (!isNumericType(subFieldType)) {
+              errors.push({
+                path: `${path} (${instance.name})`,
+                message: `Position field '${instance.name}' references non-numeric field '${positionRef}' (type: ${subFieldType})`
+              });
+            }
+          }
+        }
+      } else {
+        // Verify the field is a bitfield and the sub-field exists
+        const referencedFieldAny = referencedField as any;
+        if (referencedFieldAny.type !== 'bitfield') {
+          errors.push({
+            path: `${path} (${instance.name})`,
+            message: `Position field reference '${fieldName}' is not a bitfield (cannot reference sub-field '${subFieldName}')`
+          });
+        } else if (!referencedFieldAny.fields || !Array.isArray(referencedFieldAny.fields)) {
+          errors.push({
+            path: `${path} (${instance.name})`,
+            message: `Bitfield '${fieldName}' has no fields array`
+          });
+        } else {
+          const bitfieldSubField = referencedFieldAny.fields.find((bf: any) => bf.name === subFieldName);
+          if (!bitfieldSubField) {
+            const availableFields = referencedFieldAny.fields.map((bf: any) => bf.name).join(', ');
+            errors.push({
+              path: `${path} (${instance.name})`,
+              message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableFields})`
+            });
+          }
+          // Bitfield sub-fields are always numeric, so no need to check type
+        }
+      }
+    } else {
+      // Regular field reference (no dot notation)
+      const referencedField = sequenceFields.find((f: any) => f.name === positionRef);
+
+      if (!referencedField) {
+        const fieldNames = sequenceFields.map((f: any) => f.name).join(', ');
+        errors.push({
+          path: `${path} (${instance.name})`,
+          message: `Position field reference '${positionRef}' not found in type '${typeName}' (available fields: ${fieldNames})`
+        });
+      } else {
+        // Validate that referenced field is numeric type
+        const fieldType = (referencedField as any).type;
+        if (!isNumericType(fieldType)) {
+          errors.push({
+            path: `${path} (${instance.name})`,
+            message: `Position field '${instance.name}' references non-numeric field '${positionRef}' (type: ${fieldType})`
+          });
+        }
+      }
+    }
+  } else if (typeof instance.position === 'number') {
+    // Numeric position - no validation needed (can be positive or negative)
+  } else {
+    errors.push({
+      path: `${path} (${instance.name})`,
+      message: `Position must be a number or string field reference, got ${typeof instance.position}`
+    });
+  }
+
+  // Validate size if specified
+  if (instance.size !== undefined) {
+    if (typeof instance.size === 'string') {
+      // Field reference - can be nested like "end_of_central_dir.central_dir_size"
+      const sizeRef = instance.size;
+      const dotIndex = sizeRef.indexOf('.');
+
+      if (dotIndex > 0) {
+        // Nested field reference
+        const fieldName = sizeRef.substring(0, dotIndex);
+        const subFieldName = sizeRef.substring(dotIndex + 1);
+
+        // Check both sequence fields and instance fields
+        let referencedField = sequenceFields.find((f: any) => f.name === fieldName);
+        let referencedInstance = allInstances?.find((inst: any) => inst.name === fieldName);
+
+        if (!referencedField && !referencedInstance) {
+          const fieldNames = [
+            ...sequenceFields.map((f: any) => f.name),
+            ...(allInstances?.map((inst: any) => inst.name) || [])
+          ].join(', ');
+          errors.push({
+            path: `${path} (${instance.name})`,
+            message: `Size field reference '${fieldName}' not found in type '${typeName}' (available fields: ${fieldNames})`
+          });
+        } else if (referencedInstance) {
+          // Referencing an instance field - need to look up its type and check for sub-field
+          const instanceType = schema.types[referencedInstance.type];
+          if (!instanceType) {
+            errors.push({
+              path: `${path} (${instance.name})`,
+              message: `Referenced instance '${fieldName}' has unknown type '${referencedInstance.type}'`
+            });
+          } else {
+            // Get the fields from the instance's type
+            const instanceFields = getTypeFields(instanceType);
+            const subField = instanceFields.find((f: any) => f.name === subFieldName);
+            if (!subField) {
+              const availableFields = instanceFields.map((f: any) => f.name).join(', ');
+              errors.push({
+                path: `${path} (${instance.name})`,
+                message: `Sub-field '${subFieldName}' not found in instance '${fieldName}' of type '${referencedInstance.type}' (available: ${availableFields})`
+              });
+            } else {
+              // Validate that the sub-field is numeric
+              const subFieldType = (subField as any).type;
+              if (!isNumericType(subFieldType)) {
+                errors.push({
+                  path: `${path} (${instance.name})`,
+                  message: `Size field '${instance.name}' references non-numeric field '${sizeRef}' (type: ${subFieldType})`
+                });
+              }
+            }
+          }
+        } else {
+          // Bitfield reference
+          const referencedFieldAny = referencedField as any;
+          if (referencedFieldAny.type !== 'bitfield') {
+            errors.push({
+              path: `${path} (${instance.name})`,
+              message: `Size field reference '${fieldName}' is not a bitfield (cannot reference sub-field '${subFieldName}')`
+            });
+          }
+        }
+      } else {
+        // Simple field reference (no dot notation)
+        const referencedField = sequenceFields.find((f: any) => f.name === sizeRef);
+
+        if (!referencedField) {
+          const fieldNames = sequenceFields.map((f: any) => f.name).join(', ');
+          errors.push({
+            path: `${path} (${instance.name})`,
+            message: `Size field reference '${sizeRef}' not found in type '${typeName}' (available fields: ${fieldNames})`
+          });
+        } else {
+          // Validate that referenced field is numeric type
+          const fieldType = (referencedField as any).type;
+          if (!isNumericType(fieldType)) {
+            errors.push({
+              path: `${path} (${instance.name})`,
+              message: `Size field '${instance.name}' references non-numeric field '${sizeRef}' (type: ${fieldType})`
+            });
+          }
+        }
+      }
+    } else if (typeof instance.size !== 'number') {
+      errors.push({
+        path: `${path} (${instance.name})`,
+        message: `Size must be a number or string field reference, got ${typeof instance.size}`
+      });
+    }
+  }
+
+  // Alignment is validated by Zod schema (must be power of 2)
 }
 
 /**
@@ -517,7 +789,8 @@ function validateField(
   schema: BinarySchema,
   errors: ValidationError[],
   typeName?: string, // Type name being validated (for protocol context)
-  parentFields?: Field[] // For field-based discriminator validation
+  parentFields?: Field[], // For field-based discriminator validation
+  rootTypeName?: string // Root type name for _root references
 ): void {
   if (!("type" in field)) {
     errors.push({ path, message: "Field missing 'type' property" });
@@ -547,69 +820,88 @@ function validateField(
             message: "field_referenced array missing 'length_field' property",
           });
         } else if (parentFields && typeName) {
-          // Get available fields for reference (includes header fields if protocol payload type)
-          const availableFields = getAvailableFieldsForReference(typeName, parentFields, schema);
           const lengthFieldRef = (field as any).length_field;
-          const fieldIndex = availableFields.findIndex((f: any) => f.name === field.name);
 
-          // Check for bitfield sub-field reference (e.g., "flags.opcode")
-          const dotIndex = lengthFieldRef.indexOf('.');
-          if (dotIndex > 0) {
-            const fieldName = lengthFieldRef.substring(0, dotIndex);
-            const subFieldName = lengthFieldRef.substring(dotIndex + 1);
+          // Check for _root reference
+          if (lengthFieldRef.startsWith('_root.')) {
+            // Reference to root type's fields
+            // We cannot fully validate _root references at schema validation time
+            // because we don't know which type will be used as root at runtime.
+            // We just check that the syntax is valid (has at least one field name after _root)
+            const remainingPath = lengthFieldRef.substring(6); // Remove "_root."
 
-            const referencedFieldIndex = availableFields.findIndex((f: any) => f.name === fieldName);
-
-            if (referencedFieldIndex === -1) {
-              const fieldNames = availableFields.map((f: any) => f.name).join(', ');
+            if (!remainingPath || remainingPath.trim() === '') {
               errors.push({
                 path: `${path} (${field.name})`,
-                message: `length_field '${fieldName}' not found in type '${typeName}'${schema.protocol ? ` or protocol header '${schema.protocol.header}'` : ''} (available fields: ${fieldNames})`,
+                message: `Invalid _root reference syntax: '${lengthFieldRef}' (expected format: _root.field_name or _root.field.subfield)`,
               });
-            } else if (referencedFieldIndex >= fieldIndex) {
-              errors.push({
-                path: `${path} (${field.name})`,
-                message: `length_field '${fieldName}' comes after this array (forward reference not allowed)`,
-              });
-            } else {
-              // Verify the field is a bitfield and the sub-field exists
-              const referencedField = availableFields[referencedFieldIndex] as any;
-              if (referencedField.type !== 'bitfield') {
+            }
+            // Skip further validation - will be checked at code generation time
+          } else {
+            // Regular field reference (not _root)
+            // Get available fields for reference (includes header fields if protocol payload type)
+            const availableFields = getAvailableFieldsForReference(typeName, parentFields, schema);
+            const fieldIndex = availableFields.findIndex((f: any) => f.name === field.name);
+
+            // Check for bitfield sub-field reference (e.g., "flags.opcode")
+            const dotIndex = lengthFieldRef.indexOf('.');
+            if (dotIndex > 0) {
+              const fieldName = lengthFieldRef.substring(0, dotIndex);
+              const subFieldName = lengthFieldRef.substring(dotIndex + 1);
+
+              const referencedFieldIndex = availableFields.findIndex((f: any) => f.name === fieldName);
+
+              if (referencedFieldIndex === -1) {
+                const fieldNames = availableFields.map((f: any) => f.name).join(', ');
                 errors.push({
                   path: `${path} (${field.name})`,
-                  message: `length_field '${fieldName}' is not a bitfield (cannot reference sub-field '${subFieldName}')`,
+                  message: `length_field '${fieldName}' not found in type '${typeName}'${schema.protocol ? ` or protocol header '${schema.protocol.header}'` : ''} (available fields: ${fieldNames})`,
                 });
-              } else if (!referencedField.fields || !Array.isArray(referencedField.fields)) {
+              } else if (referencedFieldIndex >= fieldIndex) {
                 errors.push({
                   path: `${path} (${field.name})`,
-                  message: `Bitfield '${fieldName}' has no fields array`,
+                  message: `length_field '${fieldName}' comes after this array (forward reference not allowed)`,
                 });
               } else {
-                const bitfieldSubField = referencedField.fields.find((bf: any) => bf.name === subFieldName);
-                if (!bitfieldSubField) {
-                  const availableBitfields = referencedField.fields.map((bf: any) => bf.name).join(', ');
+                // Verify the field is a bitfield and the sub-field exists
+                const referencedField = availableFields[referencedFieldIndex] as any;
+                if (referencedField.type !== 'bitfield') {
                   errors.push({
                     path: `${path} (${field.name})`,
-                    message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableBitfields})`,
+                    message: `length_field '${fieldName}' is not a bitfield (cannot reference sub-field '${subFieldName}')`,
                   });
+                } else if (!referencedField.fields || !Array.isArray(referencedField.fields)) {
+                  errors.push({
+                    path: `${path} (${field.name})`,
+                    message: `Bitfield '${fieldName}' has no fields array`,
+                  });
+                } else {
+                  const bitfieldSubField = referencedField.fields.find((bf: any) => bf.name === subFieldName);
+                  if (!bitfieldSubField) {
+                    const availableBitfields = referencedField.fields.map((bf: any) => bf.name).join(', ');
+                    errors.push({
+                      path: `${path} (${field.name})`,
+                      message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableBitfields})`,
+                    });
+                  }
                 }
               }
-            }
-          } else {
-            // Regular field reference (no dot notation)
-            const referencedFieldIndex = availableFields.findIndex((f: any) => f.name === lengthFieldRef);
+            } else {
+              // Regular field reference (no dot notation)
+              const referencedFieldIndex = availableFields.findIndex((f: any) => f.name === lengthFieldRef);
 
-            if (referencedFieldIndex === -1) {
-              const fieldNames = availableFields.map((f: any) => f.name).join(', ');
-              errors.push({
-                path: `${path} (${field.name})`,
-                message: `length_field '${lengthFieldRef}' not found in type '${typeName}'${schema.protocol ? ` or protocol header '${schema.protocol.header}'` : ''} (available fields: ${fieldNames})`,
-              });
-            } else if (referencedFieldIndex >= fieldIndex) {
-              errors.push({
-                path: `${path} (${field.name})`,
-                message: `length_field '${lengthFieldRef}' comes after this array (forward reference not allowed)`,
-              });
+              if (referencedFieldIndex === -1) {
+                const fieldNames = availableFields.map((f: any) => f.name).join(', ');
+                errors.push({
+                  path: `${path} (${field.name})`,
+                  message: `length_field '${lengthFieldRef}' not found in type '${typeName}'${schema.protocol ? ` or protocol header '${schema.protocol.header}'` : ''} (available fields: ${fieldNames})`,
+                });
+              } else if (referencedFieldIndex >= fieldIndex) {
+                errors.push({
+                  path: `${path} (${field.name})`,
+                  message: `length_field '${lengthFieldRef}' comes after this array (forward reference not allowed)`,
+                });
+              }
             }
           }
         }

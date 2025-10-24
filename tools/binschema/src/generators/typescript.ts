@@ -1,5 +1,7 @@
-import { BinarySchema, TypeDef, Field, Endianness, FieldSchema } from "../schema/binary-schema.js";
-import { walkUnion, type ExtractedMetadata } from "../schema/extract-metadata.js";
+import { BinarySchema, TypeDef, Field, Endianness } from "../schema/binary-schema.js";
+import type { GeneratedCode, DocInput, DocBlock } from "./typescript/shared.js";
+import { isTypeAlias, getTypeFields, isBackReferenceTypeDef, isBackReferenceType, sanitizeTypeName, sanitizeVarName, sanitizeEnumMemberName } from "./typescript/type-utils.js";
+import { getFieldDocumentation, generateJSDoc } from "./typescript/documentation.js";
 
 /**
  * TypeScript Code Generator
@@ -7,491 +9,7 @@ import { walkUnion, type ExtractedMetadata } from "../schema/extract-metadata.js
  * Generates TypeScript encoder/decoder classes from a binary schema.
  */
 
-export interface GeneratedCode {
-  code: string;
-  typeName: string;
-}
-
-type DocInput = string | string[] | undefined;
-
-interface DocBlock {
-  summary?: string[];
-  remarks?: string[];
-}
-
-const FIELD_TYPE_METADATA: Map<string, ExtractedMetadata> = (() => {
-  try {
-    return walkUnion(FieldSchema);
-  } catch {
-    return new Map<string, ExtractedMetadata>();
-  }
-})();
-
-function normalizeDocInput(doc: DocInput): string[] {
-  if (!doc) return [];
-  const entries = Array.isArray(doc) ? doc : doc.split(/\r?\n/);
-  return entries
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
-function createSummaryDoc(description: DocInput): DocBlock | undefined {
-  const lines = normalizeDocInput(description);
-  if (lines.length === 0) return undefined;
-  return { summary: lines };
-}
-
-function pushSummary(summary: string[], doc: DocInput, seen: Set<string>): void {
-  const lines = normalizeDocInput(doc);
-  for (const line of lines) {
-    if (seen.has(line)) continue;
-    seen.add(line);
-    summary.push(line);
-  }
-}
-
-function pushRemarksParagraph(remarks: string[], doc: DocInput, seen: Set<string>): void {
-  const lines = normalizeDocInput(doc).filter((line) => {
-    if (seen.has(line)) return false;
-    seen.add(line);
-    return true;
-  });
-
-  if (lines.length === 0) return;
-  if (remarks.length > 0 && remarks[remarks.length - 1] !== "") {
-    remarks.push("");
-  }
-  remarks.push(...lines);
-}
-
-function trimBlankEdges(lines: string[]): void {
-  while (lines.length > 0 && lines[0] === "") {
-    lines.shift();
-  }
-  while (lines.length > 0 && lines[lines.length - 1] === "") {
-    lines.pop();
-  }
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i] === "" && lines[i - 1] === "") {
-      lines.splice(i, 1);
-      i--;
-    }
-  }
-}
-function metadataToDoc(metadata: ExtractedMetadata | undefined): string[] | undefined {
-  if (!metadata) return undefined;
-  const lines: string[] = [];
-  if (metadata.title) {
-    lines.push(metadata.title);
-  }
-  if (metadata.description) {
-    lines.push(metadata.description);
-  }
-  return lines.length > 0 ? lines : undefined;
-}
-
-function getMetadataDocForType(typeName: string | undefined): string[] | undefined {
-  if (!typeName) return undefined;
-
-  const candidates = new Set<string>();
-  candidates.add(typeName);
-  candidates.add(typeName.toLowerCase());
-
-  const genericMatch = typeName.match(/^([^<]+)</);
-  if (genericMatch) {
-    const base = genericMatch[1];
-    candidates.add(base);
-    candidates.add(base.toLowerCase());
-  }
-
-  for (const key of candidates) {
-    if (!key) continue;
-    const metadata = FIELD_TYPE_METADATA.get(key);
-    const doc = metadataToDoc(metadata);
-    if (doc && doc.length > 0) {
-      return doc;
-    }
-  }
-
-  return undefined;
-}
-
-function getSchemaTypeDescription(typeName: string | undefined, schema: BinarySchema): string | undefined {
-  if (!typeName) return undefined;
-  if (!schema?.types) return undefined;
-
-  const direct = schema.types[typeName];
-  if (direct && typeof direct === "object" && "description" in direct) {
-    const description = (direct as any).description;
-    if (typeof description === "string" && description.trim()) {
-      return description.trim();
-    }
-  }
-
-  const genericMatch = typeName.match(/^([^<]+)<.+>$/);
-  if (genericMatch) {
-    const templateName = `${genericMatch[1]}<T>`;
-    const template = schema.types[templateName];
-    if (template && typeof template === "object" && "description" in template) {
-      const description = (template as any).description;
-      if (typeof description === "string" && description.trim()) {
-        return description.trim();
-      }
-    }
-  }
-
-  return undefined;
-}
-
-function describeArrayField(field: any): string[] | undefined {
-  if (!field || typeof field !== "object") return undefined;
-  const lines: string[] = [];
-
-  if (field.kind) {
-    let detail = `Array kind: ${field.kind}`;
-    if (field.kind === "field_referenced" && field.length_field) {
-      detail += ` (length from '${field.length_field}')`;
-    }
-    lines.push(detail);
-  }
-
-  if (typeof field.length === "number") {
-    lines.push(`Fixed length: ${field.length}`);
-  }
-
-  if (field.length_type) {
-    lines.push(`Length prefix type: ${field.length_type}`);
-  }
-
-  if (field.item_length_type) {
-    lines.push(`Item length type: ${field.item_length_type}`);
-  }
-
-  if (field.length_field && field.kind !== "field_referenced") {
-    lines.push(`Length field: ${field.length_field}`);
-  }
-
-  return lines.length > 0 ? lines : undefined;
-}
-
-function describeStringField(field: any): string[] | undefined {
-  if (!field || typeof field !== "object") return undefined;
-  const lines: string[] = [];
-
-  if (field.kind) {
-    lines.push(`String kind: ${field.kind}`);
-  }
-
-  if (field.encoding) {
-    lines.push(`Encoding: ${field.encoding}`);
-  }
-
-  if (typeof field.length === "number") {
-    lines.push(`Fixed length: ${field.length}`);
-  }
-
-  if (field.length_type) {
-    lines.push(`Length prefix type: ${field.length_type}`);
-  }
-
-  return lines.length > 0 ? lines : undefined;
-}
-
-function describeDiscriminatedUnion(field: any): string[] | undefined {
-  if (!field || typeof field !== "object") return undefined;
-  const lines: string[] = [];
-
-  const discriminator = field.discriminator;
-  if (discriminator?.field) {
-    lines.push(`Discriminator: field '${discriminator.field}'`);
-  } else if (discriminator?.peek) {
-    const endianness = discriminator.endianness ? `, ${discriminator.endianness}` : "";
-    lines.push(`Discriminator: peek ${discriminator.peek}${endianness}`);
-  }
-
-  if (Array.isArray(field.variants)) {
-    lines.push(`Variants: ${field.variants.length}`);
-    for (const variant of field.variants) {
-      if (!variant) continue;
-      let entry = `- ${variant.type ?? "unknown"}`;
-      if (variant.when) {
-        entry += ` (when ${variant.when})`;
-      }
-      if (variant.description) {
-        entry += ` - ${variant.description}`;
-      }
-      lines.push(entry);
-    }
-  }
-
-  return lines.length > 0 ? lines : undefined;
-}
-
-function describeBackReference(field: any): string[] | undefined {
-  if (!field || typeof field !== "object") return undefined;
-  const lines: string[] = [];
-
-  if (field.storage) {
-    lines.push(`Storage type: ${field.storage}`);
-  }
-
-  if (field.offset_mask) {
-    lines.push(`Offset mask: ${field.offset_mask}`);
-  }
-
-  if (field.offset_from) {
-    lines.push(`Offset from: ${field.offset_from}`);
-  }
-
-  if (field.target_type) {
-    lines.push(`Target type: ${field.target_type}`);
-  }
-
-  return lines.length > 0 ? lines : undefined;
-}
-
-function describeBitfield(field: any): string[] | undefined {
-  if (!field || typeof field !== "object") return undefined;
-  const lines: string[] = [];
-
-  if (typeof field.size === "number") {
-    lines.push(`Total size: ${field.size} bits`);
-  }
-
-  if (Array.isArray(field.fields)) {
-    const names = field.fields.map((f: any) => f?.name).filter(Boolean);
-    if (names.length > 0) {
-      lines.push(`Bitfield entries: ${names.join(", ")}`);
-    }
-  }
-
-  return lines.length > 0 ? lines : undefined;
-}
-
-function describeElementTypeDef(typeDef: any): string[] | undefined {
-  if (!typeDef || typeof typeDef !== "object" || !("type" in typeDef)) return undefined;
-  switch (typeDef.type) {
-    case "array":
-      return describeArrayField(typeDef);
-    case "string":
-      return describeStringField(typeDef);
-    case "discriminated_union":
-      return describeDiscriminatedUnion(typeDef);
-    case "back_reference":
-      return describeBackReference(typeDef);
-    case "bitfield":
-      return describeBitfield(typeDef);
-    default:
-      return undefined;
-  }
-}
-
-function getFieldDocumentation(field: Field, schema: BinarySchema): DocBlock | undefined {
-  const summary: string[] = [];
-  const remarks: string[] = [];
-  const seen = new Set<string>();
-  const fieldAny = field as any;
-
-  pushSummary(summary, fieldAny?.description, seen);
-
-  if ("type" in field) {
-    const typeValue = (field as any).type;
-    if (typeof typeValue === "string") {
-      pushRemarksParagraph(remarks, getSchemaTypeDescription(typeValue, schema), seen);
-      pushRemarksParagraph(remarks, getMetadataDocForType(typeValue), seen);
-
-      switch (typeValue) {
-        case "array":
-          pushRemarksParagraph(remarks, describeArrayField(fieldAny), seen);
-          break;
-        case "string":
-          pushRemarksParagraph(remarks, describeStringField(fieldAny), seen);
-          break;
-        case "discriminated_union":
-          pushRemarksParagraph(remarks, describeDiscriminatedUnion(fieldAny), seen);
-          break;
-        case "back_reference":
-          pushRemarksParagraph(remarks, describeBackReference(fieldAny), seen);
-          break;
-        case "bitfield":
-          pushRemarksParagraph(remarks, describeBitfield(fieldAny), seen);
-          break;
-        default:
-          break;
-      }
-
-      const referencedType = schema.types?.[typeValue];
-      if (referencedType && typeof referencedType === "object" && !("sequence" in referencedType)) {
-        pushRemarksParagraph(remarks, describeElementTypeDef(referencedType), seen);
-      }
-
-      const genericMatch = typeValue.match(/^([^<]+)<.+>$/);
-      if (genericMatch) {
-        const baseName = genericMatch[1];
-        pushRemarksParagraph(remarks, getSchemaTypeDescription(`${baseName}<T>`, schema), seen);
-        pushRemarksParagraph(remarks, getSchemaTypeDescription(baseName, schema), seen);
-        const template = schema.types?.[`${baseName}<T>`];
-        if (template && typeof template === "object" && !("sequence" in template)) {
-          pushRemarksParagraph(remarks, describeElementTypeDef(template), seen);
-        }
-        const baseTypeDef = schema.types?.[baseName];
-        if (baseTypeDef && typeof baseTypeDef === "object" && !("sequence" in baseTypeDef)) {
-          pushRemarksParagraph(remarks, describeElementTypeDef(baseTypeDef), seen);
-        }
-        pushRemarksParagraph(remarks, getMetadataDocForType(baseName), seen);
-      } else if (typeValue !== typeValue.toLowerCase()) {
-        pushRemarksParagraph(remarks, getMetadataDocForType(typeValue.toLowerCase()), seen);
-      }
-    }
-  }
-
-  if (summary.length === 0 && remarks.length > 0) {
-    // Promote first paragraph of remarks to summary
-    const promoted: string[] = [];
-    while (remarks.length > 0) {
-      const line = remarks.shift()!;
-      if (line === "") break;
-      promoted.push(line);
-    }
-    trimBlankEdges(remarks);
-    summary.push(...promoted);
-  }
-
-  trimBlankEdges(summary);
-  trimBlankEdges(remarks);
-
-  if (summary.length === 0 && remarks.length === 0) {
-    return undefined;
-  }
-
-  return {
-    summary: summary.length > 0 ? summary : undefined,
-    remarks: remarks.length > 0 ? remarks : undefined,
-  };
-}
-
-/**
- * TypeScript reserved keywords and built-in types that cannot be used as interface names
- */
-const TS_RESERVED_TYPES = new Set([
-  "string", "number", "boolean", "object", "symbol", "bigint",
-  "undefined", "null", "any", "void", "never", "unknown",
-  "Array", "Promise", "Map", "Set", "Date", "RegExp", "Error",
-]);
-
-const BACK_REFERENCE_TYPE_NAMES = new Set(["back_reference"]);
-
-function isBackReferenceTypeDef(typeDef: any): boolean {
-  return !!typeDef && typeof typeDef === "object" && BACK_REFERENCE_TYPE_NAMES.has(typeDef.type);
-}
-
-function isBackReferenceType(type: string | undefined): boolean {
-  return !!type && BACK_REFERENCE_TYPE_NAMES.has(type);
-}
-
-/**
- * Sanitize a type name for TypeScript to avoid conflicts with built-in types
- * Appends "_" to conflicting names (e.g., "string" → "string_")
- */
-function sanitizeTypeName(typeName: string): string {
-  // Don't sanitize generic template parameters (e.g., "Optional<T>")
-  if (typeName.includes("<")) {
-    return typeName;
-  }
-
-  if (TS_RESERVED_TYPES.has(typeName)) {
-    return `${typeName}_`;
-  }
-
-  return typeName;
-}
-
-/**
- * JavaScript/TypeScript reserved keywords that cannot be used as variable names
- */
-const JS_RESERVED_KEYWORDS = new Set([
-  "break", "case", "catch", "class", "const", "continue", "debugger", "default",
-  "delete", "do", "else", "enum", "export", "extends", "false", "finally",
-  "for", "function", "if", "import", "in", "instanceof", "new", "null",
-  "return", "super", "switch", "this", "throw", "true", "try", "typeof",
-  "var", "void", "while", "with", "yield", "let", "static", "implements",
-  "interface", "package", "private", "protected", "public", "await", "async"
-]);
-
-/**
- * Sanitize a variable/field name for TypeScript to avoid reserved keywords
- * Appends "_" to reserved keywords (e.g., "class" → "class_")
- */
-function sanitizeVarName(varName: string): string {
-  if (JS_RESERVED_KEYWORDS.has(varName)) {
-    return `${varName}_`;
-  }
-  return varName;
-}
-
-function sanitizeEnumMemberName(name: string): string {
-  let sanitized = name.replace(/[^a-zA-Z0-9_]/g, "_");
-  if (/^[0-9]/.test(sanitized)) {
-    sanitized = `_${sanitized}`;
-  }
-  if (JS_RESERVED_KEYWORDS.has(sanitized)) {
-    return `${sanitized}_`;
-  }
-  return sanitized;
-}
-
-/**
- * Generate a formatted JSDoc block from doc metadata.
- */
-function isDocBlock(value: DocInput | DocBlock | undefined): value is DocBlock {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function generateJSDoc(doc: DocInput | DocBlock, indent: string = ""): string {
-  let block: DocBlock | undefined;
-
-  if (doc === undefined) {
-    return "";
-  } else if (isDocBlock(doc)) {
-    block = doc;
-  } else {
-    block = createSummaryDoc(doc);
-  }
-
-  if (!block) return "";
-
-  const summary = block.summary ? [...block.summary] : [];
-  const remarks = block.remarks ? [...block.remarks] : [];
-
-  trimBlankEdges(summary);
-  trimBlankEdges(remarks);
-
-  if (summary.length === 0 && remarks.length === 0) {
-    return "";
-  }
-
-  const lines: string[] = [];
-  lines.push(...summary);
-
-  if (remarks.length > 0) {
-    if (lines.length > 0 && lines[lines.length - 1] !== "") {
-      lines.push("");
-    }
-    lines.push("@remarks");
-    lines.push("");
-    lines.push(...remarks);
-  }
-
-  trimBlankEdges(lines);
-
-  if (lines.length === 0) return "";
-
-  const formatted = lines
-    .map((line) => (line.length > 0 ? `${indent} * ${line}` : `${indent} *`))
-    .join("\n");
-
-  return `${indent}/**\n${formatted}\n${indent} */\n`;
-}
+export type { GeneratedCode };
 
 /**
  * Generate TypeScript code for all types in the schema (functional style with standalone functions)
@@ -672,31 +190,6 @@ function generateFunctionalTypeCode(
  * Note: Standalone array types (type: "array") and string types (type: "string")
  * are NOT aliases - they need encoder/decoder functions
  */
-function isTypeAlias(typeDef: TypeDef): boolean {
-  const typeDefAny = typeDef as any;
-
-  // Types with sequence are composite types
-  if ('sequence' in typeDef) {
-    return false;
-  }
-
-  // Standalone array and string types need encoder/decoder functions
-  if (typeDefAny.type === 'array' || typeDefAny.type === 'string') {
-    return false;
-  }
-
-  // Everything else is a type alias
-  return true;
-}
-
-/** Get fields from a type definition */
-function getTypeFields(typeDef: TypeDef): Field[] {
-  if ('sequence' in typeDef && (typeDef as any).sequence) {
-    return (typeDef as any).sequence;
-  }
-  return [];
-}
-
 /**
  * Generate encoder for standalone array type
  */
@@ -1405,8 +898,13 @@ function generateFunctionalEncodeString(
   indent: string
 ): string {
   const encoding = field.encoding || "utf8";
-  const kind = field.kind;
+  let kind = field.kind;
   let code = "";
+
+  // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
+  if (kind === "fixed" && field.length_field && !field.length) {
+    kind = "field_referenced";
+  }
 
   const bytesVarName = valuePath.replace(/\./g, "_") + "_bytes";
 
@@ -1439,6 +937,11 @@ function generateFunctionalEncodeString(
     const fixedLength = field.length || 0;
     code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
     code += `${indent}  stream.writeUint8(i < ${bytesVarName}.length ? ${bytesVarName}[i] : 0);\n`;
+    code += `${indent}}\n`;
+  } else if (kind === "field_referenced") {
+    // Length comes from another field, we just write the bytes (length was already written)
+    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
+    code += `${indent}  stream.writeUint8(byte);\n`;
     code += `${indent}}\n`;
   }
 
@@ -1684,8 +1187,13 @@ function generateFunctionalDecodeString(
   indent: string
 ): string {
   const encoding = field.encoding || "utf8";
-  const kind = field.kind;
+  let kind = field.kind;
   let code = "";
+
+  // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
+  if (kind === "fixed" && field.length_field && !field.length) {
+    kind = "field_referenced";
+  }
 
   if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
@@ -1739,6 +1247,20 @@ function generateFunctionalDecodeString(
       code += `${indent}const ${fieldName} = new TextDecoder().decode(new Uint8Array(${fieldName}_bytes.slice(0, actualLength)));\n`;
     } else if (encoding === "ascii") {
       code += `${indent}const ${fieldName} = String.fromCharCode(...${fieldName}_bytes.slice(0, actualLength));\n`;
+    }
+  } else if (kind === "field_referenced") {
+    // Length comes from another field in the same value/result object
+    const lengthField = field.length_field;
+    code += `${indent}const ${fieldName}_length = ${lengthField};\n`;
+    code += `${indent}const ${fieldName}_bytes: number[] = [];\n`;
+    code += `${indent}for (let i = 0; i < ${fieldName}_length; i++) {\n`;
+    code += `${indent}  ${fieldName}_bytes.push(stream.readUint8());\n`;
+    code += `${indent}}\n`;
+
+    if (encoding === "utf8") {
+      code += `${indent}const ${fieldName} = new TextDecoder().decode(new Uint8Array(${fieldName}_bytes));\n`;
+    } else if (encoding === "ascii") {
+      code += `${indent}const ${fieldName} = String.fromCharCode(...${fieldName}_bytes);\n`;
     }
   }
 
@@ -1797,9 +1319,129 @@ function generateTypeCode(
   if (enumCode) {
     sections.push(enumCode);
   }
+
+  // Generate instance class if type has position fields
+  const typeDefWithInstances = typeDef as any;
+  if (typeDefWithInstances.instances && Array.isArray(typeDefWithInstances.instances) && typeDefWithInstances.instances.length > 0) {
+    const instanceClassCode = generateInstanceClass(typeName, typeDef, schema, globalEndianness, globalBitOrder);
+    sections.push(instanceClassCode);
+  }
+
   sections.push(encoderCode, decoderCode);
 
   return sections.filter(Boolean).join("\n\n");
+}
+
+/**
+ * Generate instance class with lazy getters for position fields
+ */
+function generateInstanceClass(
+  typeName: string,
+  typeDef: TypeDef,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  globalBitOrder: string
+): string {
+  const typeDefAny = typeDef as any;
+  const instances = typeDefAny.instances || [];
+  const fields = getTypeFields(typeDef);
+
+  let code = `class ${typeName}Instance implements ${typeName} {\n`;
+  code += `  private _decoder!: BitStreamDecoder;\n`;
+  code += `  private _lazyCache!: Map<string, any>;\n`;
+  code += `  private _root!: any;\n\n`;
+
+  // Add sequence field properties
+  for (const field of fields) {
+    const fieldType = getFieldTypeScriptType(field, schema);
+    code += `  ${field.name}: ${fieldType};\n`;
+  }
+  code += `\n`;
+
+  // Constructor
+  code += `  constructor(decoder: BitStreamDecoder, sequenceData: any, root?: any) {\n`;
+  code += `    // Make internal properties non-enumerable to avoid cyclic JSON issues\n`;
+  code += `    Object.defineProperty(this, '_decoder', { value: decoder, enumerable: false });\n`;
+  code += `    Object.defineProperty(this, '_lazyCache', { value: new Map(), enumerable: false });\n`;
+  code += `    Object.defineProperty(this, '_root', { value: root || this, enumerable: false });\n\n`;
+
+  // Copy sequence data to properties
+  for (const field of fields) {
+    code += `    this.${field.name} = sequenceData.${field.name};\n`;
+  }
+  code += `  }\n\n`;
+
+  // In constructor, define getters as enumerable properties
+  code = code.replace(`  }\n\n`, '');
+
+  // Add getter definitions to constructor
+  for (const instance of instances) {
+    const instanceType = resolveTypeReference(instance.type, schema);
+
+    code += `\n    // Define enumerable getter for lazy field '${instance.name}'\n`;
+    code += `    Object.defineProperty(this, '${instance.name}', {\n`;
+    code += `      enumerable: true,\n`;
+    code += `      get: () => {\n`;
+    code += `        if (!this._lazyCache.has('${instance.name}')) {\n`;
+
+    // Resolve position
+    const position = instance.position;
+    if (typeof position === 'number') {
+      // Numeric position
+      if (position < 0) {
+        // Negative position - from EOF
+        code += `          const position = this._decoder['bytes'].length + (${position});\n`;
+      } else {
+        // Positive position - absolute
+        code += `          const position = ${position};\n`;
+      }
+    } else {
+      // Field reference - resolve from sequence data or other instance
+      code += `          const position = this._resolveFieldReference('${position}');\n`;
+    }
+
+    // Validate alignment if specified
+    if (instance.alignment) {
+      code += `\n          // Validate alignment\n`;
+      code += `          if (position % ${instance.alignment} !== 0) {\n`;
+      code += `            throw new Error(\`Position \${position} is not aligned to ${instance.alignment} bytes (\${position} % ${instance.alignment} = \${position % ${instance.alignment}})\`);\n`;
+      code += `          }\n`;
+    }
+
+    // Seek to position
+    code += `\n          this._decoder.seek(position);\n\n`;
+
+    // Decode the type at that position
+    code += `          const decoder = new ${instance.type}Decoder(this._decoder['bytes'].slice(position), { _root: this._root });\n`;
+    code += `          const value = decoder.decode();\n`;
+    code += `          this._lazyCache.set('${instance.name}', value);\n`;
+    code += `        }\n`;
+    code += `        return this._lazyCache.get('${instance.name}')!;\n`;
+    code += `      }\n`;
+    code += `    });\n`;
+  }
+
+  code += `  }\n\n`;
+
+  // Helper method to resolve field references (supports dot notation)
+  code += `  private _resolveFieldReference(path: string): number {\n`;
+  code += `    const parts = path.split('.');\n`;
+  code += `    let current: any = parts[0] === '_root' ? this._root : this;\n`;
+  code += `    const startIndex = parts[0] === '_root' ? 1 : 0;\n\n`;
+  code += `    for (let i = startIndex; i < parts.length; i++) {\n`;
+  code += `      current = current[parts[i]];\n`;
+  code += `      if (current === undefined) {\n`;
+  code += `        throw new Error(\`Field reference '\${path}' not found (failed at '\${parts.slice(0, i + 1).join('.')}')\`);\n`;
+  code += `      }\n`;
+  code += `    }\n\n`;
+  code += `    if (typeof current !== 'number' && typeof current !== 'bigint') {\n`;
+  code += `      throw new Error(\`Field reference '\${path}' does not resolve to a numeric value (got \${typeof current})\`);\n`;
+  code += `    }\n\n`;
+  code += `    return Number(current);\n`;
+  code += `  }\n`;
+  code += `}`;
+
+  return code;
 }
 
 /**
@@ -2012,6 +1654,7 @@ function generateInterface(typeName: string, typeDef: TypeDef, schema: BinarySch
   let code = generateJSDoc(typeDefAny.description);
   code += `export interface ${typeName} {\n`;
 
+  // Add sequence fields
   for (const field of fields) {
     const fieldType = getFieldTypeScriptType(field, schema);
     const optional = isFieldConditional(field) ? "?" : "";
@@ -2022,6 +1665,23 @@ function generateInterface(typeName: string, typeDef: TypeDef, schema: BinarySch
       code += fieldDocString;
     }
     code += `  ${field.name}${optional}: ${fieldType};\n`;
+  }
+
+  // Add instance fields (position-based lazy fields)
+  if (typeDefAny.instances && Array.isArray(typeDefAny.instances)) {
+    for (const instance of typeDefAny.instances) {
+      const instanceType = resolveTypeReference(instance.type, schema);
+
+      // Add JSDoc for instance field
+      const instanceDoc: any = {
+        summary: instance.description || `Position-based field at ${typeof instance.position === 'number' ? instance.position : instance.position}`
+      };
+      const instanceDocString = generateJSDoc(instanceDoc, "  ");
+      if (instanceDocString) {
+        code += instanceDocString;
+      }
+      code += `  readonly ${instance.name}: ${instanceType};\n`;
+    }
   }
 
   code += `}`;
@@ -2335,7 +1995,7 @@ function generateEncodeFieldCoreImpl(
 
     default:
       // Type reference - need to encode nested struct
-      return generateEncodeTypeReference(field.type, schema, valuePath, indent);
+      return generateEncodeTypeReference(field.type, schema, globalEndianness, valuePath, indent);
   }
 }
 
@@ -2377,7 +2037,7 @@ function generateEncodeDiscriminatedUnion(
     }
 
     // Encode the variant value (back references handle their own compression via generateEncodeBackReference)
-    code += generateEncodeTypeReference(variant.type, schema, `${valuePath}.value`, indent + "  ");
+    code += generateEncodeTypeReference(variant.type, schema, globalEndianness, `${valuePath}.value`, indent + "  ");
 
     code += `${indent}}`;
     if (i < variants.length - 1) {
@@ -2501,7 +2161,7 @@ function generateEncodeBackReference(
   code += `${indent}  // First occurrence - record offset and encode target value\n`;
   code += `${indent}  const currentOffset = this.byteOffset;\n`;
   code += `${indent}  this.compressionDict.set(valueKey, currentOffset);\n`;
-  code += generateEncodeTypeReference(targetType, schema, valuePath, indent + "  ");
+  code += generateEncodeTypeReference(targetType, schema, globalEndianness, valuePath, indent + "  ");
   code += `${indent}}\n`;
 
   return code;
@@ -2691,8 +2351,13 @@ function generateEncodeString(
   indent: string
 ): string {
   const encoding = field.encoding || "utf8";
-  const kind = field.kind;
+  let kind = field.kind;
   let code = "";
+
+  // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
+  if (kind === "fixed" && field.length_field && !field.length) {
+    kind = "field_referenced";
+  }
 
   // Sanitize variable name (replace dots with underscores)
   const bytesVarName = valuePath.replace(/\./g, "_") + "_bytes";
@@ -2738,6 +2403,11 @@ function generateEncodeString(
     code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
     code += `${indent}  this.writeUint8(i < ${bytesVarName}.length ? ${bytesVarName}[i] : 0);\n`;
     code += `${indent}}\n`;
+  } else if (kind === "field_referenced") {
+    // Length comes from another field, we just write the bytes (length was already written)
+    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
+    code += `${indent}  this.writeUint8(byte);\n`;
+    code += `${indent}}\n`;
   }
 
   return code;
@@ -2762,6 +2432,7 @@ function generateEncodeBitfield(field: any, valuePath: string, indent: string): 
 function generateEncodeTypeReference(
   typeRef: string,
   schema: BinarySchema,
+  globalEndianness: Endianness,
   valuePath: string,
   indent: string
 ): string {
@@ -2781,7 +2452,7 @@ function generateEncodeTypeReference(
           JSON.stringify(field).replace(/"T"/g, `"${typeArg}"`)
         );
         const newValuePath = `${valuePath}.${field.name}`;
-        code += generateEncodeFieldCore(expandedField, schema, "big_endian", newValuePath, indent);
+        code += generateEncodeFieldCore(expandedField, schema, globalEndianness, newValuePath, indent);
       }
       return code;
     }
@@ -2798,13 +2469,13 @@ function generateEncodeTypeReference(
   // Handle standalone string types - encode using the aliased string type
   if (typeDefAny.type === 'string') {
     const pseudoField = { ...typeDefAny, name: valuePath.split('.').pop() };
-    return generateEncodeFieldCoreImpl(pseudoField, schema, "big_endian", valuePath, indent);
+    return generateEncodeFieldCoreImpl(pseudoField, schema, globalEndianness, valuePath, indent);
   }
 
   // Handle standalone array types - encode using the aliased array type
   if (typeDefAny.type === 'array') {
     const pseudoField = { ...typeDefAny, name: valuePath.split('.').pop() };
-    return generateEncodeFieldCoreImpl(pseudoField, schema, "big_endian", valuePath, indent);
+    return generateEncodeFieldCoreImpl(pseudoField, schema, globalEndianness, valuePath, indent);
   }
 
   // Check if this is a type alias
@@ -2812,7 +2483,7 @@ function generateEncodeTypeReference(
     // Type alias - encode directly using the aliased type
     const aliasedType = typeDef as any;
     const pseudoField = { ...aliasedType, name: valuePath.split('.').pop() };
-    return generateEncodeFieldCoreImpl(pseudoField, schema, "big_endian", valuePath, indent);
+    return generateEncodeFieldCoreImpl(pseudoField, schema, globalEndianness, valuePath, indent);
   }
 
   // Composite type - encode all fields
@@ -2820,7 +2491,7 @@ function generateEncodeTypeReference(
   let code = "";
   for (const field of fields) {
     const newValuePath = `${valuePath}.${field.name}`;
-    code += generateEncodeFieldCore(field, schema, "big_endian", newValuePath, indent);
+    code += generateEncodeFieldCore(field, schema, globalEndianness, newValuePath, indent);
   }
 
   return code;
@@ -2837,20 +2508,59 @@ function generateDecoder(
   globalBitOrder: string
 ): string {
   const fields = getTypeFields(typeDef);
+  const typeDefAny = typeDef as any;
+  const hasInstances = typeDefAny.instances && Array.isArray(typeDefAny.instances) && typeDefAny.instances.length > 0;
+
   let code = `export class ${typeName}Decoder extends BitStreamDecoder {\n`;
   code += `  constructor(bytes: Uint8Array | number[], private context?: any) {\n`;
   code += `    super(bytes, "${globalBitOrder}");\n`;
   code += `  }\n\n`;
   code += `  decode(): ${typeName} {\n`;
-  code += `    const value: any = {};\n\n`;
 
-  for (const field of fields) {
-    code += generateDecodeField(field, schema, globalEndianness, "    ");
+  if (!hasInstances) {
+    // No instance fields - return plain object
+    code += `    const value: any = {};\n\n`;
+
+    for (const field of fields) {
+      code += generateDecodeField(field, schema, globalEndianness, "    ");
+    }
+
+    code += `    return value;\n`;
+  } else {
+    // Has instance fields - return class instance with lazy getters
+    code += generateDecoderWithLazyFields(typeName, fields, typeDefAny.instances, schema, globalEndianness, "    ");
   }
 
-  code += `    return value;\n`;
   code += `  }\n`;
   code += `}`;
+
+  return code;
+}
+
+/**
+ * Generate decoder body with lazy getters for position fields
+ */
+function generateDecoderWithLazyFields(
+  typeName: string,
+  fields: Field[],
+  instances: any[],
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  indent: string
+): string {
+  let code = "";
+
+  // Decode sequence fields first
+  code += `${indent}const sequenceData: any = {};\n\n`;
+
+  for (const field of fields) {
+    code += generateDecodeField(field, schema, globalEndianness, indent).replace(/value\./g, "sequenceData.");
+  }
+
+  // Create class instance with lazy getters
+  code += `\n${indent}// Create instance with lazy getters for position fields\n`;
+  code += `${indent}const instance = new ${typeName}Instance(this, sequenceData);\n`;
+  code += `${indent}return instance as ${typeName};\n`;
 
   return code;
 }
@@ -2980,7 +2690,7 @@ function generateDecodeFieldCoreImpl(
 
     default:
       // Type reference
-      return generateDecodeTypeReference(field.type, schema, fieldName, indent);
+      return generateDecodeTypeReference(field.type, schema, globalEndianness, fieldName, indent);
   }
 }
 
@@ -3248,7 +2958,7 @@ function generateDecodeBackReference(
 
   // Decode target type inline (we're already positioned at the target)
   // Pass fieldName (not target path) since generateDecodeTypeReference will add "value." prefix
-  code += generateDecodeTypeReference(targetType, schema, fieldName, indent);
+  code += generateDecodeTypeReference(targetType, schema, globalEndianness, fieldName, indent);
 
   // Restore position
   code += `${indent}this.popPosition();\n\n`;
@@ -3331,13 +3041,23 @@ function generateDecodeArray(
   } else if (field.kind === "field_referenced") {
     // Length comes from a previously-decoded field
     const lengthField = field.length_field;
-    // Support dot notation for bitfield sub-fields (e.g., "flags.count")
-    // Try value first, then context (for protocol headers)
     const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
-    code += `${indent}const ${lengthVarName} = value.${lengthField} ?? this.context?.${lengthField};\n`;
-    code += `${indent}if (${lengthVarName} === undefined) {\n`;
-    code += `${indent}  throw new Error('Field-referenced array length field "${lengthField}" not found in value or context');\n`;
-    code += `${indent}}\n`;
+
+    // Check for _root reference
+    if (lengthField.startsWith('_root.')) {
+      // Reference to root object - access via context._root
+      const rootPath = lengthField.substring(6); // Remove "_root."
+      code += `${indent}const ${lengthVarName} = this.context?._root?.${rootPath};\n`;
+      code += `${indent}if (${lengthVarName} === undefined) {\n`;
+      code += `${indent}  throw new Error('Field-referenced array length field "${lengthField}" not found in context._root');\n`;
+      code += `${indent}}\n`;
+    } else {
+      // Regular field reference - try value first, then context (for protocol headers)
+      code += `${indent}const ${lengthVarName} = value.${lengthField} ?? this.context?.${lengthField};\n`;
+      code += `${indent}if (${lengthVarName} === undefined) {\n`;
+      code += `${indent}  throw new Error('Field-referenced array length field "${lengthField}" not found in value or context');\n`;
+      code += `${indent}}\n`;
+    }
     code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
   } else if (field.kind === "null_terminated") {
     // For null-terminated arrays, we need to peek ahead to check for null terminator
@@ -3495,9 +3215,14 @@ function generateDecodeString(
   indent: string
 ): string {
   const encoding = field.encoding || "utf8";
-  const kind = field.kind;
+  let kind = field.kind;
   const target = getTargetPath(fieldName);
   let code = "";
+
+  // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
+  if (kind === "fixed" && field.length_field && !field.length) {
+    kind = "field_referenced";
+  }
 
   if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
@@ -3570,6 +3295,40 @@ function generateDecodeString(
     } else if (encoding === "ascii") {
       code += `${indent}${target} = String.fromCharCode(...${bytesVarName}.slice(0, actualLength));\n`;
     }
+  } else if (kind === "field_referenced") {
+    // Length comes from a previously-decoded field
+    const lengthField = field.length_field;
+    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
+
+    // Resolve the length field (same logic as field_referenced arrays)
+    if (lengthField.startsWith('_root.')) {
+      // Reference to root object - access via context._root
+      const rootPath = lengthField.substring(6); // Remove "_root."
+      code += `${indent}const ${lengthVarName} = this.context?._root?.${rootPath};\n`;
+      code += `${indent}if (${lengthVarName} === undefined) {\n`;
+      code += `${indent}  throw new Error('Field-referenced string length field "${lengthField}" not found in context._root');\n`;
+      code += `${indent}}\n`;
+    } else {
+      // Regular field reference - try value first, then context
+      code += `${indent}const ${lengthVarName} = value.${lengthField} ?? this.context?.${lengthField};\n`;
+      code += `${indent}if (${lengthVarName} === undefined) {\n`;
+      code += `${indent}  throw new Error('Field-referenced string length field "${lengthField}" not found in value or context');\n`;
+      code += `${indent}}\n`;
+    }
+
+    // Read bytes
+    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
+    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
+    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
+    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
+    code += `${indent}}\n`;
+
+    // Convert bytes to string
+    if (encoding === "utf8") {
+      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
+    } else if (encoding === "ascii") {
+      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
+    }
   }
 
   return code;
@@ -3600,6 +3359,7 @@ function generateDecodeBitfield(field: any, fieldName: string, indent: string): 
 function generateDecodeTypeReference(
   typeRef: string,
   schema: BinarySchema,
+  globalEndianness: Endianness,
   fieldName: string,
   indent: string
 ): string {
@@ -3623,7 +3383,7 @@ function generateDecodeTypeReference(
         const subFieldCode = generateDecodeFieldCore(
           expandedField,
           schema,
-          "big_endian",
+          globalEndianness,
           `${fieldName}.${expandedField.name}`,
           indent
         );
@@ -3644,13 +3404,13 @@ function generateDecodeTypeReference(
   // Handle standalone string types - decode using the aliased string type
   if (typeDefAny.type === 'string') {
     const pseudoField = { ...typeDefAny, name: fieldName.split('.').pop() };
-    return generateDecodeFieldCoreImpl(pseudoField, schema, "big_endian", fieldName, indent);
+    return generateDecodeFieldCoreImpl(pseudoField, schema, globalEndianness, fieldName, indent);
   }
 
   // Handle standalone array types - decode using the aliased array type
   if (typeDefAny.type === 'array') {
     const pseudoField = { ...typeDefAny, name: fieldName.split('.').pop() };
-    return generateDecodeFieldCoreImpl(pseudoField, schema, "big_endian", fieldName, indent);
+    return generateDecodeFieldCoreImpl(pseudoField, schema, globalEndianness, fieldName, indent);
   }
 
   // Check if this is a type alias
@@ -3658,7 +3418,7 @@ function generateDecodeTypeReference(
     // Type alias - decode directly using the aliased type
     const aliasedType = typeDef as any;
     const pseudoField = { ...aliasedType, name: fieldName.split('.').pop() };
-    return generateDecodeFieldCoreImpl(pseudoField, schema, "big_endian", fieldName, indent);
+    return generateDecodeFieldCoreImpl(pseudoField, schema, globalEndianness, fieldName, indent);
   }
 
   // Composite type - decode all fields
@@ -3668,7 +3428,7 @@ function generateDecodeTypeReference(
     const subFieldCode = generateDecodeFieldCore(
       field,
       schema,
-      "big_endian",
+      globalEndianness,
       `${fieldName}.${field.name}`,
       indent
     );

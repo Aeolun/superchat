@@ -1,0 +1,130 @@
+{
+  "config": {
+    "endianness": "little_endian"
+  },
+  "types": {
+    "ZipArchive": {
+      "sequence": [
+        {
+          "name": "local_files",
+          "type": "array",
+          "kind": "terminated",
+          "terminator": "end_of_central_dir_signature",
+          "items": { "type": "LocalFileRecord" }
+        }
+      ],
+      "instances": [
+        {
+          "name": "end_of_central_dir",
+          "type": "EndOfCentralDir",
+          "position": -22,
+          "size": 22
+        },
+        {
+          "name": "central_directory",
+          "type": "CentralDirectory",
+          "position": "end_of_central_dir.central_dir_offset",
+          "size": "end_of_central_dir.central_dir_size"
+        }
+      ]
+    },
+
+    "LocalFileRecord": {
+      "sequence": [
+        { "name": "signature", "type": "uint32" },
+        { "name": "version", "type": "uint16" },
+        { "name": "flags", "type": "uint16" },
+        { "name": "compression", "type": "uint16" },
+        { "name": "mod_time", "type": "uint16" },
+        { "name": "mod_date", "type": "uint16" },
+        { "name": "crc32", "type": "uint32" },
+        { "name": "compressed_size", "type": "uint32" },
+        { "name": "uncompressed_size", "type": "uint32" },
+        { "name": "filename_length", "type": "uint16" },
+        { "name": "extra_length", "type": "uint16" },
+        {
+          "name": "filename",
+          "type": "string",
+          "kind": "fixed",
+          "length_field": "filename_length",
+          "encoding": "utf8"
+        },
+        {
+          "name": "extra",
+          "type": "array",
+          "kind": "fixed",
+          "length_field": "extra_length",
+          "items": { "type": "uint8" }
+        },
+        {
+          "name": "compressed_data",
+          "type": "array",
+          "kind": "fixed",
+          "length_field": "compressed_size",
+          "items": { "type": "uint8" }
+        }
+      ]
+    },
+
+    "EndOfCentralDir": {
+      "sequence": [
+        { "name": "signature", "type": "uint32" },
+        { "name": "disk_number", "type": "uint16" },
+        { "name": "disk_with_cd", "type": "uint16" },
+        { "name": "disk_entries", "type": "uint16" },
+        { "name": "total_entries", "type": "uint16" },
+        { "name": "central_dir_size", "type": "uint32" },
+        { "name": "central_dir_offset", "type": "uint32" },
+        { "name": "comment_length", "type": "uint16" }
+      ]
+    },
+
+    "CentralDirectory": {
+      "sequence": [
+        {
+          "name": "entries",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "_root.end_of_central_dir.total_entries",
+          "items": { "type": "CentralDirEntry" }
+        }
+      ]
+    },
+
+    "CentralDirEntry": {
+      "sequence": [
+        { "name": "signature", "type": "uint32" },
+        { "name": "version_made_by", "type": "uint16" },
+        { "name": "version_needed", "type": "uint16" },
+        { "name": "flags", "type": "uint16" },
+        { "name": "compression", "type": "uint16" },
+        { "name": "mod_time", "type": "uint16" },
+        { "name": "mod_date", "type": "uint16" },
+        { "name": "crc32", "type": "uint32" },
+        { "name": "compressed_size", "type": "uint32" },
+        { "name": "uncompressed_size", "type": "uint32" },
+        { "name": "filename_length", "type": "uint16" },
+        { "name": "extra_length", "type": "uint16" },
+        { "name": "comment_length", "type": "uint16" },
+        { "name": "disk_number", "type": "uint16" },
+        { "name": "internal_attrs", "type": "uint16" },
+        { "name": "external_attrs", "type": "uint32" },
+        { "name": "local_header_offset", "type": "uint32" },
+        {
+          "name": "filename",
+          "type": "string",
+          "kind": "fixed",
+          "length_field": "filename_length",
+          "encoding": "utf8"
+        }
+      ],
+      "instances": [
+        {
+          "name": "local_file",
+          "type": "LocalFileRecord",
+          "position": "local_header_offset"
+        }
+      ]
+    }
+  }
+}

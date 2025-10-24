@@ -1386,12 +1386,102 @@ export type Field = z.infer<typeof FieldSchema>;
 // ============================================================================
 
 /**
+ * Position field (lazy-evaluated, accessed via getter)
+ * Used for random-access/seekable parsing (ZIP, ELF, databases, etc.)
+ */
+const PositionFieldSchema = z.object({
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.string(), // Type to decode at position
+  position: z.union([
+    z.number(),  // Absolute offset (positive) or offset from EOF (negative)
+    z.string()   // Field reference (e.g., "header.offset")
+  ]).meta({
+    description: "Position to seek to before decoding. Number (positive=absolute offset, negative=from EOF), or field reference (e.g., 'header.data_offset')"
+  }),
+  size: z.union([
+    z.number(),  // Fixed size
+    z.string()   // Field reference
+  ]).optional().meta({
+    description: "Optional size hint for the data at this position"
+  }),
+  alignment: z.number().int().positive().optional().meta({
+    description: "Required alignment in bytes (must be power of 2). Position will be validated: position % alignment == 0"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
+}).refine(
+  (data) => {
+    // If alignment is specified, verify it's a power of 2
+    if (data.alignment !== undefined) {
+      const isPowerOfTwo = (data.alignment & (data.alignment - 1)) === 0;
+      return isPowerOfTwo;
+    }
+    return true;
+  },
+  {
+    message: "Alignment must be a power of 2 (1, 2, 4, 8, 16, ...)"
+  }
+).meta({
+  title: "Position Field (Instance)",
+  description: "Lazy-evaluated field at an absolute or relative position in the file. Used for random-access formats like ZIP, ELF, databases. Only evaluated when accessed.",
+  use_for: "ZIP central directory, ELF section headers, database indexes, table-of-contents structures",
+  wire_format: "No bytes on wire for the field itself - position indicates where to seek and parse the target type",
+
+  code_generation: {
+    typescript: {
+      type: "get accessor returning T",
+      notes: [
+        "TypeScript getter that parses on first access",
+        "Cached after first read",
+        "Type T depends on type field"
+      ]
+    },
+    go: {
+      type: "method returning (*T, error)",
+      notes: [
+        "Go method with sync.Once for thread-safe lazy init",
+        "Cached after first call",
+        "Type T depends on type field"
+      ]
+    }
+  },
+  notes: [
+    "Position can be negative (from EOF): -22 means last 22 bytes",
+    "Position can reference earlier field: 'header.offset'",
+    "Alignment is validated at runtime: position % alignment == 0",
+    "Size is optional hint for memory allocation"
+  ],
+  examples: [
+    {
+      name: "footer",
+      type: "Footer",
+      position: -22,
+      size: 22,
+      description: "Footer at end of file"
+    },
+    {
+      name: "data",
+      type: "DataBlock",
+      position: "header.data_offset",
+      alignment: 4,
+      description: "Data block at offset from header"
+    }
+  ]
+});
+
+/**
  * Composite type with sequence of fields
  *
  * A composite type represents an ordered sequence of types on the wire.
  */
 const CompositeTypeSchema = z.object({
   sequence: z.array(FieldSchema),
+  instances: z.array(PositionFieldSchema).optional().meta({
+    description: "Position-based fields (lazy-evaluated when accessed). Requires seekable input."
+  }),
   description: z.string().optional(),
 });
 

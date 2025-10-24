@@ -57,8 +57,17 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
   if (!validation.valid) {
     console.error(`\n❌ Schema validation failed for ${suite.name}:`);
     console.error(formatValidationErrors(validation));
-    result.failed = suite.test_cases.length;
-    for (const testCase of suite.test_cases) {
+
+    // If this is a schema validation error test, this is expected
+    if (suite.schema_validation_error) {
+      console.log(`  ✓ Schema validation correctly failed (expected)`);
+      result.passed = 1;
+      return result;
+    }
+
+    // Otherwise, unexpected schema validation failure
+    result.failed = suite.test_cases?.length ?? 0;
+    for (const testCase of suite.test_cases ?? []) {
       result.failures.push({
         description: testCase.description,
         type: "encode",
@@ -67,6 +76,20 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
         message: "Schema validation failed",
       });
     }
+    return result;
+  }
+
+  // If this is a schema validation error test but schema passed, that's wrong
+  if (suite.schema_validation_error) {
+    console.error(`\n❌ Expected schema validation to fail for ${suite.name}, but it passed`);
+    result.failed = 1;
+    result.failures.push({
+      description: "Schema validation",
+      type: "encode",
+      expected: [],
+      actual: [],
+      message: "Expected schema validation to fail, but it passed",
+    });
     return result;
   }
 
@@ -92,14 +115,18 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
 
   if (!EncoderClass || !DecoderClass) {
     console.error(`Could not find ${typeName}Encoder or ${typeName}Decoder in generated code`);
-    result.failed = suite.test_cases.length;
+    result.failed = suite.test_cases?.length ?? 0;
     return result;
   }
 
+  // Check if test type has instance fields (position-based random access)
+  const testTypeDef = (suite.schema.types as any)?.[typeName];
+  const hasInstanceFields = testTypeDef && (testTypeDef.instances?.length ?? 0) > 0;
+
   // Run each test case
-  for (const testCase of suite.test_cases) {
+  for (const testCase of suite.test_cases ?? []) {
     // Run standard encode/decode test
-    const testResult = await runTestCase(testCase, EncoderClass, DecoderClass);
+    const testResult = await runTestCase(testCase, EncoderClass, DecoderClass, hasInstanceFields);
     if (testResult.passed) {
       result.passed++;
     } else {
@@ -224,37 +251,81 @@ async function runStreamingTestCase(
 async function runTestCase(
   testCase: TestCase,
   EncoderClass: any,
-  DecoderClass: any
+  DecoderClass: any,
+  skipEncoding: boolean = false
 ): Promise<{ passed: boolean; failures: TestFailure[] }> {
   const failures: TestFailure[] = [];
+
+  // Handle error test cases (should_error = true)
+  if (testCase.should_error) {
+    try {
+      if (testCase.bytes) {
+        const decoder = new DecoderClass(new Uint8Array(testCase.bytes));
+        const decoded = decoder.decode();
+
+        // If we got here, decode didn't throw - that's a failure
+        failures.push({
+          description: testCase.description,
+          type: "decode",
+          expected: `Error containing: ${testCase.error_message || "any error"}`,
+          actual: stringifyWithBigInt(decoded),
+          message: "Expected decode to throw an error, but it succeeded",
+        });
+      }
+    } catch (error) {
+      // Error was thrown - check if message matches (if error_message specified)
+      if (testCase.error_message) {
+        const errorStr = String(error);
+        if (!errorStr.includes(testCase.error_message)) {
+          failures.push({
+            description: testCase.description,
+            type: "decode",
+            expected: `Error containing: ${testCase.error_message}`,
+            actual: errorStr,
+            message: "Error was thrown but message doesn't match expected",
+          });
+        }
+      }
+      // Otherwise, any error is success
+    }
+
+    return {
+      passed: failures.length === 0,
+      failures,
+    };
+  }
+
+  // Normal test case (not error test)
   const format = testCase.bytes ? "bytes" : "bits";
 
   try {
-    // Test encoding
-    const encoder = new EncoderClass();
+    // Test encoding (skip for types with instance fields - they're decode-only)
+    if (!skipEncoding) {
+      const encoder = new EncoderClass();
 
-    let encoded: number[];
-    let expected: number[];
+      let encoded: number[];
+      let expected: number[];
 
-    if (format === "bytes") {
-      // Byte-level encoding
-      encoded = Array.from(encoder.encode(testCase.value));
-      expected = testCase.bytes!;
-    } else {
-      // Bit-level encoding - use finishBits() method
-      encoder.encode(testCase.value);
-      encoded = encoder.finishBits();
-      expected = testCase.bits!;
-    }
+      if (format === "bytes") {
+        // Byte-level encoding
+        encoded = Array.from(encoder.encode(testCase.value));
+        expected = testCase.bytes!;
+      } else {
+        // Bit-level encoding - use finishBits() method
+        encoder.encode(testCase.value);
+        encoded = encoder.finishBits();
+        expected = testCase.bits!;
+      }
 
-    if (!arraysEqual(encoded, expected)) {
-      failures.push({
-        description: testCase.description,
-        type: "encode",
-        expected: expected,
-        actual: encoded,
-        message: `Encoded ${format} do not match`,
-      });
+      if (!arraysEqual(encoded, expected)) {
+        failures.push({
+          description: testCase.description,
+          type: "encode",
+          expected: expected,
+          actual: encoded,
+          message: `Encoded ${format} do not match`,
+        });
+      }
     }
 
     // Test decoding (round-trip)
