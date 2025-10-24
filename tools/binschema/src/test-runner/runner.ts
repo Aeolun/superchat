@@ -94,7 +94,9 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
   }
 
   // Generate TypeScript code
-  const generatedCode = generateTypeScript(suite.schema);
+  // Enable trace logs for debugging
+  const addTraceLogs = suite.name === "zip_minimal" || suite.name === "zip_like_format";
+  const generatedCode = generateTypeScript(suite.schema, { addTraceLogs });
 
   // Write to .generated directory (use suite.name to avoid collisions between variants)
   const genDir = join(process.cwd(), ".generated");

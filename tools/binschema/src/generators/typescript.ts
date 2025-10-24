@@ -54,9 +54,14 @@ export function generateTypeScriptCode(schema: BinarySchema): string {
 /**
  * Generate TypeScript code for all types in the schema (class-based style)
  */
-export function generateTypeScript(schema: BinarySchema): string {
+export interface GenerateTypeScriptOptions {
+  addTraceLogs?: boolean;
+}
+
+export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeScriptOptions): string {
   const globalEndianness = schema.config?.endianness || "big_endian";
   const globalBitOrder = schema.config?.bit_order || "msb_first";
+  const addTraceLogs = options?.addTraceLogs || false;
 
   // Import runtime library (from same directory)
   let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "./BitStream.js";\n\n`;
@@ -108,7 +113,7 @@ export function generateTypeScript(schema: BinarySchema): string {
     }
 
     const sanitizedName = sanitizeTypeName(typeName);
-    code += generateTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder);
+    code += generateTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder, addTraceLogs);
     code += "\n\n";
   }
 
@@ -1275,7 +1280,8 @@ function generateTypeCode(
   typeDef: TypeDef,
   schema: BinarySchema,
   globalEndianness: Endianness,
-  globalBitOrder: string
+  globalBitOrder: string,
+  addTraceLogs: boolean = false
 ): string {
   const typeDefAny = typeDef as any;
   const fields = getTypeFields(typeDef);
@@ -1312,7 +1318,7 @@ function generateTypeCode(
   // Composite type - generate interface, encoder, and decoder
   const interfaceCode = generateInterface(typeName, typeDef, schema);
   const encoderCode = generateEncoder(typeName, typeDef, schema, globalEndianness, globalBitOrder);
-  const decoderCode = generateDecoder(typeName, typeDef, schema, globalEndianness, globalBitOrder);
+  const decoderCode = generateDecoder(typeName, typeDef, schema, globalEndianness, globalBitOrder, addTraceLogs);
 
   const sections = [interfaceCode];
   const enumCode = generateDiscriminatedUnionEnumsForFields(typeName, fields);
@@ -1412,7 +1418,8 @@ function generateInstanceClass(
     code += `\n          this._decoder.seek(position);\n\n`;
 
     // Decode the type at that position
-    code += `          const decoder = new ${instance.type}Decoder(this._decoder['bytes'].slice(position), { _root: this._root });\n`;
+    // Pass root decoder so nested position fields can seek in the full file
+    code += `          const decoder = new ${instance.type}Decoder(this._decoder['bytes'].slice(position), { _root: this._root, _rootDecoder: this._decoder });\n`;
     code += `          const value = decoder.decode();\n`;
     code += `          this._lazyCache.set('${instance.name}', value);\n`;
     code += `        }\n`;
@@ -2505,7 +2512,8 @@ function generateDecoder(
   typeDef: TypeDef,
   schema: BinarySchema,
   globalEndianness: Endianness,
-  globalBitOrder: string
+  globalBitOrder: string,
+  addTraceLogs: boolean = false
 ): string {
   const fields = getTypeFields(typeDef);
   const typeDefAny = typeDef as any;
@@ -2516,19 +2524,22 @@ function generateDecoder(
   code += `    super(bytes, "${globalBitOrder}");\n`;
   code += `  }\n\n`;
   code += `  decode(): ${typeName} {\n`;
+  if (addTraceLogs) {
+    code += `    console.log('[TRACE] Decoding ${typeName}');\n`;
+  }
 
   if (!hasInstances) {
     // No instance fields - return plain object
     code += `    const value: any = {};\n\n`;
 
     for (const field of fields) {
-      code += generateDecodeField(field, schema, globalEndianness, "    ");
+      code += generateDecodeField(field, schema, globalEndianness, "    ", addTraceLogs);
     }
 
     code += `    return value;\n`;
   } else {
     // Has instance fields - return class instance with lazy getters
-    code += generateDecoderWithLazyFields(typeName, fields, typeDefAny.instances, schema, globalEndianness, "    ");
+    code += generateDecoderWithLazyFields(typeName, fields, typeDefAny.instances, schema, globalEndianness, "    ", addTraceLogs);
   }
 
   code += `  }\n`;
@@ -2546,7 +2557,8 @@ function generateDecoderWithLazyFields(
   instances: any[],
   schema: BinarySchema,
   globalEndianness: Endianness,
-  indent: string
+  indent: string,
+  addTraceLogs: boolean = false
 ): string {
   let code = "";
 
@@ -2554,7 +2566,7 @@ function generateDecoderWithLazyFields(
   code += `${indent}const sequenceData: any = {};\n\n`;
 
   for (const field of fields) {
-    code += generateDecodeField(field, schema, globalEndianness, indent).replace(/value\./g, "sequenceData.");
+    code += generateDecodeField(field, schema, globalEndianness, indent, addTraceLogs).replace(/value\./g, "sequenceData.");
   }
 
   // Create class instance with lazy getters
@@ -2572,14 +2584,28 @@ function generateDecodeField(
   field: Field,
   schema: BinarySchema,
   globalEndianness: Endianness,
-  indent: string
+  indent: string,
+  addTraceLogs: boolean = false
 ): string {
   if (!('type' in field)) return "";
 
   const fieldName = field.name;
 
+  // Add trace logging before field decode
+  let code = "";
+  if (addTraceLogs) {
+    code += `${indent}console.log('[TRACE] Decoding field: ${fieldName}');\n`;
+  }
+
   // generateDecodeFieldCore handles both conditional and non-conditional fields
-  return generateDecodeFieldCore(field, schema, globalEndianness, fieldName, indent);
+  code += generateDecodeFieldCore(field, schema, globalEndianness, fieldName, indent, addTraceLogs);
+
+  // Add trace logging after field decode
+  if (addTraceLogs) {
+    code += `${indent}console.log('[TRACE] Decoded ${fieldName}:', value.${fieldName});\n`;
+  }
+
+  return code;
 }
 
 /**
@@ -2590,7 +2616,8 @@ function generateDecodeFieldCore(
   schema: BinarySchema,
   globalEndianness: Endianness,
   fieldName: string,
-  indent: string
+  indent: string,
+  addTraceLogs: boolean = false
 ): string {
   if (!('type' in field)) return "";
 
@@ -2602,12 +2629,12 @@ function generateDecodeFieldCore(
     const basePath = lastDotIndex > 0 ? targetPath.substring(0, lastDotIndex) : "value";
     const tsCondition = convertConditionalToTypeScript(condition, basePath);
     let code = `${indent}if (${tsCondition}) {\n`;
-    code += generateDecodeFieldCoreImpl(field, schema, globalEndianness, fieldName, indent + "  ");
+    code += generateDecodeFieldCoreImpl(field, schema, globalEndianness, fieldName, indent + "  ", addTraceLogs);
     code += `${indent}}\n`;
     return code;
   }
 
-  return generateDecodeFieldCoreImpl(field, schema, globalEndianness, fieldName, indent);
+  return generateDecodeFieldCoreImpl(field, schema, globalEndianness, fieldName, indent, addTraceLogs);
 }
 
 /**
@@ -2618,7 +2645,8 @@ function generateDecodeFieldCoreImpl(
   schema: BinarySchema,
   globalEndianness: Endianness,
   fieldName: string,
-  indent: string
+  indent: string,
+  addTraceLogs: boolean = false
 ): string {
   if (!('type' in field)) return "";
 
@@ -2671,16 +2699,16 @@ function generateDecodeFieldCoreImpl(
       return `${indent}${target} = this.readFloat64("${endianness}");\n`;
 
     case "array":
-      return generateDecodeArray(field, schema, globalEndianness, fieldName, indent);
+      return generateDecodeArray(field, schema, globalEndianness, fieldName, indent, addTraceLogs);
 
     case "string":
-      return generateDecodeString(field, globalEndianness, fieldName, indent);
+      return generateDecodeString(field, globalEndianness, fieldName, indent, addTraceLogs);
 
     case "bitfield":
       return generateDecodeBitfield(field, fieldName, indent);
 
     case "discriminated_union":
-      return generateDecodeDiscriminatedUnion(field, schema, globalEndianness, fieldName, indent);
+      return generateDecodeDiscriminatedUnion(field, schema, globalEndianness, fieldName, indent, addTraceLogs);
 
     case "back_reference":
       return generateDecodeBackReference(field, schema, globalEndianness, fieldName, indent);
@@ -2702,10 +2730,16 @@ function generateDecodeDiscriminatedUnion(
   schema: BinarySchema,
   globalEndianness: Endianness,
   fieldName: string,
-  indent: string
+  indent: string,
+  addTraceLogs: boolean = false
 ): string {
   const target = getTargetPath(fieldName);
   let code = "";
+
+  if (addTraceLogs) {
+    code += `${indent}console.log('[TRACE] Decoding discriminated union field ${fieldName}');\n`;
+  }
+
   const discriminator = field.discriminator || {};
   const variants = field.variants || [];
 
@@ -2985,10 +3019,17 @@ function generateDecodeArray(
   schema: BinarySchema,
   globalEndianness: Endianness,
   fieldName: string,
-  indent: string
+  indent: string,
+  addTraceLogs: boolean = false
 ): string {
   const target = getTargetPath(fieldName);
-  let code = `${indent}${target} = [];\n`;
+  let code = "";
+
+  if (addTraceLogs) {
+    code += `${indent}console.log('[TRACE] Decoding array field ${fieldName}');\n`;
+  }
+
+  code += `${indent}${target} = [];\n`;
 
   // Read length if length_prefixed or length_prefixed_items
   if (field.kind === "length_prefixed" || field.kind === "length_prefixed_items") {
@@ -3052,8 +3093,20 @@ function generateDecodeArray(
       code += `${indent}  throw new Error('Field-referenced array length field "${lengthField}" not found in context._root');\n`;
       code += `${indent}}\n`;
     } else {
-      // Regular field reference - try value first, then context (for protocol headers)
-      code += `${indent}const ${lengthVarName} = value.${lengthField} ?? this.context?.${lengthField};\n`;
+      // Regular field reference - need to account for inline type decoding and array items
+      // If fieldName is "local_file.entries", lengthField should be resolved relative to "local_file"
+      // If fieldName is "entries_item.data", use "entries_item" directly (no "value." prefix)
+      const isArrayItem = fieldName.includes('_item');
+      const parentPath = fieldName.includes('.') ? fieldName.substring(0, fieldName.lastIndexOf('.')) + '.' : '';
+      const fullLengthPath = parentPath + lengthField;
+
+      if (isArrayItem) {
+        // For array items, the variable is already scoped (e.g., "entries_item")
+        code += `${indent}const ${lengthVarName} = ${fullLengthPath} ?? this.context?.${lengthField};\n`;
+      } else {
+        // For regular fields, prefix with "value."
+        code += `${indent}const ${lengthVarName} = value.${fullLengthPath} ?? this.context?.${lengthField};\n`;
+      }
       code += `${indent}if (${lengthVarName} === undefined) {\n`;
       code += `${indent}  throw new Error('Field-referenced array length field "${lengthField}" not found in value or context');\n`;
       code += `${indent}}\n`;
@@ -3103,7 +3156,8 @@ function generateDecodeArray(
     schema,
     globalEndianness,
     itemVar,
-    indent + "  "
+    indent + "  ",
+    addTraceLogs
   );
 
   // For primitive types, directly push
@@ -3212,16 +3266,24 @@ function generateDecodeString(
   field: any,
   globalEndianness: Endianness,
   fieldName: string,
-  indent: string
+  indent: string,
+  addTraceLogs: boolean = false
 ): string {
   const encoding = field.encoding || "utf8";
   let kind = field.kind;
   const target = getTargetPath(fieldName);
   let code = "";
 
+  if (addTraceLogs) {
+    code += `${indent}console.log('[TRACE] Decoding string field ${fieldName}, kind: ${kind}, length_field: ${field.length_field}, length: ${field.length}');\n`;
+  }
+
   // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
   if (kind === "fixed" && field.length_field && !field.length) {
     kind = "field_referenced";
+    if (addTraceLogs) {
+      code += `${indent}console.log('[TRACE] Auto-detected field_referenced string for ${fieldName}');\n`;
+    }
   }
 
   if (kind === "length_prefixed") {
@@ -3309,8 +3371,20 @@ function generateDecodeString(
       code += `${indent}  throw new Error('Field-referenced string length field "${lengthField}" not found in context._root');\n`;
       code += `${indent}}\n`;
     } else {
-      // Regular field reference - try value first, then context
-      code += `${indent}const ${lengthVarName} = value.${lengthField} ?? this.context?.${lengthField};\n`;
+      // Regular field reference - need to account for inline type decoding and array items
+      // If fieldName is "local_file.filename", lengthField should be resolved relative to "local_file"
+      // If fieldName is "entries_item.filename", use "entries_item" directly (no "value." prefix)
+      const isArrayItem = fieldName.includes('_item');
+      const parentPath = fieldName.includes('.') ? fieldName.substring(0, fieldName.lastIndexOf('.')) + '.' : '';
+      const fullLengthPath = parentPath + lengthField;
+
+      if (isArrayItem) {
+        // For array items, the variable is already scoped (e.g., "entries_item")
+        code += `${indent}const ${lengthVarName} = ${fullLengthPath} ?? this.context?.${lengthField};\n`;
+      } else {
+        // For regular fields, prefix with "value."
+        code += `${indent}const ${lengthVarName} = value.${fullLengthPath} ?? this.context?.${lengthField};\n`;
+      }
       code += `${indent}if (${lengthVarName} === undefined) {\n`;
       code += `${indent}  throw new Error('Field-referenced string length field "${lengthField}" not found in value or context');\n`;
       code += `${indent}}\n`;
@@ -3421,7 +3495,49 @@ function generateDecodeTypeReference(
     return generateDecodeFieldCoreImpl(pseudoField, schema, globalEndianness, fieldName, indent);
   }
 
-  // Composite type - decode all fields
+  // Check if type has instance fields (position-based lazy loading)
+  const hasInstanceFields = typeDefAny.instances && Array.isArray(typeDefAny.instances) && typeDefAny.instances.length > 0;
+
+  if (hasInstanceFields) {
+    // Type has instance fields - must use standalone decoder to create instance with lazy getters
+    // Cannot inline decode because we need the wrapper class
+    const decoderClass = `${typeRef}Decoder`;
+    let code = "";
+
+    // Read all sequence fields to pass to decoder
+    const sequenceFields = getTypeFields(typeDef);
+    const isArrayItem = fieldName.includes("_item");
+
+    // Create a temporary variable for the decoded data
+    const tempVar = fieldName.replace(/\./g, "_") + "_data";
+    code += `${indent}const ${tempVar}: any = {};\n`;
+
+    // Decode all sequence fields into temp variable
+    for (const field of sequenceFields) {
+      const subFieldCode = generateDecodeFieldCore(
+        field,
+        schema,
+        globalEndianness,
+        `${tempVar}.${field.name}`,
+        indent
+      );
+      // Replace target path to use tempVar instead of value/item
+      const modifiedCode = subFieldCode.replace(
+        new RegExp(`${isArrayItem ? fieldName : `value\\.${fieldName}`}\\.`, 'g'),
+        `${tempVar}.`
+      );
+      code += modifiedCode;
+    }
+
+    // Create instance using decoded data
+    // Pass the root decoder (with full bytes) so position fields can seek correctly
+    const rootDecoderExpr = "this.context?._rootDecoder || this";
+    code += `${indent}${target} = new ${typeRef}Instance(${rootDecoderExpr}, ${tempVar}, this.context?._root || this as any);\n`;
+
+    return code;
+  }
+
+  // Composite type without instance fields - safe to inline decode
   const fields = getTypeFields(typeDef);
   let code = `${indent}${target} = {};\n`;
   for (const field of fields) {

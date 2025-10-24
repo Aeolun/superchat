@@ -1108,23 +1108,25 @@ const StringFieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("string").meta({
-    description: "Field type (always 'string')"  
+    description: "Field type (always 'string')"
   }),
   kind: ArrayKindSchema,
   encoding: StringEncodingSchema.optional().default("utf8"),
   length: z.number().int().min(1).optional(), // For fixed length
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
+  length_field: z.string().optional(), // For field_referenced: field name to read length from
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),
 }).refine(
   (data) => {
-    if (data.kind === "fixed") return data.length !== undefined;
+    if (data.kind === "fixed") return data.length !== undefined || data.length_field !== undefined;
     if (data.kind === "length_prefixed") return data.length_type !== undefined;
+    if (data.kind === "field_referenced") return data.length_field !== undefined;
     return true;
   },
   {
-    message: "Fixed strings require 'length', length_prefixed strings require 'length_type'",
+    message: "Fixed strings require 'length' or 'length_field', length_prefixed strings require 'length_type', field_referenced strings require 'length_field'",
   }
 ).meta({
   title: "String",
