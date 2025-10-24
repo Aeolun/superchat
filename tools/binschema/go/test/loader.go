@@ -46,6 +46,9 @@ func LoadTestSuite(path string) (*TestSuite, error) {
 	// Post-process to handle BigInt strings (e.g., "12345n" -> int64)
 	suite.TestCases = processBigIntInTestCases(suite.TestCases)
 
+	// Convert bits to bytes for test cases that use bit-level encoding
+	suite.TestCases = convertBitsToBytes(suite.TestCases)
+
 	return &suite, nil
 }
 
@@ -117,4 +120,38 @@ func processBigIntValue(val interface{}) interface{} {
 	default:
 		return v
 	}
+}
+
+// convertBitsToBytes converts test cases with `bits` field to `bytes` field
+// This is needed because the Go test harness compares bytes, not bits
+func convertBitsToBytes(cases []TestCase) []TestCase {
+	for i := range cases {
+		// If test case has bits but no bytes, convert bits to bytes
+		if len(cases[i].Bits) > 0 && len(cases[i].Bytes) == 0 {
+			cases[i].Bytes = bitsToBytes(cases[i].Bits)
+		}
+	}
+	return cases
+}
+
+// bitsToBytes converts a bit array to byte array (MSB first within each byte)
+func bitsToBytes(bits []int) []byte {
+	if len(bits) == 0 {
+		return []byte{}
+	}
+
+	// Calculate number of bytes needed
+	numBytes := (len(bits) + 7) / 8
+	bytes := make([]byte, numBytes)
+
+	// Pack bits into bytes (MSB first)
+	for i, bit := range bits {
+		if bit != 0 {
+			byteIdx := i / 8
+			bitIdx := 7 - (i % 8) // MSB first
+			bytes[byteIdx] |= 1 << bitIdx
+		}
+	}
+
+	return bytes
 }

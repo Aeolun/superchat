@@ -134,6 +134,20 @@ func (d *BitStreamDecoder) readBit() (uint8, error) {
 	return bit, nil
 }
 
+// ReadBits reads numBits and returns them as uint64 (MSB first within the value)
+func (d *BitStreamDecoder) ReadBits(numBits int) (uint64, error) {
+	var result uint64
+	for i := numBits - 1; i >= 0; i-- {
+		bit, err := d.readBit()
+		if err != nil {
+			return 0, err
+		}
+		result |= uint64(bit) << i
+	}
+	d.LastErrorCode = nil
+	return result, nil
+}
+
 // WriteUint8 writes an 8-bit unsigned integer
 func (e *BitStreamEncoder) WriteUint8(value uint8) {
 	if e.bitOffset == 0 {
@@ -165,6 +179,14 @@ func (e *BitStreamEncoder) writeBit(bit uint8) {
 		e.bytes = append(e.bytes, e.currentByte)
 		e.currentByte = 0
 		e.bitOffset = 0
+	}
+}
+
+// WriteBits writes numBits from value (MSB first within the value)
+func (e *BitStreamEncoder) WriteBits(value uint64, numBits int) {
+	for i := numBits - 1; i >= 0; i-- {
+		bit := uint8((value >> i) & 1)
+		e.writeBit(bit)
 	}
 }
 

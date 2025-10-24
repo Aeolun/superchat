@@ -8,10 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/aeolun/json5"
-	"github.com/anthropics/binschema/codegen"
 )
 
 // CompileAndTestBatch compiles all test suites together and runs them
@@ -21,17 +21,51 @@ func CompileAndTestBatch(suites []*TestSuite) (map[string][]TestResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+
+	// If DEBUG_GENERATED is set, save files to tmp-go/ instead of deleting
+	debugDir := os.Getenv("DEBUG_GENERATED")
+	if debugDir != "" {
+		tmpDir = debugDir
+		os.RemoveAll(tmpDir) // Clean old files
+		os.MkdirAll(tmpDir, 0755)
+	} else {
+		defer os.RemoveAll(tmpDir)
+	}
+
+	// Track results for suites that fail code generation
+	results := make(map[string][]TestResult)
+
+	// Track which suites successfully generated code
+	var successfulSuites []*TestSuite
+	var typeNamePrefixes []string
 
 	// Generate code for all suites - write each to its own file in main package
 	for i, suite := range suites {
-		code, err := codegen.GenerateGo(suite.Schema, suite.TestType)
+		code, err := generateGoSource(suite.Schema, suite.TestType)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate code for %s: %w", suite.Name, err)
+			// Mark all test cases in this suite as failed due to code generation error
+			var failedResults []TestResult
+			for _, tc := range suite.TestCases {
+				failedResults = append(failedResults, TestResult{
+					Description: tc.Description,
+					Pass:        false,
+					Error:       fmt.Sprintf("code generation failed: %v", err),
+				})
+			}
+			results[suite.Name] = failedResults
+			continue
 		}
 
 		// Prefix type names to avoid conflicts
 		prefix := strings.ReplaceAll(suite.Name, "-", "_")
+
+		// Save original code for debugging if DEBUG_GENERATED is set
+		if debugDir != "" {
+			origFilename := fmt.Sprintf("orig_%d.go", i)
+			origFile := filepath.Join(tmpDir, origFilename)
+			os.WriteFile(origFile, []byte(code), 0644)
+		}
+
 		prefixedCode := prefixTypeNames(code, suite.TestType, prefix)
 
 		// Write to separate file (Go allows multiple files in same package/directory)
@@ -40,17 +74,19 @@ func CompileAndTestBatch(suites []*TestSuite) (map[string][]TestResult, error) {
 		if err := os.WriteFile(codeFile, []byte(prefixedCode), 0644); err != nil {
 			return nil, fmt.Errorf("failed to write generated code: %w", err)
 		}
-	}
 
-	// Generate type name prefixes for the test harness
-	var typeNamePrefixes []string
-	for _, suite := range suites {
-		prefix := strings.ReplaceAll(suite.Name, "-", "_")
+		// Track successful generation
+		successfulSuites = append(successfulSuites, suite)
 		typeNamePrefixes = append(typeNamePrefixes, prefix)
 	}
 
-	// Generate unified test harness
-	testHarness := generateBatchedTestHarness(suites, typeNamePrefixes)
+	// If no suites generated successfully, return the failure results
+	if len(successfulSuites) == 0 {
+		return results, nil
+	}
+
+	// Generate unified test harness (only for successfully generated suites)
+	testHarness := generateBatchedTestHarness(successfulSuites, typeNamePrefixes)
 	harnessFile := filepath.Join(tmpDir, "main.go")
 	if err := os.WriteFile(harnessFile, []byte(testHarness), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write test harness: %w", err)
@@ -102,38 +138,89 @@ func CompileAndTestBatch(suites []*TestSuite) (map[string][]TestResult, error) {
 		return nil, fmt.Errorf("failed to parse test results: %w\nOutput: %s", err, output)
 	}
 
-	// Map results back to suite names
-	resultMap := make(map[string][]TestResult)
-	for i, suite := range suites {
+	// Map results from test harness back to suite names
+	for i, suite := range successfulSuites {
 		if i < len(allResults) {
-			resultMap[suite.Name] = allResults[i]
+			results[suite.Name] = allResults[i]
 		}
 	}
 
-	return resultMap, nil
+	return results, nil
 }
 
-// prefixTypeNames adds a prefix to type names and helper functions to avoid conflicts
+// prefixTypeNames adds a prefix to ALL type names and functions to avoid conflicts
 func prefixTypeNames(code string, typeName string, prefix string) string {
-	// Change package to main and keep imports
-	code = strings.Replace(code, "package main", "package main", 1)
+	// Use regexp to find and prefix ALL type definitions and decode functions
+	// This is more robust than string replacement as schemas may define multiple types
 
-	// Prefix the main type everywhere it appears
-	newTypeName := prefix + "_" + typeName
-	code = strings.ReplaceAll(code, "type "+typeName+" struct", "type "+newTypeName+" struct")
-	code = strings.ReplaceAll(code, "func (m *"+typeName+")", "func (m *"+newTypeName+")")
-	code = strings.ReplaceAll(code, "func Decode"+typeName, "func Decode"+newTypeName)
-	code = strings.ReplaceAll(code, "&"+typeName+"{", "&"+newTypeName+"{")
-	code = strings.ReplaceAll(code, "*"+typeName, "*"+newTypeName)
-	code = strings.ReplaceAll(code, " "+typeName+"{", " "+newTypeName+"{")
+	// Prefix all struct type definitions: "type Foo struct" -> "type prefix_Foo struct"
+	typeDefRegex := regexp.MustCompile(`\btype\s+([A-Z][a-zA-Z0-9]*)\s+struct`)
+	code = typeDefRegex.ReplaceAllStringFunc(code, func(match string) string {
+		parts := typeDefRegex.FindStringSubmatch(match)
+		if len(parts) >= 2 {
+			typeName := parts[1]
+			return fmt.Sprintf("type %s_%s struct", prefix, typeName)
+		}
+		return match
+	})
 
-	// Prefix the helper function decode<Type>WithDecoder
-	// This is generated by the code generator for nested struct decoding
-	// First replace the function definition
-	code = strings.ReplaceAll(code, "func decode"+typeName+"WithDecoder", "func "+prefix+"_decode"+typeName+"WithDecoder")
-	// Then replace calls that don't already have the prefix
-	// Use a specific pattern: "return decode" to avoid matching the already-prefixed function def
-	code = strings.ReplaceAll(code, "return decode"+typeName+"WithDecoder(", "return "+prefix+"_decode"+typeName+"WithDecoder(")
+	// Prefix all Decode function DEFINITIONS: "func DecodeFoo" -> "func Decodeprefix_Foo"
+	// and "func decodeFooWithDecoder" -> "func decodeprefixFooWithDecoder"
+	// Note: Decode functions get prefix AFTER Decode, decode helpers get prefix BEFORE decode
+	decodeFuncDefRegex := regexp.MustCompile(`(\bfunc\s+)Decode([A-Z][a-zA-Z0-9]*)`)
+	code = decodeFuncDefRegex.ReplaceAllString(code, fmt.Sprintf("${1}Decode%s_${2}", prefix))
+
+	decodeHelperRegex := regexp.MustCompile(`(\bfunc\s+)decode([A-Z][a-zA-Z0-9]*)`)
+	code = decodeHelperRegex.ReplaceAllString(code, fmt.Sprintf("${1}%s_decode${2}", prefix))
+
+	// Prefix type references in function CALLS: "DecodeFoo(" -> "Decodeprefix_Foo("
+	// and "decodeFooWithDecoder(" -> "prefix_decodeFooWithDecoder("
+	decodeCallRegex := regexp.MustCompile(`\bDecode([A-Z][a-zA-Z0-9]*)\(`)
+	code = decodeCallRegex.ReplaceAllString(code, fmt.Sprintf("Decode%s_${1}(", prefix))
+
+	decodeHelperCallRegex := regexp.MustCompile(`\bdecode([A-Z][a-zA-Z0-9]*)\(`)
+	code = decodeHelperCallRegex.ReplaceAllString(code, fmt.Sprintf("%s_decode${1}(", prefix))
+
+	// Prefix type references carefully to avoid breaking maps and other Go syntax
+	// Only prefix: "&Foo{" -> "&prefix_Foo{", "*Foo," -> "*prefix_Foo,", " Foo{" -> " prefix_Foo{"
+	// but NOT map[string]Foo or other complex expressions
+
+	// Handle array types: []Type -> []prefix_Type
+	code = regexp.MustCompile(`\[\]([A-Z][a-zA-Z0-9]*)`).ReplaceAllString(code, fmt.Sprintf("[]%s_$1", prefix))
+
+	// Handle &Type{} struct literals
+	code = regexp.MustCompile(`&([A-Z][a-zA-Z0-9]*)\{`).ReplaceAllString(code, fmt.Sprintf("&%s_$1{", prefix))
+
+	// Handle *Type in function parameters/returns (with comma or closing paren after)
+	code = regexp.MustCompile(`\*([A-Z][a-zA-Z0-9]*)([,\)])`).ReplaceAllString(code, fmt.Sprintf("*%s_$1$2", prefix))
+
+	// Handle Type{} struct literals (with space before)
+	code = regexp.MustCompile(`\s([A-Z][a-zA-Z0-9]*)\{`).ReplaceAllString(code, fmt.Sprintf(" %s_$1{", prefix))
+
+	// Prefix method receivers: "func (m *Foo)" -> "func (m *prefix_Foo)"
+	methodRegex := regexp.MustCompile(`\bfunc\s+\(([a-z])\s+\*([A-Z][a-zA-Z0-9]*)\)`)
+	code = methodRegex.ReplaceAllStringFunc(code, func(match string) string {
+		parts := methodRegex.FindStringSubmatch(match)
+		if len(parts) >= 3 {
+			receiver := parts[1]
+			typeName := parts[2]
+			return fmt.Sprintf("func (%s *%s_%s)", receiver, prefix, typeName)
+		}
+		return match
+	})
+
+	// Handle field types in struct definitions: "FieldName TypeName" at end of line
+	// Match patterns like "Value Discriminated_union" or "Cname CompressedDomain"
+	// Be careful to match full lines to avoid false matches
+	fieldTypeRegex := regexp.MustCompile(`(\s+\w+\s+)([A-Z][a-zA-Z0-9_]*)(\s*)$`)
+	lines := strings.Split(code, "\n")
+	for i, line := range lines {
+		// Only process lines that look like field declarations (indent + word + Type)
+		if fieldTypeRegex.MatchString(line) {
+			lines[i] = fieldTypeRegex.ReplaceAllString(line, fmt.Sprintf("${1}%s_${2}${3}", prefix))
+		}
+	}
+	code = strings.Join(lines, "\n")
 
 	return code
 }

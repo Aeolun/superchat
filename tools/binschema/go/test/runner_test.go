@@ -7,66 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropics/binschema/codegen"
 	"github.com/stretchr/testify/require"
 )
 
-// TestBinSchema runs all JSON test suites against generated Go code
-func TestBinSchema(t *testing.T) {
-	// Load all JSON test suites from ../../tests-json/
-	testsDir := filepath.Join("..", "..", "tests-json")
-	suites, err := LoadAllTestSuites(testsDir)
-	require.NoError(t, err, "Failed to load test suites")
-
-	require.NotEmpty(t, suites, "No test suites found in %s", testsDir)
-
-	t.Logf("Loaded %d test suites", len(suites))
-
-	for _, suite := range suites {
-		suite := suite // Capture for parallel tests
-		t.Run(suite.Name, func(t *testing.T) {
-			// Don't run in parallel for now - easier to debug
-			// t.Parallel()
-
-			t.Logf("Test suite: %s - %s", suite.Name, suite.Description)
-			t.Logf("  Test type: %s", suite.TestType)
-			t.Logf("  Test cases: %d", len(suite.TestCases))
-
-			// Generate Go code from schema
-			code, err := codegen.GenerateGo(suite.Schema, suite.TestType)
-			if err != nil {
-				t.Fatalf("Failed to generate code: %v", err)
-			}
-
-			t.Logf("Generated %d bytes of code", len(code))
-
-			// Compile and run tests
-			results, err := CompileAndTest(code, suite.TestType, suite.Schema, suite.TestCases)
-			if err != nil {
-				t.Fatalf("Failed to compile/run tests: %v", err)
-			}
-
-			// Check results
-			passed := 0
-			failed := 0
-			for _, result := range results {
-				if result.Pass {
-					passed++
-					t.Logf("  ✓ %s", result.Description)
-				} else {
-					failed++
-					t.Errorf("  ✗ %s: %s", result.Description, result.Error)
-				}
-			}
-
-			t.Logf("Results: %d passed, %d failed out of %d", passed, failed, len(suite.TestCases))
-
-			if failed > 0 {
-				t.Fail()
-			}
-		})
-	}
-}
+// Note: TestBinSchema is now in runner_batch_test.go and uses batched compilation for efficiency.
+// Batched compilation compiles all test suites together (~5-10s) instead of one-by-one (~60s).
 
 // TestLoadTestSuites verifies that test suites can be loaded correctly
 func TestLoadTestSuites(t *testing.T) {
@@ -151,3 +96,4 @@ func Example() {
 	//    d. Compare decoded value with original value
 	// 5. Report results
 }
+

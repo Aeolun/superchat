@@ -3,6 +3,7 @@
 package test
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -14,7 +15,12 @@ import (
 )
 
 // CompileAndTest compiles generated code and runs encode/decode tests
-func CompileAndTest(generatedCode string, typeName string, schema map[string]interface{}, testCases []TestCase) ([]TestResult, error) {
+func CompileAndTest(typeName string, schema map[string]interface{}, testCases []TestCase) ([]TestResult, error) {
+	generatedCode, err := generateGoSource(schema, typeName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate Go code via CLI: %w", err)
+	}
+
 	// Create temporary directory for generated code
 	tmpDir, err := os.MkdirTemp("", "binschema-test-*")
 	if err != nil {
@@ -85,12 +91,59 @@ func CompileAndTest(generatedCode string, typeName string, schema map[string]int
 	return results, nil
 }
 
+func generateGoSource(schema map[string]interface{}, typeName string) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "binschema-go-gen-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	schemaFile := filepath.Join(tmpDir, "schema.json")
+	schemaBytes, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal schema: %w", err)
+	}
+	if err := os.WriteFile(schemaFile, schemaBytes, 0644); err != nil {
+		return "", fmt.Errorf("failed to write schema file: %w", err)
+	}
+
+	outputDir := filepath.Join(tmpDir, "out")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create output dir: %w", err)
+	}
+
+	toolsRoot, err := filepath.Abs(filepath.Join(".", "..", ".."))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve tools root: %w", err)
+	}
+
+	cmd := exec.Command(
+		"bun", "run", "src/cli/index.ts", "generate",
+		"--language", "go",
+		"--schema", schemaFile,
+		"--out", outputDir,
+		"--type", typeName,
+	)
+	cmd.Dir = toolsRoot
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("failed to run Go generator CLI: %w\nOutput: %s", err, output)
+	}
+
+	codePath := filepath.Join(outputDir, "generated.go")
+	codeBytes, err := os.ReadFile(codePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read generated code: %w", err)
+	}
+
+	return string(codeBytes), nil
+}
+
 // TestResult represents the result of a single test case
 type TestResult struct {
-	Description string `json:"description"`
-	Pass        bool   `json:"pass"`
-	Error       string `json:"error,omitempty"`
-	EncodedBytes []byte `json:"encoded_bytes,omitempty"`
+	Description  string      `json:"description"`
+	Pass         bool        `json:"pass"`
+	Error        string      `json:"error,omitempty"`
+	EncodedBytes []byte      `json:"encoded_bytes,omitempty"`
 	DecodedValue interface{} `json:"decoded_value,omitempty"`
 }
 
