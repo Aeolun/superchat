@@ -2375,113 +2375,15 @@ func (s *Server) calculateHeartbeatInterval(serverCount uint32) uint32 {
 
 // verifyAndRegisterServer verifies a server is reachable and registers it
 func (s *Server) verifyAndRegisterServer(msg *protocol.RegisterServerMessage, sourceIP string) {
-	// Connect to the server
 	addr := fmt.Sprintf("%s:%d", msg.Hostname, msg.Port)
-	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+
+	serverConfig, err := s.verifyServerReachability(msg.Hostname, msg.Port)
 	if err != nil {
-		log.Printf("Verification failed for %s: could not connect: %v", addr, err)
-		return
-	}
-	defer conn.Close()
-
-	// Generate random challenge
-	challenge := uint64(time.Now().UnixNano())
-
-	// Send VERIFY_REGISTRATION
-	verifyMsg := &protocol.VerifyRegistrationMessage{
-		Challenge: challenge,
-	}
-	payload, err := verifyMsg.Encode()
-	if err != nil {
-		log.Printf("Verification failed for %s: could not encode message: %v", addr, err)
+		log.Printf("Verification failed for %s: %v", addr, err)
 		return
 	}
 
-	frame := &protocol.Frame{
-		Version: 1,
-		Type:    protocol.TypeVerifyRegistration,
-		Flags:   0,
-		Payload: payload,
-	}
-
-	if err := protocol.EncodeFrame(conn, frame); err != nil {
-		log.Printf("Verification failed for %s: could not send challenge: %v", addr, err)
-		return
-	}
-
-	// Wait for server response (expect REGISTER_ACK optional, VERIFY_RESPONSE required)
-	var verifyFrame *protocol.Frame
-	for {
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		respFrame, err := protocol.DecodeFrame(conn)
-		if err != nil {
-			log.Printf("Verification failed for %s: could not read response: %v", addr, err)
-			return
-		}
-
-		switch respFrame.Type {
-		case protocol.TypeServerConfig:
-			serverConfig := &protocol.ServerConfigMessage{}
-			if err := serverConfig.Decode(respFrame.Payload); err != nil {
-				log.Printf("Verification failed for %s: could not decode SERVER_CONFIG: %v", addr, err)
-				return
-			}
-
-			if serverConfig.ProtocolVersion != protocol.ProtocolVersion {
-				log.Printf("Verification failed for %s: protocol mismatch (server=%d, directory=%d)", addr, serverConfig.ProtocolVersion, protocol.ProtocolVersion)
-				return
-			}
-
-			log.Printf("Verification handshake with %s succeeded (protocol v%d)", addr, serverConfig.ProtocolVersion)
-			// Wait for the actual verification response
-
-		case protocol.TypeError:
-			errorMsg := &protocol.ErrorMessage{}
-			if err := errorMsg.Decode(respFrame.Payload); err != nil {
-				log.Printf("Verification failed for %s: could not decode ERROR frame: %v", addr, err)
-			} else {
-				log.Printf("Verification failed for %s: directory reported error (code=%d, message=%s)", addr, errorMsg.ErrorCode, errorMsg.Message)
-			}
-			return
-
-		case protocol.TypeRegisterAck:
-			ackMsg := &protocol.RegisterAckMessage{}
-			if err := ackMsg.Decode(respFrame.Payload); err != nil {
-				log.Printf("Verification failed for %s: could not decode REGISTER_ACK: %v", addr, err)
-				return
-			}
-			if ackMsg.Success {
-				log.Printf("Server %s acknowledged verification request: %s", addr, ackMsg.Message)
-			} else {
-				log.Printf("Server %s acknowledged verification request (pending): %s", addr, ackMsg.Message)
-			}
-			// Continue waiting for VERIFY_RESPONSE
-
-		case protocol.TypeVerifyResponse:
-			verifyFrame = respFrame
-			goto verifyResponse
-
-		default:
-			log.Printf("Verification failed for %s: unexpected response type 0x%02x", addr, respFrame.Type)
-			return
-		}
-	}
-
-verifyResponse:
-	conn.SetReadDeadline(time.Time{})
-
-	// Decode response
-	respMsg := &protocol.VerifyResponseMessage{}
-	if err := respMsg.Decode(verifyFrame.Payload); err != nil {
-		log.Printf("Verification failed for %s: could not decode response: %v", addr, err)
-		return
-	}
-
-	// Check challenge
-	if respMsg.Challenge != challenge {
-		log.Printf("Verification failed for %s: wrong challenge (expected %d, got %d)", addr, challenge, respMsg.Challenge)
-		return
-	}
+	log.Printf("Verification handshake with %s succeeded (protocol v%d)", addr, serverConfig.ProtocolVersion)
 
 	// Verification succeeded! Register the server
 	_, err = s.db.RegisterDiscoveredServer(
@@ -2500,14 +2402,17 @@ verifyResponse:
 		return
 	}
 
-	// Calculate initial heartbeat interval
-	serverCount, _ := s.db.CountDiscoveredServers()
-	interval := s.calculateHeartbeatInterval(serverCount)
+	// Record an initial heartbeat using the health-check interval so the server remains visible.
+	intervalSeconds := uint32(directoryHealthCheckInterval.Seconds())
+	if intervalSeconds == 0 {
+		intervalSeconds = 300
+	}
+	if err := s.db.UpdateHeartbeat(msg.Hostname, msg.Port, 0, 0, msg.ChannelCount, intervalSeconds); err != nil {
+		log.Printf("Verification succeeded for %s but failed to update heartbeat metadata: %v", addr, err)
+		return
+	}
 
-	log.Printf("Successfully registered server %s (heartbeat interval: %ds)", addr, interval)
-
-	// Note: We don't send REGISTER_ACK here because the original connection is gone
-	// The server will need to send a HEARTBEAT to get the interval
+	log.Printf("Successfully registered server %s (health check interval: %ds)", addr, intervalSeconds)
 }
 
 // ===== Admin System Handlers =====

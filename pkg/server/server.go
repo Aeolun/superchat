@@ -23,7 +23,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-const defaultDirectoryPort = 6465
+const (
+	defaultDirectoryPort         = 6465
+	directoryHealthCheckInterval = 5 * time.Minute
+)
 
 var (
 	errorLog *log.Logger
@@ -322,6 +325,12 @@ func (s *Server) Start() error {
 	// Start message retention cleanup goroutine
 	s.wg.Add(1)
 	go s.retentionCleanupLoop()
+
+	// Start directory health checks (only when running as directory)
+	if s.config.DirectoryEnabled {
+		s.wg.Add(1)
+		go s.directoryHealthCheckLoop()
+	}
 
 	// Accept TCP connections
 	s.wg.Add(1)
@@ -832,6 +841,193 @@ func (s *Server) cleanupExpiredMessages() {
 	}
 }
 
+// directoryHealthCheckLoop periodically verifies registered servers are reachable.
+func (s *Server) directoryHealthCheckLoop() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(directoryHealthCheckInterval)
+	defer ticker.Stop()
+
+	// Run an immediate check so newly registered servers are validated promptly.
+	s.runDirectoryHealthCheck()
+
+	for {
+		select {
+		case <-s.shutdown:
+			return
+		case <-ticker.C:
+			s.runDirectoryHealthCheck()
+		}
+	}
+}
+
+// runDirectoryHealthCheck verifies all known servers and refreshes their heartbeat timestamps.
+func (s *Server) runDirectoryHealthCheck() {
+	servers, err := s.db.ListDiscoveredServers(^uint16(0))
+	if err != nil {
+		log.Printf("Directory health check: failed to list servers: %v", err)
+		return
+	}
+
+	if len(servers) == 0 {
+		return
+	}
+
+	var successes, failures int
+	for _, entry := range servers {
+		if err := s.verifyRegisteredServer(entry); err != nil {
+			failures++
+			log.Printf("Directory health check: %s:%d verification failed: %v", entry.Hostname, entry.Port, err)
+			continue
+		}
+		successes++
+	}
+
+	log.Printf("Directory health check complete: %d verified, %d failed", successes, failures)
+}
+
+// verifyRegisteredServer confirms the server is reachable and updates its heartbeat metadata.
+func (s *Server) verifyRegisteredServer(entry *database.DiscoveredServer) error {
+	if _, err := s.verifyServerReachability(entry.Hostname, entry.Port); err != nil {
+		return err
+	}
+
+	intervalSeconds := uint32(directoryHealthCheckInterval.Seconds())
+	if intervalSeconds == 0 {
+		intervalSeconds = 300
+	}
+
+	if err := s.db.UpdateHeartbeat(entry.Hostname, entry.Port, entry.UserCount, entry.UptimeSeconds, entry.ChannelCount, intervalSeconds); err != nil {
+		return fmt.Errorf("failed to update heartbeat: %w", err)
+	}
+
+	return nil
+}
+
+// verifyServerReachability performs the VERIFY_REGISTRATION handshake against a remote server.
+func (s *Server) verifyServerReachability(host string, port uint16) (*protocol.ServerConfigMessage, error) {
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("could not connect: %w", err)
+	}
+	defer conn.Close()
+
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return nil, fmt.Errorf("failed to set read deadline: %w", err)
+	}
+
+	handshakeFrame, err := protocol.DecodeFrame(conn)
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to read SERVER_CONFIG: %w", err)
+	}
+
+	if handshakeFrame.Type != protocol.TypeServerConfig {
+		return nil, fmt.Errorf("unexpected frame type 0x%02x (expected SERVER_CONFIG)", handshakeFrame.Type)
+	}
+
+	serverConfigMsg := &protocol.ServerConfigMessage{}
+	if err := serverConfigMsg.Decode(handshakeFrame.Payload); err != nil {
+		return nil, fmt.Errorf("failed to decode SERVER_CONFIG: %w", err)
+	}
+
+	if serverConfigMsg.ProtocolVersion != protocol.ProtocolVersion {
+		return nil, fmt.Errorf("protocol mismatch (remote=%d, local=%d)", serverConfigMsg.ProtocolVersion, protocol.ProtocolVersion)
+	}
+
+	challenge := uint64(time.Now().UnixNano())
+	verifyMsg := &protocol.VerifyRegistrationMessage{
+		Challenge: challenge,
+	}
+
+	payload, err := verifyMsg.Encode()
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode VERIFY_REGISTRATION: %w", err)
+	}
+
+	verifyFrame := &protocol.Frame{
+		Version: 1,
+		Type:    protocol.TypeVerifyRegistration,
+		Flags:   0,
+		Payload: payload,
+	}
+
+	if err := protocol.EncodeFrame(conn, verifyFrame); err != nil {
+		return nil, fmt.Errorf("failed to send VERIFY_REGISTRATION: %w", err)
+	}
+
+	for {
+		if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return nil, fmt.Errorf("failed to set read deadline: %w", err)
+		}
+
+		respFrame, err := protocol.DecodeFrame(conn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read verification response: %w", err)
+		}
+
+		switch respFrame.Type {
+		case protocol.TypeVerifyResponse:
+			conn.SetReadDeadline(time.Time{})
+
+			respMsg := &protocol.VerifyResponseMessage{}
+			if err := respMsg.Decode(respFrame.Payload); err != nil {
+				return nil, fmt.Errorf("failed to decode VERIFY_RESPONSE: %w", err)
+			}
+
+			if respMsg.Challenge != challenge {
+				return nil, fmt.Errorf("verification failed: wrong challenge (expected %d, got %d)", challenge, respMsg.Challenge)
+			}
+
+			// Try to close the connection gracefully; ignore errors.
+			_ = sendDisconnectFrame(conn, "Directory verification complete")
+			return serverConfigMsg, nil
+
+		case protocol.TypeError:
+			errMsg := &protocol.ErrorMessage{}
+			if err := errMsg.Decode(respFrame.Payload); err != nil {
+				return nil, fmt.Errorf("verification failed: could not decode ERROR frame: %w", err)
+			}
+			return nil, fmt.Errorf("verification failed: remote error (code=%d, message=%s)", errMsg.ErrorCode, errMsg.Message)
+
+		case protocol.TypeServerConfig:
+			// Duplicate SERVER_CONFIG; ignore.
+			continue
+
+		case protocol.TypeRegisterAck:
+			// Some implementations might send REGISTER_ACK; ignore and continue waiting.
+			continue
+
+		default:
+			return nil, fmt.Errorf("verification failed: unexpected response type 0x%02x", respFrame.Type)
+		}
+	}
+}
+
+// sendDisconnectFrame attempts to send a DISCONNECT frame with an optional reason.
+func sendDisconnectFrame(conn net.Conn, reason string) error {
+	var msg protocol.DisconnectMessage
+	if reason != "" {
+		msg.Reason = &reason
+	}
+
+	payload, err := msg.Encode()
+	if err != nil {
+		return fmt.Errorf("failed to encode DISCONNECT message: %w", err)
+	}
+
+	frame := &protocol.Frame{
+		Version: protocol.ProtocolVersion,
+		Type:    protocol.TypeDisconnect,
+		Flags:   0,
+		Payload: payload,
+	}
+
+	return protocol.EncodeFrame(conn, frame)
+}
+
 // ===== Server Discovery Methods =====
 
 // DisableDirectory disables directory mode (server won't accept registrations)
@@ -844,7 +1040,7 @@ func (s *Server) EnableDirectory() {
 	s.config.DirectoryEnabled = true
 }
 
-// AnnounceToDirectory announces this server to a directory server and maintains heartbeat
+// AnnounceToDirectory announces this server to a directory server using a transient connection.
 func (s *Server) AnnounceToDirectory(directoryAddr, serverName, serverDescription string) {
 	// Check if we're listening on localhost only
 	if s.listener != nil {
@@ -914,15 +1110,13 @@ func (s *Server) AnnounceToDirectory(directoryAddr, serverName, serverDescriptio
 	go s.maintainDirectoryAnnouncement(normalizedAddr, ourHostname, ourPort, serverName, serverDescription)
 }
 
-// maintainDirectoryAnnouncement maintains connection to directory with registration and heartbeats
+// maintainDirectoryAnnouncement performs a one-shot registration handshake with the directory
+// and then disconnects gracefully. No persistent heartbeat connection is maintained.
 func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string, ourPort uint16, serverName, serverDescription string) {
-	heartbeatInterval := uint32(300) // Start with 5 minutes
-	startTime := time.Now()
-
 	for {
 		select {
 		case <-s.shutdown:
-			log.Printf("Stopping announcement to %s (server shutdown)", directoryAddr)
+			log.Printf("Announcement to %s cancelled (server shutting down)", directoryAddr)
 			return
 		default:
 		}
@@ -931,7 +1125,9 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 		conn, err := net.DialTimeout("tcp", directoryAddr, 10*time.Second)
 		if err != nil {
 			log.Printf("Failed to connect to directory %s: %v (retrying in 60s)", directoryAddr, err)
-			time.Sleep(60 * time.Second)
+			if !s.waitForDirectoryRetry() {
+				return
+			}
 			continue
 		}
 
@@ -941,7 +1137,9 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 		if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 			log.Printf("Failed to set read deadline for %s: %v", directoryAddr, err)
 			conn.Close()
-			time.Sleep(60 * time.Second)
+			if !s.waitForDirectoryRetry() {
+				return
+			}
 			continue
 		}
 
@@ -950,14 +1148,18 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 		if err != nil {
 			log.Printf("Failed to read SERVER_CONFIG from %s: %v (retrying in 60s)", directoryAddr, err)
 			conn.Close()
-			time.Sleep(60 * time.Second)
+			if !s.waitForDirectoryRetry() {
+				return
+			}
 			continue
 		}
 
 		if handshakeFrame.Type != protocol.TypeServerConfig {
 			log.Printf("Expected SERVER_CONFIG from %s, got 0x%02x", directoryAddr, handshakeFrame.Type)
 			conn.Close()
-			time.Sleep(60 * time.Second)
+			if !s.waitForDirectoryRetry() {
+				return
+			}
 			continue
 		}
 
@@ -965,14 +1167,18 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 		if err := serverConfigMsg.Decode(handshakeFrame.Payload); err != nil {
 			log.Printf("Failed to decode SERVER_CONFIG from %s: %v", directoryAddr, err)
 			conn.Close()
-			time.Sleep(60 * time.Second)
+			if !s.waitForDirectoryRetry() {
+				return
+			}
 			continue
 		}
 
 		if serverConfigMsg.ProtocolVersion != protocol.ProtocolVersion {
 			log.Printf("Protocol version mismatch with %s (server=%d, directory=%d)", directoryAddr, serverConfigMsg.ProtocolVersion, protocol.ProtocolVersion)
 			conn.Close()
-			time.Sleep(60 * time.Second)
+			if !s.waitForDirectoryRetry() {
+				return
+			}
 			continue
 		}
 
@@ -992,7 +1198,9 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 		if err != nil {
 			log.Printf("Failed to encode REGISTER_SERVER: %v", err)
 			conn.Close()
-			time.Sleep(60 * time.Second)
+			if !s.waitForDirectoryRetry() {
+				return
+			}
 			continue
 		}
 
@@ -1006,21 +1214,39 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 		if err := protocol.EncodeFrame(conn, frame); err != nil {
 			log.Printf("Failed to send REGISTER_SERVER to %s: %v", directoryAddr, err)
 			conn.Close()
-			time.Sleep(60 * time.Second)
+			if !s.waitForDirectoryRetry() {
+				return
+			}
 			continue
 		}
 
 		log.Printf("Sent REGISTER_SERVER to %s", directoryAddr)
 
-		// Wait for REGISTER_ACK (optional) and VERIFY_REGISTRATION challenge
-		var verifyFrame *protocol.Frame
+		// Wait for optional REGISTER_ACK or verification challenge.
+		ackHandled := false
+	verificationLoop:
 		for {
-			conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+			if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+				log.Printf("Failed to set read deadline for %s: %v", directoryAddr, err)
+				break
+			}
+
 			frame, err := protocol.DecodeFrame(conn)
 			if err != nil {
-				log.Printf("Failed to receive response from %s: %v (retrying in 60s)", directoryAddr, err)
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					log.Printf("Directory %s did not send ACK within 30s; assuming registration accepted", directoryAddr)
+					break verificationLoop
+				}
+				if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
+					log.Printf("Directory %s closed registration connection; assuming registration accepted", directoryAddr)
+					break verificationLoop
+				}
+
+				log.Printf("Failed to receive registration response from %s: %v (retrying in 60s)", directoryAddr, err)
 				conn.Close()
-				time.Sleep(60 * time.Second)
+				if !s.waitForDirectoryRetry() {
+					return
+				}
 				continue
 			}
 
@@ -1029,153 +1255,91 @@ func (s *Server) maintainDirectoryAnnouncement(directoryAddr, ourHostname string
 				ackMsg := &protocol.RegisterAckMessage{}
 				if err := ackMsg.Decode(frame.Payload); err != nil {
 					log.Printf("Failed to decode REGISTER_ACK from %s: %v", directoryAddr, err)
-					conn.Close()
-					time.Sleep(60 * time.Second)
-					continue
+					break verificationLoop
 				}
 
 				if ackMsg.Success {
-					log.Printf("Directory %s accepted registration immediately: %s", directoryAddr, ackMsg.Message)
+					log.Printf("Directory %s accepted registration: %s", directoryAddr, ackMsg.Message)
 				} else {
-					log.Printf("Directory %s ack: %s", directoryAddr, ackMsg.Message)
+					log.Printf("Directory %s acknowledged registration (pending verification): %s", directoryAddr, ackMsg.Message)
 				}
-				// Continue waiting for VERIFY_REGISTRATION
+				ackHandled = true
+				break verificationLoop
 
 			case protocol.TypeVerifyRegistration:
-				verifyFrame = frame
-				goto verifyChallenge
+				verifyMsg := &protocol.VerifyRegistrationMessage{}
+				if err := verifyMsg.Decode(frame.Payload); err != nil {
+					log.Printf("Failed to decode VERIFY_REGISTRATION from %s: %v", directoryAddr, err)
+					break verificationLoop
+				}
+
+				log.Printf("Directory %s issued inline verification challenge: %d", directoryAddr, verifyMsg.Challenge)
+
+				responseMsg := &protocol.VerifyResponseMessage{
+					Challenge: verifyMsg.Challenge,
+				}
+				respPayload, err := responseMsg.Encode()
+				if err != nil {
+					log.Printf("Failed to encode VERIFY_RESPONSE for %s: %v", directoryAddr, err)
+					break verificationLoop
+				}
+
+				respFrame := &protocol.Frame{
+					Version: 1,
+					Type:    protocol.TypeVerifyResponse,
+					Flags:   0,
+					Payload: respPayload,
+				}
+
+				if err := protocol.EncodeFrame(conn, respFrame); err != nil {
+					log.Printf("Failed to send VERIFY_RESPONSE to %s: %v", directoryAddr, err)
+				} else {
+					log.Printf("Sent VERIFY_RESPONSE to %s", directoryAddr)
+				}
+				ackHandled = true
+				break verificationLoop
+
+			case protocol.TypeError:
+				errorMsg := &protocol.ErrorMessage{}
+				if err := errorMsg.Decode(frame.Payload); err != nil {
+					log.Printf("Directory %s responded with ERROR (decode failed): %v", directoryAddr, err)
+				} else {
+					log.Printf("Directory %s rejected registration: code=%d message=%s", directoryAddr, errorMsg.ErrorCode, errorMsg.Message)
+				}
+				conn.Close()
+				if !s.waitForDirectoryRetry() {
+					return
+				}
+				continue
 
 			default:
-				log.Printf("Unexpected frame from %s while awaiting verification: 0x%02x", directoryAddr, frame.Type)
-				conn.Close()
-				time.Sleep(60 * time.Second)
-				continue
+				log.Printf("Unexpected frame 0x%02x from %s during registration; closing connection", frame.Type, directoryAddr)
+				break verificationLoop
 			}
 		}
 
-	verifyChallenge:
-		conn.SetReadDeadline(time.Time{})
-
-		// Decode challenge
-		verifyMsg := &protocol.VerifyRegistrationMessage{}
-		if err := verifyMsg.Decode(verifyFrame.Payload); err != nil {
-			log.Printf("Failed to decode VERIFY_REGISTRATION: %v", err)
-			conn.Close()
-			time.Sleep(60 * time.Second)
-			continue
+		// Send graceful disconnect and finish.
+		if err := sendDisconnectFrame(conn, "Registration complete"); err != nil {
+			log.Printf("Failed to send DISCONNECT to %s: %v", directoryAddr, err)
 		}
-
-		log.Printf("Received verification challenge from %s: %d", directoryAddr, verifyMsg.Challenge)
-
-		// Send VERIFY_RESPONSE
-		responseMsg := &protocol.VerifyResponseMessage{
-			Challenge: verifyMsg.Challenge,
-		}
-
-		respPayload, err := responseMsg.Encode()
-		if err != nil {
-			log.Printf("Failed to encode VERIFY_RESPONSE: %v", err)
-			conn.Close()
-			time.Sleep(60 * time.Second)
-			continue
-		}
-
-		respFrame := &protocol.Frame{
-			Version: 1,
-			Type:    protocol.TypeVerifyResponse,
-			Flags:   0,
-			Payload: respPayload,
-		}
-
-		if err := protocol.EncodeFrame(conn, respFrame); err != nil {
-			log.Printf("Failed to send VERIFY_RESPONSE: %v", err)
-			conn.Close()
-			time.Sleep(60 * time.Second)
-			continue
-		}
-
-		log.Printf("Successfully registered with directory %s", directoryAddr)
-
-		// Start heartbeat loop
-		ticker := time.NewTicker(time.Duration(heartbeatInterval) * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-s.shutdown:
-				log.Printf("Stopping heartbeat to %s (server shutdown)", directoryAddr)
-				conn.Close()
-				return
-
-			case <-ticker.C:
-				// Calculate uptime
-				uptime := uint64(time.Since(startTime).Seconds())
-
-				// Get current user count
-				userCount := s.sessions.CountOnlineUsers()
-
-				// Send HEARTBEAT
-				heartbeatMsg := &protocol.HeartbeatMessage{
-					Hostname:      ourHostname,
-					Port:          ourPort,
-					UserCount:     userCount,
-					UptimeSeconds: uptime,
-				}
-
-				hbPayload, err := heartbeatMsg.Encode()
-				if err != nil {
-					log.Printf("Failed to encode HEARTBEAT: %v", err)
-					goto reconnect
-				}
-
-				hbFrame := &protocol.Frame{
-					Version: 1,
-					Type:    protocol.TypeHeartbeat,
-					Flags:   0,
-					Payload: hbPayload,
-				}
-
-				if err := protocol.EncodeFrame(conn, hbFrame); err != nil {
-					log.Printf("Failed to send HEARTBEAT to %s: %v (reconnecting)", directoryAddr, err)
-					goto reconnect
-				}
-
-				// Wait for HEARTBEAT_ACK
-				conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-				ackFrame, err := protocol.DecodeFrame(conn)
-				if err != nil {
-					log.Printf("Failed to receive HEARTBEAT_ACK from %s: %v (reconnecting)", directoryAddr, err)
-					goto reconnect
-				}
-
-				if ackFrame.Type != protocol.TypeHeartbeatAck {
-					log.Printf("Expected HEARTBEAT_ACK from %s, got 0x%02x", directoryAddr, ackFrame.Type)
-					goto reconnect
-				}
-
-				// Decode ACK to get new interval
-				ackMsg := &protocol.HeartbeatAckMessage{}
-				if err := ackMsg.Decode(ackFrame.Payload); err != nil {
-					log.Printf("Failed to decode HEARTBEAT_ACK: %v", err)
-					goto reconnect
-				}
-
-				// Update interval if changed
-				if ackMsg.HeartbeatInterval != heartbeatInterval {
-					oldInterval := heartbeatInterval
-					heartbeatInterval = ackMsg.HeartbeatInterval
-					log.Printf("Directory %s adjusted heartbeat interval: %ds -> %ds", directoryAddr, oldInterval, heartbeatInterval)
-					ticker.Reset(time.Duration(heartbeatInterval) * time.Second)
-				}
-
-				log.Printf("Heartbeat sent to %s (users: %d, uptime: %ds, next in %ds)", directoryAddr, userCount, uptime, heartbeatInterval)
-			}
-		}
-
-	reconnect:
-		ticker.Stop()
 		conn.Close()
-		log.Printf("Lost connection to directory %s, reconnecting in 60s...", directoryAddr)
-		time.Sleep(60 * time.Second)
+
+		if ackHandled {
+			log.Printf("Registration handshake with directory %s finished; connection closed", directoryAddr)
+		} else {
+			log.Printf("Registration handshake with directory %s finished without explicit ACK; proceeding without heartbeat", directoryAddr)
+		}
+
+		return
+	}
+}
+
+// waitForDirectoryRetry waits for the retry delay unless the server is shutting down.
+func (s *Server) waitForDirectoryRetry() bool {
+	select {
+	case <-s.shutdown:
+		return false
+	case <-time.After(60 * time.Second):
+		return true
 	}
 }
