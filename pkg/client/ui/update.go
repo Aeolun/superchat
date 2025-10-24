@@ -191,6 +191,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingNickname = msg.Nickname
 		return m, nil
 
+	case GoAnonymousMsg:
+		// User chose to browse anonymously instead of authenticating
+		// The nickname is already set on the server - we just reset auth state
+		// and continue using the same nickname (without authentication)
+
+		// Reset auth state
+		m.authState = AuthStateAnonymous
+		m.authTargetNickname = ""
+		m.authAttempts = 0
+		m.authErrorMessage = ""
+		m.authCooldownUntil = time.Time{}
+		m.userID = nil
+		m.userFlags = 0
+		m.state.SetUserID(nil)
+
+		// If we have a pending nickname (server accepted it but we haven't processed NICKNAME_RESPONSE yet),
+		// update to it now so the UI shows the correct nickname
+		if m.pendingNickname != "" {
+			m.nickname = m.pendingNickname
+			m.pendingNickname = ""
+		}
+
+		// Don't send SET_NICKNAME again - it's already set on the server
+		return m, nil
+
 	case modal.ServerSelectedMsg:
 		// User selected a server to connect to
 		return m.handleServerSelected(msg.Server)
@@ -866,30 +891,17 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 			m.statusMessage = fmt.Sprintf("Nickname changed to %s", m.nickname)
 			// DO NOT change m.authState - keep it as AuthStateAuthenticated
 		} else {
-			// Anonymous user set nickname for first time
-			m.statusMessage = fmt.Sprintf("Nickname set to ~%s", m.nickname)
-			m.authState = AuthStateAnonymous
+			// Anonymous user set nickname (may prompt for auth if registered)
+			m.statusMessage = fmt.Sprintf("Nickname set to %s", m.nickname)
+			// Auth state will be determined by USER_INFO response
 		}
 
 		// Close the nickname modal if open
 		m.modalStack.RemoveByType(modal.ModalNicknameChange)
 		m.modalStack.RemoveByType(modal.ModalNicknameSetup)
 	} else {
-		// Check if nickname is registered (V2)
-		if strings.Contains(strings.ToLower(msg.Message), "registered") ||
-			strings.Contains(strings.ToLower(msg.Message), "password") {
-			// Nickname is registered - only show password modal if NOT in directory mode
-			// (directory connections are just for browsing servers, not authenticating)
-			if !m.directoryMode {
-				m.authErrorMessage = ""
-				m.authAttempts = 0
-				m.authCooldownUntil = time.Time{}
-				m.showPasswordModal()
-			}
-		} else {
-			// Other error (invalid nickname, etc.)
-			m.errorMessage = msg.Message
-		}
+		// Nickname rejected (invalid format, banned, etc.)
+		m.errorMessage = msg.Message
 	}
 
 	return m, listenForServerFrames(m.conn, m.connGeneration)
@@ -916,6 +928,22 @@ func (m Model) handleUserInfo(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		if m.logger != nil {
 			m.logger.Printf("[DEBUG] Updated nicknameIsRegistered=%v", m.nicknameIsRegistered)
 		}
+
+		// If this nickname is registered and we're not authenticated, show password modal
+		if msg.IsRegistered && m.authState != AuthStateAuthenticated && !m.directoryMode {
+			// Show password modal if this is our current or pending nickname
+			// (handles race condition where USER_INFO arrives before NICKNAME_RESPONSE)
+			if msg.Nickname == m.nickname || msg.Nickname == m.pendingNickname {
+				m.authTargetNickname = msg.Nickname
+				m.authErrorMessage = ""
+				m.authAttempts = 0
+				m.authCooldownUntil = time.Time{}
+				m.showPasswordModal()
+				if m.logger != nil {
+					m.logger.Printf("[DEBUG] Showing password modal for registered nickname: %s", msg.Nickname)
+				}
+			}
+		}
 	}
 
 	// Force a re-render so the UI updates (footer commands change based on nicknameIsRegistered)
@@ -927,6 +955,11 @@ func (m Model) handleUserInfo(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 // ForceRenderMsg triggers a re-render without any other action
 type ForceRenderMsg struct{}
+
+// GoAnonymousMsg is sent when user chooses to browse anonymously
+type GoAnonymousMsg struct {
+	TargetNickname string // The registered nickname they were trying to use
+}
 
 // handleAuthResponse processes AUTH_RESPONSE
 func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
@@ -954,6 +987,7 @@ func (m Model) handleAuthResponse(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		}
 		m.authAttempts = 0
 		m.authErrorMessage = ""
+		m.authTargetNickname = ""
 
 		// Transition state machine to Ready
 		if m.initStateMachine.OnAuthResponse() {
@@ -1652,11 +1686,19 @@ func (m Model) sendLogout() tea.Cmd {
 
 func (m Model) sendAuthRequest(password []byte) tea.Cmd {
 	return func() tea.Msg {
+		targetNickname := m.authTargetNickname
+		if targetNickname == "" {
+			targetNickname = m.pendingNickname
+		}
+		if targetNickname == "" {
+			targetNickname = m.nickname
+		}
+
 		// Hash password client-side before sending
-		passwordHash := auth.HashPassword(string(password), m.nickname)
+		passwordHash := auth.HashPassword(string(password), targetNickname)
 
 		msg := &protocol.AuthRequestMessage{
-			Nickname: m.nickname,
+			Nickname: targetNickname,
 			Password: passwordHash,
 		}
 		if err := m.conn.SendMessage(protocol.TypeAuthRequest, msg); err != nil {

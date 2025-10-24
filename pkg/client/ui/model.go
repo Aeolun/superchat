@@ -134,6 +134,7 @@ type Model struct {
 	// Input state
 	nickname             string
 	pendingNickname      string  // Nickname we sent to server, waiting for confirmation
+	authTargetNickname   string  // Nickname we're attempting to authenticate as
 	nicknameIsRegistered bool    // True if current nickname belongs to a registered user
 	userID               *uint64 // Set when authenticated (V2), nil for anonymous
 	userFlags            protocol.UserFlags
@@ -1027,8 +1028,19 @@ func (m *Model) showCommandPalette(prefix string) {
 
 // showPasswordModal displays the password authentication modal
 func (m *Model) showPasswordModal() {
+	targetNickname := m.authTargetNickname
+	if targetNickname == "" {
+		targetNickname = m.pendingNickname
+	}
+	if targetNickname == "" {
+		targetNickname = m.nickname
+	}
+
+	m.authTargetNickname = targetNickname
+	m.authState = AuthStatePrompting
+
 	passwordModal := modal.NewPasswordAuthModal(
-		m.nickname,
+		targetNickname,
 		m.authErrorMessage,
 		m.authCooldownUntil,
 		false, // not authenticating initially
@@ -1038,11 +1050,11 @@ func (m *Model) showPasswordModal() {
 			return m.sendAuthRequest(password)
 		},
 		func() tea.Cmd {
-			// Browse anonymously - show nickname setup to pick a different name
-			m.authState = AuthStateAnonymous
-			m.nickname = ""
-			m.showNicknameSetupModal()
-			return nil
+			// Browse anonymously - send message to be handled in Update()
+			// (Can't modify Model directly here due to bubbletea value semantics)
+			return func() tea.Msg {
+				return GoAnonymousMsg{TargetNickname: targetNickname}
+			}
 		},
 	)
 	m.modalStack.Push(passwordModal)
@@ -1071,6 +1083,8 @@ func (m *Model) showNicknameChangeModal() {
 		func(newNickname string) tea.Cmd {
 			// Don't modify m.nickname here due to bubbletea value semantics
 			// It will be updated in handleNicknameResponse when server confirms
+			// But DO set pendingNickname to avoid race condition with server response
+			m.pendingNickname = newNickname
 			m.state.SetLastNickname(newNickname)
 			return tea.Batch(
 				m.sendSetNicknameWith(newNickname),
