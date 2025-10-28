@@ -333,13 +333,9 @@ function validateComputedField(
         }
       }
     } else if (computed.type === "position_of") {
-      // Target should be a type name, not a field - validate it exists in schema.types
-      if (!schema.types[targetRef]) {
-        errors.push({
-          path: `${path} (${field.name})`,
-          message: `Computed field 'position_of' target type '${targetRef}' not found in schema.types`
-        });
-      }
+      // Target must be a field name (position where that field starts in the encoded output)
+      // No specific type requirements - any field can have its position tracked
+      // Note: The target field can appear after the computed field (forward reference)
     }
   }
 }

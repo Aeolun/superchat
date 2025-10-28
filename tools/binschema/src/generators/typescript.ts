@@ -1992,9 +1992,43 @@ function generateEncodeComputedField(
     code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
     code += `${indent}this.writeUint32(${fieldName}_computed, "${endianness}");\n`;
   } else if (computed.type === "position_of") {
-    // TODO: Implement position computation
-    code += `${indent}// TODO: Implement position computation for '${fieldName}'\n`;
-    code += `${indent}this.writeUint32(0, "${endianness}"); // Placeholder\n`;
+    const targetField = computed.target;
+
+    // Compute position: current byte offset + size of this position field
+    code += `${indent}// Computed field '${fieldName}': auto-compute position of '${targetField}'\n`;
+    code += `${indent}const ${fieldName}_computed = this.byteOffset`;
+
+    // Add the size of the position field itself
+    const fieldSizeMap: Record<string, number> = {
+      "uint8": 1,
+      "uint16": 2,
+      "uint32": 4,
+      "uint64": 8
+    };
+
+    const fieldSize = fieldSizeMap[field.type as string] || 0;
+    if (fieldSize > 0) {
+      code += ` + ${fieldSize}`;
+    }
+    code += `;\n`;
+
+    // Write the computed position using appropriate write method
+    switch (field.type) {
+      case "uint8":
+        code += `${indent}this.writeUint8(${fieldName}_computed);\n`;
+        break;
+      case "uint16":
+        code += `${indent}this.writeUint16(${fieldName}_computed, "${endianness}");\n`;
+        break;
+      case "uint32":
+        code += `${indent}this.writeUint32(${fieldName}_computed, "${endianness}");\n`;
+        break;
+      case "uint64":
+        code += `${indent}this.writeUint64(BigInt(${fieldName}_computed), "${endianness}");\n`;
+        break;
+      default:
+        code += `${indent}// TODO: Unsupported position field type: ${field.type}\n`;
+    }
   }
 
   return code;
