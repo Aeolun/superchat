@@ -34,9 +34,21 @@
 
     "DataDescriptor": {
       "sequence": [
-        { "name": "crc32", "type": "uint32" },
-        { "name": "len_body_compressed", "type": "uint32" },
-        { "name": "len_body_uncompressed", "type": "uint32" }
+        {
+          "name": "crc32",
+          "type": "uint32",
+          "description": "CRC32 checksum (must be provided manually - compressed data)"
+        },
+        {
+          "name": "len_body_compressed",
+          "type": "uint32",
+          "description": "Compressed body length (must be provided manually)"
+        },
+        {
+          "name": "len_body_uncompressed",
+          "type": "uint32",
+          "description": "Uncompressed body length (must be provided manually)"
+        }
       ]
     },
 
@@ -48,7 +60,8 @@
           "type": "array",
           "kind": "field_referenced",
           "length_field": "header.len_body_compressed",
-          "items": { "type": "uint8" }
+          "items": { "type": "uint8" },
+          "description": "Compressed file data"
         }
       ]
     },
@@ -59,11 +72,40 @@
         { "name": "flags", "type": "uint16" },
         { "name": "compression_method", "type": "uint16" },
         { "name": "file_mod_time", "type": "uint32", "description": "DOS datetime" },
-        { "name": "crc32", "type": "uint32" },
-        { "name": "len_body_compressed", "type": "uint32" },
-        { "name": "len_body_uncompressed", "type": "uint32" },
-        { "name": "len_file_name", "type": "uint16" },
-        { "name": "len_extra", "type": "uint16" },
+        {
+          "name": "crc32",
+          "type": "uint32",
+          "description": "CRC32 of uncompressed data (must be provided manually)"
+        },
+        {
+          "name": "len_body_compressed",
+          "type": "uint32",
+          "description": "Compressed body length (user must provide - body is in parent LocalFile struct)"
+        },
+        {
+          "name": "len_body_uncompressed",
+          "type": "uint32",
+          "description": "Uncompressed size (must be provided manually)"
+        },
+        {
+          "name": "len_file_name",
+          "type": "uint16",
+          "computed": {
+            "type": "length_of",
+            "target": "file_name",
+            "encoding": "utf8"
+          },
+          "description": "Auto-computed: UTF-8 byte length of file_name"
+        },
+        {
+          "name": "len_extra",
+          "type": "uint16",
+          "computed": {
+            "type": "length_of",
+            "target": "extra"
+          },
+          "description": "Auto-computed: byte length of extra field"
+        },
         {
           "name": "file_name",
           "type": "string",
@@ -88,16 +130,58 @@
         { "name": "flags", "type": "uint16" },
         { "name": "compression_method", "type": "uint16" },
         { "name": "file_mod_time", "type": "uint32", "description": "DOS datetime" },
-        { "name": "crc32", "type": "uint32" },
-        { "name": "len_body_compressed", "type": "uint32" },
-        { "name": "len_body_uncompressed", "type": "uint32" },
-        { "name": "len_file_name", "type": "uint16" },
-        { "name": "len_extra", "type": "uint16" },
-        { "name": "len_comment", "type": "uint16" },
+        {
+          "name": "crc32",
+          "type": "uint32",
+          "description": "CRC32 of uncompressed data (must be provided manually)"
+        },
+        {
+          "name": "len_body_compressed",
+          "type": "uint32",
+          "description": "Compressed size (must be provided manually - references LocalFile)"
+        },
+        {
+          "name": "len_body_uncompressed",
+          "type": "uint32",
+          "description": "Uncompressed size (must be provided manually)"
+        },
+        {
+          "name": "len_file_name",
+          "type": "uint16",
+          "computed": {
+            "type": "length_of",
+            "target": "file_name",
+            "encoding": "utf8"
+          },
+          "description": "Auto-computed: UTF-8 byte length of file_name"
+        },
+        {
+          "name": "len_extra",
+          "type": "uint16",
+          "computed": {
+            "type": "length_of",
+            "target": "extra"
+          },
+          "description": "Auto-computed: byte length of extra field"
+        },
+        {
+          "name": "len_comment",
+          "type": "uint16",
+          "computed": {
+            "type": "length_of",
+            "target": "comment",
+            "encoding": "utf8"
+          },
+          "description": "Auto-computed: UTF-8 byte length of comment"
+        },
         { "name": "disk_number_start", "type": "uint16" },
         { "name": "int_file_attr", "type": "uint16" },
         { "name": "ext_file_attr", "type": "uint32" },
-        { "name": "ofs_local_header", "type": "uint32" },
+        {
+          "name": "ofs_local_header",
+          "type": "uint32",
+          "description": "Offset to local file header (must be provided manually - complex correlation)"
+        },
         {
           "name": "file_name",
           "type": "string",
@@ -128,9 +212,26 @@
         { "name": "disk_of_central_dir", "type": "uint16" },
         { "name": "num_central_dir_entries_on_disk", "type": "uint16" },
         { "name": "num_central_dir_entries_total", "type": "uint16" },
-        { "name": "len_central_dir", "type": "uint32" },
-        { "name": "ofs_central_dir", "type": "uint32" },
-        { "name": "len_comment", "type": "uint16" },
+        {
+          "name": "len_central_dir",
+          "type": "uint32",
+          "description": "Length of central directory (must be provided manually - references earlier sections)"
+        },
+        {
+          "name": "ofs_central_dir",
+          "type": "uint32",
+          "description": "Offset to central directory (must be provided manually - complex correlation)"
+        },
+        {
+          "name": "len_comment",
+          "type": "uint16",
+          "computed": {
+            "type": "length_of",
+            "target": "comment",
+            "encoding": "utf8"
+          },
+          "description": "Auto-computed: UTF-8 byte length of comment"
+        },
         {
           "name": "comment",
           "type": "string",
