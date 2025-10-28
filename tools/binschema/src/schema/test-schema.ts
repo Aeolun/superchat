@@ -18,6 +18,10 @@ export const TestCaseSchema = z.object({
   // Optional for error test cases (which only test decode)
   value: z.any().optional(),
 
+  // Expected decoded value (if different from encoded value)
+  // Used for computed fields where decode output includes fields omitted from encode input
+  decoded_value: z.any().optional(),
+
   // Expected encoded output (provide one or both)
   bytes: z.array(
     z.number().int().min(0).max(255)
@@ -35,19 +39,26 @@ export const TestCaseSchema = z.object({
   // Optional: expect this test to error during decode
   should_error: z.boolean().optional(),
 
+  // Optional: expect this test to error during encode
+  should_error_on_encode: z.boolean().optional(),
+
   // Optional: expected error message (partial match)
   error_message: z.string().optional(),
 }).refine(
   (data) => {
+    // Encoding error tests need value (to try encoding) but not bytes
+    if (data.should_error_on_encode) {
+      return data.value !== undefined;
+    }
     // Normal test cases need value AND (bytes or bits)
     if (!data.should_error) {
       return data.value !== undefined && (data.bytes !== undefined || data.bits !== undefined);
     }
-    // Error test cases only need bytes to try decoding (no value needed)
+    // Decoding error test cases only need bytes to try decoding (no value needed)
     return data.bytes !== undefined;
   },
   {
-    message: "Normal tests need value + (bytes or bits). Error tests need bytes only.",
+    message: "Normal tests need value + (bytes or bits). Encoding error tests need value only. Decoding error tests need bytes only.",
   }
 ).refine(
   (data) => {

@@ -72,6 +72,36 @@ export const ConfigSchema = z.object({
 }).optional();
 export type Config = z.infer<typeof ConfigSchema>;
 
+/**
+ * String encoding
+ */
+const StringEncodingSchema = z.enum([
+  "ascii",  // 7-bit ASCII (one byte per character)
+  "utf8",   // UTF-8 encoding (variable bytes per character)
+]);
+export type StringEncoding = z.infer<typeof StringEncodingSchema>;
+
+/**
+ * Computed field specification
+ *
+ * Computed fields are automatically calculated by the encoder and cannot be set by users.
+ * Phase 1: length_of - compute byte length of target field
+ * Phase 2: crc32_of - compute CRC32 checksum of target field
+ * Phase 3: position_of - compute byte position of target type
+ */
+const ComputedFieldSchema = z.object({
+  type: z.enum(["length_of", "crc32_of", "position_of"]).meta({
+    description: "Type of computation to perform"
+  }),
+  target: z.string().meta({
+    description: "Name of the field or type to compute from (supports dot notation like 'header.data')"
+  }),
+  encoding: StringEncodingSchema.optional().meta({
+    description: "For length_of with string targets: encoding to use for byte length calculation (defaults to field's encoding)"
+  }),
+});
+export type ComputedField = z.infer<typeof ComputedFieldSchema>;
+
 // ============================================================================
 // Field Types
 // ============================================================================
@@ -118,6 +148,9 @@ const Uint8FieldSchema = z.object({
   }),
   type: z.literal("uint8").meta({
     description: "Field type (always 'uint8')"
+  }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
   }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
@@ -171,10 +204,13 @@ const Uint16FieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("uint16").meta({
-    description: "Field type (always 'uint16')"  
+    description: "Field type (always 'uint16')"
   }),
   endianness: EndiannessSchema.optional().meta({
     description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
   }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
@@ -216,10 +252,13 @@ const Uint32FieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("uint32").meta({
-    description: "Field type (always 'uint32')"  
+    description: "Field type (always 'uint32')"
   }),
   endianness: EndiannessSchema.optional().meta({
     description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
   }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
@@ -277,10 +316,13 @@ const Uint64FieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("uint64").meta({
-    description: "Field type (always 'uint64')"  
+    description: "Field type (always 'uint64')"
   }),
   endianness: EndiannessSchema.optional().meta({
     description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
   }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
@@ -346,6 +388,9 @@ const Int8FieldSchema = z.object({
   type: z.literal("int8").meta({
     description: "Field type (always 'int8')"
   }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
+  }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),
@@ -379,10 +424,13 @@ const Int16FieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("int16").meta({
-    description: "Field type (always 'int16')"  
+    description: "Field type (always 'int16')"
   }),
   endianness: EndiannessSchema.optional().meta({
     description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
   }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
@@ -417,10 +465,13 @@ const Int32FieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("int32").meta({
-    description: "Field type (always 'int32')"  
+    description: "Field type (always 'int32')"
   }),
   endianness: EndiannessSchema.optional().meta({
     description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
   }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
@@ -455,10 +506,13 @@ const Int64FieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("int64").meta({
-    description: "Field type (always 'int64')"  
+    description: "Field type (always 'int64')"
   }),
   endianness: EndiannessSchema.optional().meta({
     description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+  }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
   }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
@@ -597,18 +651,11 @@ const ArrayKindSchema = z.enum([
   "length_prefixed", // Length prefix, then elements
   "length_prefixed_items", // Length prefix, then per-item length prefix + elements
   "null_terminated", // Elements until null/zero terminator
+  "signature_terminated", // Elements until specific multi-byte signature value
+  "eof_terminated",  // Elements until end of stream
   "field_referenced", // Length comes from a field decoded earlier
 ]);
 export type ArrayKind = z.infer<typeof ArrayKindSchema>;
-
-/**
- * String encoding
- */
-const StringEncodingSchema = z.enum([
-  "ascii",  // 7-bit ASCII (one byte per character)
-  "utf8",   // UTF-8 encoding (variable bytes per character)
-]);
-export type StringEncoding = z.infer<typeof StringEncodingSchema>;
 
 // ============================================================================
 // Element Types (for array items - no 'name' field required)
@@ -948,7 +995,7 @@ const BackReferenceFieldSchema = BackReferenceElementSchema.extend({
  */
 const ArrayElementSchema = z.object({
   type: z.literal("array").meta({
-    description: "Field type (always 'array')"  
+    description: "Field type (always 'array')"
   }),
   kind: ArrayKindSchema,
   get items() {
@@ -958,6 +1005,9 @@ const ArrayElementSchema = z.object({
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(),
   item_length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed_items: per-item length prefix type
   length_field: z.string().optional(), // For field_referenced: field name to read length from (supports dot notation)
+  terminator_value: z.number().optional(), // For signature_terminated: signature value to stop on
+  terminator_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For signature_terminated: type to peek for terminator
+  terminator_endianness: EndiannessSchema.optional(), // For signature_terminated: endianness of terminator (required for uint16/uint32/uint64)
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
   terminal_variants: z.array(z.string()).optional(), // Optional: variant types that terminate the array (no null terminator after)
@@ -970,10 +1020,11 @@ const ArrayElementSchema = z.object({
     if (data.kind === "length_prefixed") return data.length_type !== undefined;
     if (data.kind === "length_prefixed_items") return data.length_type !== undefined && data.item_length_type !== undefined;
     if (data.kind === "field_referenced") return data.length_field !== undefined;
+    if (data.kind === "signature_terminated") return data.terminator_value !== undefined && data.terminator_type !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field', signature_terminated arrays require 'terminator_value' and 'terminator_type'",
   }
 );
 
@@ -1040,7 +1091,7 @@ const ArrayFieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("array").meta({
-    description: "Field type (always 'array')"  
+    description: "Field type (always 'array')"
   }),
   kind: ArrayKindSchema,
   get items() {
@@ -1050,6 +1101,9 @@ const ArrayFieldSchema = z.object({
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
   item_length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed_items: per-item length prefix type
   length_field: z.string().optional(), // For field_referenced: field name to read length from (supports dot notation like "flags.opcode")
+  terminator_value: z.number().optional(), // For signature_terminated: signature value to stop on
+  terminator_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For signature_terminated: type to peek for terminator
+  terminator_endianness: EndiannessSchema.optional(), // For signature_terminated: endianness of terminator (required for uint16/uint32/uint64)
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
   terminal_variants: z.array(z.string()).optional(), // Optional: variant types that terminate the array (no null terminator after)
@@ -1062,10 +1116,11 @@ const ArrayFieldSchema = z.object({
     if (data.kind === "length_prefixed") return data.length_type !== undefined;
     if (data.kind === "length_prefixed_items") return data.length_type !== undefined && data.item_length_type !== undefined;
     if (data.kind === "field_referenced") return data.length_field !== undefined;
+    if (data.kind === "signature_terminated") return data.terminator_value !== undefined && data.terminator_type !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field', signature_terminated arrays require 'terminator_value' and 'terminator_type'",
   }
 ).meta({
   title: "Array",

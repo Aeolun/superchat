@@ -256,7 +256,44 @@ async function runTestCase(
 ): Promise<{ passed: boolean; failures: TestFailure[] }> {
   const failures: TestFailure[] = [];
 
-  // Handle error test cases (should_error = true)
+  // Handle encoding error test cases (should_error_on_encode = true)
+  if (testCase.should_error_on_encode) {
+    try {
+      const encoder = new EncoderClass();
+      const encoded = encoder.encode(testCase.value);
+
+      // If we got here, encode didn't throw - that's a failure
+      failures.push({
+        description: testCase.description,
+        type: "encode",
+        expected: `Error containing: ${testCase.error_message || "any error"}`,
+        actual: `Encoded successfully to ${Array.from(encoded).length} bytes`,
+        message: "Expected encode to throw an error, but it succeeded",
+      });
+    } catch (error) {
+      // Error was thrown - check if message matches (if error_message specified)
+      if (testCase.error_message) {
+        const errorStr = String(error);
+        if (!errorStr.includes(testCase.error_message)) {
+          failures.push({
+            description: testCase.description,
+            type: "encode",
+            expected: `Error containing: ${testCase.error_message}`,
+            actual: errorStr,
+            message: "Error was thrown but message doesn't match expected",
+          });
+        }
+      }
+      // Otherwise, any error is success
+    }
+
+    return {
+      passed: failures.length === 0,
+      failures,
+    };
+  }
+
+  // Handle decoding error test cases (should_error = true)
   if (testCase.should_error) {
     try {
       if (testCase.bytes) {
@@ -333,13 +370,16 @@ async function runTestCase(
       const decoder = new DecoderClass(new Uint8Array(testCase.bytes));
       const decoded = decoder.decode();
 
-      if (!deepEqual(decoded, testCase.value)) {
+      // Use decoded_value if present (for computed fields), otherwise use value
+      const expectedDecoded = testCase.decoded_value !== undefined ? testCase.decoded_value : testCase.value;
+
+      if (!deepEqual(decoded, expectedDecoded)) {
         failures.push({
           description: testCase.description,
           type: "decode",
-          expected: stringifyWithBigInt(testCase.value),
+          expected: stringifyWithBigInt(expectedDecoded),
           actual: stringifyWithBigInt(decoded),
-          message: "Decoded value does not match original",
+          message: "Decoded value does not match expected",
         });
       }
     }

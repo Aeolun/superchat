@@ -166,6 +166,11 @@ function validateTypeDef(
     validateField(field, `types.${typeName}.${fieldsKey}[${i}]`, schema, errors, typeName, fields, typeName);
   }
 
+  // NOTE: Computed fields CAN be referenced by length_field - that's their purpose!
+  // The encoder will automatically calculate the computed field values.
+  // Computed fields are designed to work with field_referenced arrays/strings
+  // where the length is automatically calculated during encoding.
+
   // Validate instances (position fields)
   const typeDefAny = typeDef as any;
   if (typeDefAny.instances && Array.isArray(typeDefAny.instances)) {
@@ -196,6 +201,147 @@ function isNumericType(fieldType: string): boolean {
     "bit"  // bit fields can also be used as positions
   ];
   return numericTypes.includes(fieldType);
+}
+
+/**
+ * Check if a field type is an unsigned integer (for length_of computed fields)
+ */
+function isUnsignedIntType(fieldType: string): boolean {
+  const unsignedTypes = ["uint8", "uint16", "uint32", "uint64"];
+  return unsignedTypes.includes(fieldType);
+}
+
+/**
+ * Validate a computed field
+ */
+function validateComputedField(
+  field: any,
+  path: string,
+  schema: BinarySchema,
+  errors: ValidationError[],
+  typeName: string,
+  parentFields: Field[]
+): void {
+  const computed = field.computed;
+
+  // Validate that field type is compatible with computation type
+  if (computed.type === "length_of") {
+    // length_of requires unsigned integer type
+    if (!isUnsignedIntType(field.type)) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'length_of' must have unsigned integer type (uint8, uint16, uint32, uint64), got '${field.type}'`
+      });
+    }
+  } else if (computed.type === "crc32_of") {
+    // crc32_of requires uint32 type
+    if (field.type !== "uint32") {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'crc32_of' must have type 'uint32', got '${field.type}'`
+      });
+    }
+  } else if (computed.type === "position_of") {
+    // position_of requires unsigned integer type (to hold byte positions)
+    if (!isUnsignedIntType(field.type)) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'position_of' must have unsigned integer type (uint8, uint16, uint32, uint64), got '${field.type}'`
+      });
+    }
+  }
+
+  // Validate target field exists
+  if (!computed.target) {
+    errors.push({
+      path: `${path} (${field.name})`,
+      message: `Computed field missing 'target' property`
+    });
+    return;
+  }
+
+  // Handle dot notation (e.g., "header.file_name")
+  const targetRef = computed.target;
+  const dotIndex = targetRef.indexOf('.');
+
+  if (dotIndex > 0) {
+    // Nested field reference - for Phase 1, we'll keep this simple
+    // Full validation of nested references will be added when needed
+    const fieldName = targetRef.substring(0, dotIndex);
+    const subFieldName = targetRef.substring(dotIndex + 1);
+
+    const referencedField = parentFields.find((f: any) => f.name === fieldName);
+    if (!referencedField) {
+      const fieldNames = parentFields.map((f: any) => f.name).join(', ');
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field target '${fieldName}' not found in type '${typeName}' (available fields: ${fieldNames})`
+      });
+    }
+    // TODO: Validate sub-field exists and has correct type (when implementing nested validation)
+  } else {
+    // Simple field reference
+    const targetField = parentFields.find((f: any) => f.name === targetRef);
+
+    if (!targetField) {
+      const fieldNames = parentFields.map((f: any) => f.name).join(', ');
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field target '${targetRef}' not found in type '${typeName}' (available fields: ${fieldNames})`
+      });
+      return;
+    }
+
+    // Validate target type based on computation type
+    if (computed.type === "length_of") {
+      const targetType = (targetField as any).type;
+
+      // Target must be array or string
+      if (targetType !== "array" && targetType !== "string") {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `Computed field 'length_of' target '${targetRef}' must be array or string, got '${targetType}'`
+        });
+      }
+
+      // If target is a string and encoding is specified, validate encoding
+      if (targetType === "string" && computed.encoding) {
+        const targetEncoding = (targetField as any).encoding;
+        if (!targetEncoding) {
+          errors.push({
+            path: `${path} (${field.name})`,
+            message: `Computed field specifies encoding '${computed.encoding}' but target string '${targetRef}' has no encoding`
+          });
+        }
+      }
+    } else if (computed.type === "crc32_of") {
+      const targetType = (targetField as any).type;
+
+      // Target must be array of uint8 (byte array)
+      if (targetType !== "array") {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `Computed field 'crc32_of' target '${targetRef}' must be array, got '${targetType}'`
+        });
+      } else {
+        const itemType = (targetField as any).items?.type;
+        if (itemType !== "uint8") {
+          errors.push({
+            path: `${path} (${field.name})`,
+            message: `Computed field 'crc32_of' target '${targetRef}' must be array of uint8 (byte array), got array of '${itemType}'`
+          });
+        }
+      }
+    } else if (computed.type === "position_of") {
+      // Target should be a type name, not a field - validate it exists in schema.types
+      if (!schema.types[targetRef]) {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `Computed field 'position_of' target type '${targetRef}' not found in schema.types`
+        });
+      }
+    }
+  }
 }
 
 /**
@@ -798,6 +944,12 @@ function validateField(
   }
 
   const fieldType = field.type;
+
+  // Validate computed fields if present
+  const fieldAny = field as any;
+  if (fieldAny.computed && typeName && parentFields) {
+    validateComputedField(fieldAny, path, schema, errors, typeName, parentFields);
+  }
 
   // Check array fields have items defined
   if (fieldType === "array") {

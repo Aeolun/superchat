@@ -64,7 +64,9 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
   const addTraceLogs = options?.addTraceLogs || false;
 
   // Import runtime library (from same directory)
-  let code = `import { BitStreamEncoder, BitStreamDecoder, Endianness } from "./BitStream.js";\n\n`;
+  let code = `import { BitStreamEncoder, Endianness } from "./BitStream.js";\n`;
+  code += `import { SeekableBitStreamDecoder } from "./seekable-bit-stream.js";\n`;
+  code += `import { createReader } from "./binary-reader.js";\n\n`;
 
   // Helper utilities for safe conditional evaluation (avoid runtime errors during decode/encode)
   code += `function __bs_get<T>(expr: () => T): T | undefined {\n`;
@@ -1339,6 +1341,23 @@ function generateTypeCode(
 }
 
 /**
+ * Generate field access path from dot notation string
+ * Converts "header.offset" to "this.header.offset"
+ * Converts "_root.header.offset" to "this._root.header.offset"
+ */
+function generateFieldAccessPath(path: string): string {
+  const parts = path.split('.');
+
+  if (parts[0] === '_root') {
+    // Root reference: "_root.header.offset" -> "this._root.header.offset"
+    return 'this._root.' + parts.slice(1).join('.');
+  } else {
+    // Local reference: "header.offset" -> "this.header.offset"
+    return 'this.' + parts.join('.');
+  }
+}
+
+/**
  * Generate instance class with lazy getters for position fields
  */
 function generateInstanceClass(
@@ -1355,6 +1374,7 @@ function generateInstanceClass(
   let code = `class ${typeName}Instance implements ${typeName} {\n`;
   code += `  private _decoder!: BitStreamDecoder;\n`;
   code += `  private _lazyCache!: Map<string, any>;\n`;
+  code += `  private _evaluating!: Set<string>;\n`;
   code += `  private _root!: any;\n\n`;
 
   // Add sequence field properties
@@ -1369,6 +1389,7 @@ function generateInstanceClass(
   code += `    // Make internal properties non-enumerable to avoid cyclic JSON issues\n`;
   code += `    Object.defineProperty(this, '_decoder', { value: decoder, enumerable: false });\n`;
   code += `    Object.defineProperty(this, '_lazyCache', { value: new Map(), enumerable: false });\n`;
+  code += `    Object.defineProperty(this, '_evaluating', { value: new Set(), enumerable: false });\n`;
   code += `    Object.defineProperty(this, '_root', { value: root || this, enumerable: false });\n\n`;
 
   // Copy sequence data to properties
@@ -1388,7 +1409,13 @@ function generateInstanceClass(
     code += `    Object.defineProperty(this, '${instance.name}', {\n`;
     code += `      enumerable: true,\n`;
     code += `      get: () => {\n`;
+    code += `        // Check for circular reference\n`;
+    code += `        if (this._evaluating.has('${instance.name}')) {\n`;
+    code += `          throw new Error(\`Circular reference detected: field '${instance.name}' references itself during evaluation\`);\n`;
+    code += `        }\n\n`;
     code += `        if (!this._lazyCache.has('${instance.name}')) {\n`;
+    code += `          this._evaluating.add('${instance.name}');\n`;
+    code += `          try {\n`;
 
     // Resolve position
     const position = instance.position;
@@ -1402,8 +1429,12 @@ function generateInstanceClass(
         code += `          const position = ${position};\n`;
       }
     } else {
-      // Field reference - resolve from sequence data or other instance
-      code += `          const position = this._resolveFieldReference('${position}');\n`;
+      // Field reference - generate direct property access
+      const accessPath = generateFieldAccessPath(position);
+      code += `          const position = ${accessPath};\n`;
+      code += `          if (typeof position !== 'number' && typeof position !== 'bigint') {\n`;
+      code += `            throw new Error(\`Field reference '${position}' does not resolve to a numeric value (got \${typeof position})\`);\n`;
+      code += `          }\n`;
     }
 
     // Validate alignment if specified
@@ -1419,32 +1450,18 @@ function generateInstanceClass(
 
     // Decode the type at that position
     // Pass root decoder so nested position fields can seek in the full file
-    code += `          const decoder = new ${instance.type}Decoder(this._decoder['bytes'].slice(position), { _root: this._root, _rootDecoder: this._decoder });\n`;
-    code += `          const value = decoder.decode();\n`;
-    code += `          this._lazyCache.set('${instance.name}', value);\n`;
+    code += `            const decoder = new ${instance.type}Decoder(this._decoder['bytes'].slice(position), { _root: this._root, _rootDecoder: this._decoder });\n`;
+    code += `            const value = decoder.decode();\n`;
+    code += `            this._lazyCache.set('${instance.name}', value);\n`;
+    code += `          } finally {\n`;
+    code += `            this._evaluating.delete('${instance.name}');\n`;
+    code += `          }\n`;
     code += `        }\n`;
     code += `        return this._lazyCache.get('${instance.name}')!;\n`;
     code += `      }\n`;
     code += `    });\n`;
   }
 
-  code += `  }\n\n`;
-
-  // Helper method to resolve field references (supports dot notation)
-  code += `  private _resolveFieldReference(path: string): number {\n`;
-  code += `    const parts = path.split('.');\n`;
-  code += `    let current: any = parts[0] === '_root' ? this._root : this;\n`;
-  code += `    const startIndex = parts[0] === '_root' ? 1 : 0;\n\n`;
-  code += `    for (let i = startIndex; i < parts.length; i++) {\n`;
-  code += `      current = current[parts[i]];\n`;
-  code += `      if (current === undefined) {\n`;
-  code += `        throw new Error(\`Field reference '\${path}' not found (failed at '\${parts.slice(0, i + 1).join('.')}')\`);\n`;
-  code += `      }\n`;
-  code += `    }\n\n`;
-  code += `    if (typeof current !== 'number' && typeof current !== 'bigint') {\n`;
-  code += `      throw new Error(\`Field reference '\${path}' does not resolve to a numeric value (got \${typeof current})\`);\n`;
-  code += `    }\n\n`;
-  code += `    return Number(current);\n`;
   code += `  }\n`;
   code += `}`;
 
@@ -1608,9 +1625,10 @@ function generateTypeAliasDecoder(
   globalEndianness: Endianness,
   globalBitOrder: string
 ): string {
-  let code = `export class ${typeName}Decoder extends BitStreamDecoder {\n`;
-  code += `  constructor(bytes: Uint8Array | number[]) {\n`;
-  code += `    super(bytes, "${globalBitOrder}");\n`;
+  let code = `export class ${typeName}Decoder extends SeekableBitStreamDecoder {\n`;
+  code += `  constructor(input: Uint8Array | number[] | string) {\n`;
+  code += `    const reader = createReader(input);\n`;
+  code += `    super(reader, "${globalBitOrder}");\n`;
   code += `  }\n\n`;
   code += `  decode(): ${typeName} {\n`;
 
@@ -1661,8 +1679,15 @@ function generateInterface(typeName: string, typeDef: TypeDef, schema: BinarySch
   let code = generateJSDoc(typeDefAny.description);
   code += `export interface ${typeName} {\n`;
 
-  // Add sequence fields
+  // Add sequence fields (skip computed fields - they are output-only)
   for (const field of fields) {
+    const fieldAny = field as any;
+
+    // Skip computed fields in interface - users cannot provide them as input
+    if (fieldAny.computed) {
+      continue;
+    }
+
     const fieldType = getFieldTypeScriptType(field, schema);
     const optional = isFieldConditional(field) ? "?" : "";
 
@@ -1873,6 +1898,18 @@ function generateEncoder(
   code += `  encode(value: ${typeName}): Uint8Array {\n`;
   code += `    // Reset compression dictionary for each encode\n`;
   code += `    this.compressionDict.clear();\n\n`;
+
+  // Validate: error if user provides computed fields
+  const computedFields = fields.filter(f => (f as any).computed);
+  if (computedFields.length > 0) {
+    code += `    // Validate: error if user bypassed TypeScript and provided computed fields\n`;
+    for (const field of computedFields) {
+      code += `    if ((value as any).${field.name} !== undefined) {\n`;
+      code += `      throw new Error("Field '${field.name}' is computed and cannot be set manually");\n`;
+      code += `    }\n`;
+    }
+    code += `\n`;
+  }
 
   for (const field of fields) {
     code += generateEncodeField(field, schema, globalEndianness, "    ");
@@ -2496,6 +2533,18 @@ function generateEncodeTypeReference(
   // Composite type - encode all fields
   const fields = getTypeFields(typeDef);
   let code = "";
+
+  // Add runtime validation for computed fields in nested struct
+  const computedFields = fields.filter(f => (f as any).computed);
+  if (computedFields.length > 0) {
+    code += `${indent}// Runtime validation: reject computed fields in nested struct\n`;
+    for (const field of computedFields) {
+      code += `${indent}if ((${valuePath} as any).${field.name} !== undefined) {\n`;
+      code += `${indent}  throw new Error("Field '${field.name}' is computed and cannot be set manually");\n`;
+      code += `${indent}}\n`;
+    }
+  }
+
   for (const field of fields) {
     const newValuePath = `${valuePath}.${field.name}`;
     code += generateEncodeFieldCore(field, schema, globalEndianness, newValuePath, indent);
@@ -2519,9 +2568,10 @@ function generateDecoder(
   const typeDefAny = typeDef as any;
   const hasInstances = typeDefAny.instances && Array.isArray(typeDefAny.instances) && typeDefAny.instances.length > 0;
 
-  let code = `export class ${typeName}Decoder extends BitStreamDecoder {\n`;
-  code += `  constructor(bytes: Uint8Array | number[], private context?: any) {\n`;
-  code += `    super(bytes, "${globalBitOrder}");\n`;
+  let code = `export class ${typeName}Decoder extends SeekableBitStreamDecoder {\n`;
+  code += `  constructor(input: Uint8Array | number[] | string, private context?: any) {\n`;
+  code += `    const reader = createReader(input);\n`;
+  code += `    super(reader, "${globalBitOrder}");\n`;
   code += `  }\n\n`;
   code += `  decode(): ${typeName} {\n`;
   if (addTraceLogs) {
@@ -2571,7 +2621,10 @@ function generateDecoderWithLazyFields(
 
   // Create class instance with lazy getters
   code += `\n${indent}// Create instance with lazy getters for position fields\n`;
-  code += `${indent}const instance = new ${typeName}Instance(this, sequenceData);\n`;
+  code += `${indent}// Pass root decoder (if available from context) so nested position fields can seek in full byte array\n`;
+  code += `${indent}const decoder = this.context?._rootDecoder || this;\n`;
+  code += `${indent}const root = this.context?._root;\n`;
+  code += `${indent}const instance = new ${typeName}Instance(decoder, sequenceData, root);\n`;
   code += `${indent}return instance as ${typeName};\n`;
 
   return code;
@@ -3135,12 +3188,36 @@ function generateDecodeArray(
       code += `${indent}  this.byteOffset--;\n`;
       // Fall through to normal item decoding below
     }
+  } else if (field.kind === "signature_terminated") {
+    // For signature-terminated arrays, peek ahead to check for terminator value
+    const terminatorValue = (field as any).terminator_value;
+    const terminatorType = (field as any).terminator_type;
+    const terminatorEndianness = (field as any).terminator_endianness || globalEndianness;
+
+    if (terminatorValue === undefined || terminatorType === undefined) {
+      throw new Error(`signature_terminated array '${field.name}' requires terminator_value and terminator_type`);
+    }
+
+    // Generate peek method name based on terminator type
+    const peekMethod = `peek${terminatorType.charAt(0).toUpperCase() + terminatorType.slice(1)}`;
+    const endiannessArg = terminatorType !== "uint8" ? `"${terminatorEndianness}"` : "";
+
+    code += `${indent}while (true) {\n`;
+    code += `${indent}  // Peek ahead to check for terminator signature\n`;
+    code += `${indent}  const signature = this.${peekMethod}(${endiannessArg});\n`;
+    code += `${indent}  if (signature === ${terminatorValue}) break;\n`;
+    // Fall through to normal item decoding below (inside the loop)
+  } else if (field.kind === "eof_terminated") {
+    // For EOF-terminated arrays, read items until end of stream
+    code += `${indent}while (this.byteOffset < this.bytes.length) {\n`;
+    code += `${indent}  try {\n`;
+    // Fall through to normal item decoding below (inside try block)
   }
 
   // Safety check for items field
   if (!field.items || typeof field.items !== 'object' || !('type' in field.items)) {
     code += `${indent}  // ERROR: Array items undefined\n`;
-    if (field.kind === "null_terminated") {
+    if (field.kind === "null_terminated" || field.kind === "signature_terminated" || field.kind === "eof_terminated") {
       code += `${indent}}\n`;
     } else {
       code += `${indent}}\n`;
@@ -3174,6 +3251,17 @@ function generateDecodeArray(
       code += `${indent}    break;\n`;
       code += `${indent}  }\n`;
     }
+  }
+
+  // Close eof_terminated try-catch block
+  if (field.kind === "eof_terminated") {
+    code += `${indent}  } catch (error) {\n`;
+    code += `${indent}    // EOF reached - stop reading items\n`;
+    code += `${indent}    if (error instanceof Error && error.message.includes('Unexpected end of stream')) {\n`;
+    code += `${indent}      break;\n`;
+    code += `${indent}    }\n`;
+    code += `${indent}    throw error; // Re-throw other errors\n`;
+    code += `${indent}  }\n`;
   }
 
   code += `${indent}}\n`;
