@@ -260,8 +260,25 @@ function validateComputedField(
     return;
   }
 
-  // Handle dot notation (e.g., "header.file_name")
+  // Handle cross-struct references
   const targetRef = computed.target;
+
+  // Check for parent reference (../)
+  if (targetRef.startsWith('../')) {
+    // Parent field reference - cannot validate at schema level
+    // Will be validated at code generation time when we know the parent context
+    // Just check syntax is valid
+    const fieldPath = targetRef.substring(3); // Remove "../"
+    if (!fieldPath || fieldPath.trim() === '') {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Invalid parent reference syntax: '${targetRef}' (expected format: ../field_name)`
+      });
+    }
+    return; // Skip further validation - will be checked at code generation
+  }
+
+  // Handle dot notation (e.g., "header.file_name")
   const dotIndex = targetRef.indexOf('.');
 
   if (dotIndex > 0) {
@@ -1011,27 +1028,36 @@ function validateField(
                   message: `length_field '${fieldName}' comes after this array (forward reference not allowed)`,
                 });
               } else {
-                // Verify the field is a bitfield and the sub-field exists
+                // Check if it's a bitfield or struct type
                 const referencedField = availableFields[referencedFieldIndex] as any;
-                if (referencedField.type !== 'bitfield') {
-                  errors.push({
-                    path: `${path} (${field.name})`,
-                    message: `length_field '${fieldName}' is not a bitfield (cannot reference sub-field '${subFieldName}')`,
-                  });
-                } else if (!referencedField.fields || !Array.isArray(referencedField.fields)) {
-                  errors.push({
-                    path: `${path} (${field.name})`,
-                    message: `Bitfield '${fieldName}' has no fields array`,
-                  });
-                } else {
-                  const bitfieldSubField = referencedField.fields.find((bf: any) => bf.name === subFieldName);
-                  if (!bitfieldSubField) {
-                    const availableBitfields = referencedField.fields.map((bf: any) => bf.name).join(', ');
+
+                if (referencedField.type === 'bitfield') {
+                  // Bitfield sub-field reference
+                  if (!referencedField.fields || !Array.isArray(referencedField.fields)) {
                     errors.push({
                       path: `${path} (${field.name})`,
-                      message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableBitfields})`,
+                      message: `Bitfield '${fieldName}' has no fields array`,
                     });
+                  } else {
+                    const bitfieldSubField = referencedField.fields.find((bf: any) => bf.name === subFieldName);
+                    if (!bitfieldSubField) {
+                      const availableBitfields = referencedField.fields.map((bf: any) => bf.name).join(', ');
+                      errors.push({
+                        path: `${path} (${field.name})`,
+                        message: `Bitfield sub-field '${subFieldName}' not found in '${fieldName}' (available: ${availableBitfields})`,
+                      });
+                    }
                   }
+                } else if (schema.types[referencedField.type]) {
+                  // Struct type - allow referencing fields within the nested struct
+                  // We'll validate at code generation time that the sub-field exists
+                  // For now, just accept the syntax
+                } else {
+                  // Not a bitfield or struct type
+                  errors.push({
+                    path: `${path} (${field.name})`,
+                    message: `length_field '${fieldName}' must be a bitfield or struct type to reference sub-field '${subFieldName}', got '${referencedField.type}'`,
+                  });
                 }
               }
             } else {

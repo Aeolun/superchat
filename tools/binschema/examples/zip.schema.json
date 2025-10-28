@@ -54,12 +54,21 @@
 
     "LocalFile": {
       "sequence": [
+        {
+          "name": "len_body",
+          "type": "uint32",
+          "computed": {
+            "type": "length_of",
+            "target": "body"
+          },
+          "description": "Auto-computed: length of body"
+        },
         { "name": "header", "type": "LocalFileHeader" },
         {
           "name": "body",
           "type": "array",
           "kind": "field_referenced",
-          "length_field": "header.len_body_compressed",
+          "length_field": "len_body",
           "items": { "type": "uint8" },
           "description": "Compressed file data"
         }
