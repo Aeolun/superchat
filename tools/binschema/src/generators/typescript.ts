@@ -66,7 +66,8 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
   // Import runtime library (from same directory)
   let code = `import { BitStreamEncoder, Endianness } from "./BitStream.js";\n`;
   code += `import { SeekableBitStreamDecoder } from "./seekable-bit-stream.js";\n`;
-  code += `import { createReader } from "./binary-reader.js";\n\n`;
+  code += `import { createReader } from "./binary-reader.js";\n`;
+  code += `import { crc32 } from "./crc32.js";\n\n`;
 
   // Helper utilities for safe conditional evaluation (avoid runtime errors during decode/encode)
   code += `function __bs_get<T>(expr: () => T): T | undefined {\n`;
@@ -1983,9 +1984,13 @@ function generateEncodeComputedField(
         code += `${indent}// TODO: Unsupported computed field type: ${field.type}\n`;
     }
   } else if (computed.type === "crc32_of") {
-    // TODO: Implement CRC32 computation
-    code += `${indent}// TODO: Implement CRC32 computation for '${fieldName}'\n`;
-    code += `${indent}this.writeUint32(0, "${endianness}"); // Placeholder\n`;
+    const targetField = computed.target;
+    const targetPath = `value.${targetField}`;
+
+    // Compute CRC32 checksum
+    code += `${indent}// Computed field '${fieldName}': auto-compute CRC32 of '${targetField}'\n`;
+    code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
+    code += `${indent}this.writeUint32(${fieldName}_computed, "${endianness}");\n`;
   } else if (computed.type === "position_of") {
     // TODO: Implement position computation
     code += `${indent}// TODO: Implement position computation for '${fieldName}'\n`;
