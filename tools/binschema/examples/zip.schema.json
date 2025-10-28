@@ -6,123 +6,137 @@
     "ZipArchive": {
       "sequence": [
         {
-          "name": "local_files",
+          "name": "sections",
           "type": "array",
-          "kind": "terminated",
-          "terminator": "end_of_central_dir_signature",
-          "items": { "type": "LocalFileRecord" }
-        }
-      ],
-      "instances": [
-        {
-          "name": "end_of_central_dir",
-          "type": "EndOfCentralDir",
-          "position": -22,
-          "size": 22
-        },
-        {
-          "name": "central_directory",
-          "type": "CentralDirectory",
-          "position": "end_of_central_dir.central_dir_offset",
-          "size": "end_of_central_dir.central_dir_size"
+          "kind": "eof_terminated",
+          "items": { "type": "PkSection" }
         }
       ]
     },
 
-    "LocalFileRecord": {
+    "PkSection": {
       "sequence": [
-        { "name": "signature", "type": "uint32" },
+        { "name": "magic", "type": "uint16", "description": "Always 'PK' (0x4b50)" },
+        { "name": "section_type", "type": "uint16" },
+        {
+          "name": "body",
+          "type": "discriminated_union",
+          "discriminator": { "field": "section_type" },
+          "variants": [
+            { "when": "value == 0x0201", "type": "CentralDirEntry", "description": "Central directory entry" },
+            { "when": "value == 0x0403", "type": "LocalFile", "description": "Local file header + data" },
+            { "when": "value == 0x0605", "type": "EndOfCentralDir", "description": "End of central directory" },
+            { "when": "value == 0x0807", "type": "DataDescriptor", "description": "Data descriptor" }
+          ]
+        }
+      ]
+    },
+
+    "DataDescriptor": {
+      "sequence": [
+        { "name": "crc32", "type": "uint32" },
+        { "name": "len_body_compressed", "type": "uint32" },
+        { "name": "len_body_uncompressed", "type": "uint32" }
+      ]
+    },
+
+    "LocalFile": {
+      "sequence": [
+        { "name": "header", "type": "LocalFileHeader" },
+        {
+          "name": "body",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "header.len_body_compressed",
+          "items": { "type": "uint8" }
+        }
+      ]
+    },
+
+    "LocalFileHeader": {
+      "sequence": [
         { "name": "version", "type": "uint16" },
         { "name": "flags", "type": "uint16" },
-        { "name": "compression", "type": "uint16" },
-        { "name": "mod_time", "type": "uint16" },
-        { "name": "mod_date", "type": "uint16" },
+        { "name": "compression_method", "type": "uint16" },
+        { "name": "file_mod_time", "type": "uint32", "description": "DOS datetime" },
         { "name": "crc32", "type": "uint32" },
-        { "name": "compressed_size", "type": "uint32" },
-        { "name": "uncompressed_size", "type": "uint32" },
-        { "name": "filename_length", "type": "uint16" },
-        { "name": "extra_length", "type": "uint16" },
+        { "name": "len_body_compressed", "type": "uint32" },
+        { "name": "len_body_uncompressed", "type": "uint32" },
+        { "name": "len_file_name", "type": "uint16" },
+        { "name": "len_extra", "type": "uint16" },
         {
-          "name": "filename",
+          "name": "file_name",
           "type": "string",
-          "kind": "fixed",
-          "length_field": "filename_length",
+          "kind": "field_referenced",
+          "length_field": "len_file_name",
           "encoding": "utf8"
         },
         {
           "name": "extra",
           "type": "array",
-          "kind": "fixed",
-          "length_field": "extra_length",
-          "items": { "type": "uint8" }
-        },
-        {
-          "name": "compressed_data",
-          "type": "array",
-          "kind": "fixed",
-          "length_field": "compressed_size",
-          "items": { "type": "uint8" }
-        }
-      ]
-    },
-
-    "EndOfCentralDir": {
-      "sequence": [
-        { "name": "signature", "type": "uint32" },
-        { "name": "disk_number", "type": "uint16" },
-        { "name": "disk_with_cd", "type": "uint16" },
-        { "name": "disk_entries", "type": "uint16" },
-        { "name": "total_entries", "type": "uint16" },
-        { "name": "central_dir_size", "type": "uint32" },
-        { "name": "central_dir_offset", "type": "uint32" },
-        { "name": "comment_length", "type": "uint16" }
-      ]
-    },
-
-    "CentralDirectory": {
-      "sequence": [
-        {
-          "name": "entries",
-          "type": "array",
           "kind": "field_referenced",
-          "length_field": "_root.end_of_central_dir.total_entries",
-          "items": { "type": "CentralDirEntry" }
+          "length_field": "len_extra",
+          "items": { "type": "uint8" }
         }
       ]
     },
 
     "CentralDirEntry": {
       "sequence": [
-        { "name": "signature", "type": "uint32" },
         { "name": "version_made_by", "type": "uint16" },
-        { "name": "version_needed", "type": "uint16" },
+        { "name": "version_needed_to_extract", "type": "uint16" },
         { "name": "flags", "type": "uint16" },
-        { "name": "compression", "type": "uint16" },
-        { "name": "mod_time", "type": "uint16" },
-        { "name": "mod_date", "type": "uint16" },
+        { "name": "compression_method", "type": "uint16" },
+        { "name": "file_mod_time", "type": "uint32", "description": "DOS datetime" },
         { "name": "crc32", "type": "uint32" },
-        { "name": "compressed_size", "type": "uint32" },
-        { "name": "uncompressed_size", "type": "uint32" },
-        { "name": "filename_length", "type": "uint16" },
-        { "name": "extra_length", "type": "uint16" },
-        { "name": "comment_length", "type": "uint16" },
-        { "name": "disk_number", "type": "uint16" },
-        { "name": "internal_attrs", "type": "uint16" },
-        { "name": "external_attrs", "type": "uint32" },
-        { "name": "local_header_offset", "type": "uint32" },
+        { "name": "len_body_compressed", "type": "uint32" },
+        { "name": "len_body_uncompressed", "type": "uint32" },
+        { "name": "len_file_name", "type": "uint16" },
+        { "name": "len_extra", "type": "uint16" },
+        { "name": "len_comment", "type": "uint16" },
+        { "name": "disk_number_start", "type": "uint16" },
+        { "name": "int_file_attr", "type": "uint16" },
+        { "name": "ext_file_attr", "type": "uint32" },
+        { "name": "ofs_local_header", "type": "uint32" },
         {
-          "name": "filename",
+          "name": "file_name",
           "type": "string",
-          "kind": "fixed",
-          "length_field": "filename_length",
+          "kind": "field_referenced",
+          "length_field": "len_file_name",
+          "encoding": "utf8"
+        },
+        {
+          "name": "extra",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "len_extra",
+          "items": { "type": "uint8" }
+        },
+        {
+          "name": "comment",
+          "type": "string",
+          "kind": "field_referenced",
+          "length_field": "len_comment",
           "encoding": "utf8"
         }
-      ],
-      "instances": [
+      ]
+    },
+
+    "EndOfCentralDir": {
+      "sequence": [
+        { "name": "disk_of_end_of_central_dir", "type": "uint16" },
+        { "name": "disk_of_central_dir", "type": "uint16" },
+        { "name": "num_central_dir_entries_on_disk", "type": "uint16" },
+        { "name": "num_central_dir_entries_total", "type": "uint16" },
+        { "name": "len_central_dir", "type": "uint32" },
+        { "name": "ofs_central_dir", "type": "uint32" },
+        { "name": "len_comment", "type": "uint16" },
         {
-          "name": "local_file",
-          "type": "LocalFileRecord",
-          "position": "local_header_offset"
+          "name": "comment",
+          "type": "string",
+          "kind": "field_referenced",
+          "length_field": "len_comment",
+          "encoding": "utf8"
         }
       ]
     }

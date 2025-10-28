@@ -1923,6 +1923,79 @@ function generateEncoder(
 }
 
 /**
+ * Generate encoding code for computed field
+ * Computes the value and writes it instead of reading from input
+ */
+function generateEncodeComputedField(
+  field: Field,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  indent: string
+): string {
+  if (!('type' in field)) return "";
+
+  const fieldAny = field as any;
+  const computed = fieldAny.computed;
+  const fieldName = field.name;
+
+  const endianness = 'endianness' in field && field.endianness
+    ? field.endianness
+    : globalEndianness;
+
+  let code = "";
+
+  // Generate computation based on computed field type
+  if (computed.type === "length_of") {
+    const targetField = computed.target;
+    const targetPath = `value.${targetField}`;
+
+    // Compute the length value
+    code += `${indent}// Computed field '${fieldName}': auto-compute length_of '${targetField}'\n`;
+    code += `${indent}let ${fieldName}_computed: number;\n`;
+
+    // Check if encoding is specified (for string byte length)
+    if (computed.encoding) {
+      // String byte length with specific encoding
+      code += `${indent}{\n`;
+      code += `${indent}  const encoder = new TextEncoder();\n`;
+      code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
+      code += `${indent}}\n`;
+    } else {
+      // Array element count or string character count
+      code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
+    }
+
+    // Write the computed value using appropriate write method
+    switch (field.type) {
+      case "uint8":
+        code += `${indent}this.writeUint8(${fieldName}_computed);\n`;
+        break;
+      case "uint16":
+        code += `${indent}this.writeUint16(${fieldName}_computed, "${endianness}");\n`;
+        break;
+      case "uint32":
+        code += `${indent}this.writeUint32(${fieldName}_computed, "${endianness}");\n`;
+        break;
+      case "uint64":
+        code += `${indent}this.writeUint64(BigInt(${fieldName}_computed), "${endianness}");\n`;
+        break;
+      default:
+        code += `${indent}// TODO: Unsupported computed field type: ${field.type}\n`;
+    }
+  } else if (computed.type === "crc32_of") {
+    // TODO: Implement CRC32 computation
+    code += `${indent}// TODO: Implement CRC32 computation for '${fieldName}'\n`;
+    code += `${indent}this.writeUint32(0, "${endianness}"); // Placeholder\n`;
+  } else if (computed.type === "position_of") {
+    // TODO: Implement position computation
+    code += `${indent}// TODO: Implement position computation for '${fieldName}'\n`;
+    code += `${indent}this.writeUint32(0, "${endianness}"); // Placeholder\n`;
+  }
+
+  return code;
+}
+
+/**
  * Generate encoding code for a single field
  */
 function generateEncodeField(
@@ -1933,7 +2006,14 @@ function generateEncodeField(
 ): string {
   if (!('type' in field)) return "";
 
+  const fieldAny = field as any;
   const fieldName = field.name;
+
+  // Handle computed fields - generate computation code instead of reading from value
+  if (fieldAny.computed) {
+    return generateEncodeComputedField(field, schema, globalEndianness, indent);
+  }
+
   const valuePath = `value.${fieldName}`;
 
   // generateEncodeFieldCore handles both conditional and non-conditional fields

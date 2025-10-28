@@ -175,6 +175,9 @@ export const computedByteArrayLengthTestSuite = defineTestSuite({
     {
       description: "Empty array (0 elements)",
       value: {
+        data: []  // Computed field 'data_length' omitted
+      },
+      decoded_value: {
         data_length: 0,  // Computed field IS visible in decoded output
         data: []
       },
@@ -186,6 +189,9 @@ export const computedByteArrayLengthTestSuite = defineTestSuite({
     {
       description: "Single byte array",
       value: {
+        data: [0xFF]  // Computed field 'data_length' omitted
+      },
+      decoded_value: {
         data_length: 1,  // Computed field IS visible in decoded output
         data: [0xFF]
       },
@@ -197,6 +203,9 @@ export const computedByteArrayLengthTestSuite = defineTestSuite({
     {
       description: "Multiple bytes array",
       value: {
+        data: [0x01, 0x02, 0x03, 0x04, 0x05]  // Computed field 'data_length' omitted
+      },
+      decoded_value: {
         data_length: 5,  // Computed field IS visible in decoded output
         data: [0x01, 0x02, 0x03, 0x04, 0x05]
       },
@@ -208,6 +217,9 @@ export const computedByteArrayLengthTestSuite = defineTestSuite({
     {
       description: "Large byte array (256 bytes)",
       value: {
+        data: Array(256).fill(0).map((_, i) => i & 0xFF)  // Computed field 'data_length' omitted
+      },
+      decoded_value: {
         data_length: 256,  // Computed field IS visible in decoded output
         data: Array(256).fill(0).map((_, i) => i & 0xFF)
       },
@@ -267,6 +279,9 @@ export const computedStructArrayLengthTestSuite = defineTestSuite({
     {
       description: "Empty points array",
       value: {
+        points: []  // Computed field 'num_points' omitted
+      },
+      decoded_value: {
         num_points: 0,  // Computed field IS visible in decoded output
         points: []
       },
@@ -278,6 +293,11 @@ export const computedStructArrayLengthTestSuite = defineTestSuite({
     {
       description: "Single point",
       value: {
+        points: [
+          { x: 10, y: 20 }
+        ]  // Computed field 'num_points' omitted
+      },
+      decoded_value: {
         num_points: 1,  // Computed field IS visible in decoded output
         points: [
           { x: 10, y: 20 }
@@ -291,6 +311,13 @@ export const computedStructArrayLengthTestSuite = defineTestSuite({
     {
       description: "Three points",
       value: {
+        points: [
+          { x: 10, y: 20 },
+          { x: 30, y: 40 },
+          { x: 50, y: 60 }
+        ]  // Computed field 'num_points' omitted
+      },
+      decoded_value: {
         num_points: 3,  // Computed field IS visible in decoded output
         points: [
           { x: 10, y: 20 },
@@ -384,6 +411,12 @@ export const multipleComputedFieldsTestSuite = defineTestSuite({
     {
       description: "All empty fields",
       value: {
+        // All computed length fields omitted
+        name: "",
+        tags: [],
+        data: []
+      },
+      decoded_value: {
         // All computed length fields ARE visible in decoded output
         len_name: 0,
         len_tags: 0,
@@ -402,6 +435,12 @@ export const multipleComputedFieldsTestSuite = defineTestSuite({
     {
       description: "All fields populated",
       value: {
+        // All computed length fields omitted
+        name: "test",
+        tags: ["tag1", "tag2"],
+        data: [0x01, 0x02, 0x03]
+      },
+      decoded_value: {
         // All computed length fields ARE visible in decoded output
         len_name: 4,
         len_tags: 2,
@@ -463,6 +502,9 @@ export const computedLengthUint8TestSuite = defineTestSuite({
     {
       description: "Maximum uint8 length (255 bytes)",
       value: {
+        data: Array(255).fill(0xAA)  // Computed field 'len' omitted
+      },
+      decoded_value: {
         len: 255,  // Computed field IS visible in decoded output
         data: Array(255).fill(0xAA)
       },
@@ -571,6 +613,9 @@ export const computedLengthVariousSizesTestSuite = defineTestSuite({
     {
       description: "10 bytes with uint32 length field",
       value: {
+        data: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09]  // Computed field 'len' omitted
+      },
+      decoded_value: {
         len: 10,  // Computed field IS visible in decoded output
         data: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09]
       },

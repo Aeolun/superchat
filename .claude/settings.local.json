@@ -59,7 +59,8 @@
       "Bash(env DEBUG_GENERATED=/home/bart/Projects/superchat/tools/binschema/tmp-go TEST_FILTER=dns_cname go test:*)",
       "Bash(TEST_FILTER=bit_order TEST_REPORT=summary go test:*)",
       "Read(//Users/bart.riepe/Projects/kaitai_struct_formats/**)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(npm run cli:*)"
     ],
     "deny": [],
     "ask": []

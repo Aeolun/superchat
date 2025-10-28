@@ -57,7 +57,51 @@ async function handleHelp(command: HelpCommand): Promise<void> {
 async function handleDocsBuild(command: DocsBuildCommand): Promise<void> {
   console.log(`Building documentation for schema: ${command.schemaPath}`);
   console.log(`→ Output: ${command.outputPath}`);
-  console.log("TODO: integrate with documentation generator");
+
+  try {
+    const schema = loadSchema(command.schemaPath);
+    const { generateHTML } = await import("../generators/html.js");
+
+    // Check if this is a combined schema (has protocol property) or separate schemas
+    let html: string;
+    if ("protocol" in schema && schema.protocol) {
+      // Combined schema - split into protocol and binary schemas
+      const protocolSchema = { protocol: schema.protocol } as any;
+      const binarySchema = {
+        config: schema.config,
+        types: schema.types,
+      };
+      html = generateHTML(protocolSchema, binarySchema);
+    } else {
+      // Plain binary schema - generate simple type documentation
+      console.error("Error: Plain binary schemas are not yet supported for documentation generation.");
+      console.error("The schema must include a 'protocol' section with messages.");
+      console.error("\nExpected schema format:");
+      console.error("{");
+      console.error('  "protocol": { "name": "...", "messages": [...] },');
+      console.error('  "config": { ... },');
+      console.error('  "types": { ... }');
+      console.error("}");
+      process.exitCode = 1;
+      return;
+    }
+
+    const outputPath = resolve(process.cwd(), command.outputPath!);
+    writeFileSync(outputPath, html, "utf-8");
+
+    console.log(`✓ Documentation generated successfully → ${outputPath}`);
+  } catch (error) {
+    console.error("Failed to generate documentation:");
+    if (error instanceof Error) {
+      console.error(error.message);
+      if (error.stack) {
+        console.error(error.stack);
+      }
+    } else {
+      console.error(String(error));
+    }
+    process.exitCode = 1;
+  }
 }
 
 async function handleDocsServe(command: DocsServeCommand): Promise<void> {
@@ -96,10 +140,14 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
       console.log(`Generated Go sources → ${join(absoluteOut, "generated.go")}`);
       break;
     }
-    case "ts":
-      console.error("TypeScript emission is not yet implemented in the CLI.");
-      process.exitCode = 1;
+    case "ts": {
+      const { generateTypeScript } = await import("../generators/typescript.js");
+      const code = generateTypeScript(schema);
+      const outputPath = join(absoluteOut, "generated.ts");
+      writeFileSync(outputPath, code, "utf-8");
+      console.log(`Generated TypeScript sources → ${outputPath}`);
       break;
+    }
     case "rust":
       console.error("Rust emission is not yet implemented in the CLI.");
       process.exitCode = 1;

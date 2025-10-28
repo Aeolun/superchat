@@ -171,17 +171,28 @@ function getCategoryFromPath(filePath: string): string {
 
 /**
  * Set up runtime library in .generated directory
- * Copies bit-stream.ts to BitStream.ts so generated code can import it
+ * Copies runtime files so generated code can import them
  */
 function setupRuntimeLibrary(): void {
   const genDir = join(__dirname, '../.generated');
   mkdirSync(genDir, { recursive: true });
 
-  const runtimeSource = join(__dirname, 'runtime/bit-stream.ts');
-  const runtimeDest = join(genDir, 'BitStream.ts');
+  // Copy bit-stream.ts with both names for compatibility
+  const bitStreamSource = join(__dirname, 'runtime/bit-stream.ts');
+  copyFileSync(bitStreamSource, join(genDir, 'BitStream.ts')); // Legacy capitalized name
+  copyFileSync(bitStreamSource, join(genDir, 'bit-stream.ts')); // Actual name for imports
 
-  copyFileSync(runtimeSource, runtimeDest);
-  console.log(`Copied runtime library to ${runtimeDest}`);
+  // Copy binary-reader.ts
+  const binaryReaderSource = join(__dirname, 'runtime/binary-reader.ts');
+  const binaryReaderDest = join(genDir, 'binary-reader.ts');
+  copyFileSync(binaryReaderSource, binaryReaderDest);
+
+  // Copy seekable-bit-stream.ts
+  const seekableSource = join(__dirname, 'runtime/seekable-bit-stream.ts');
+  const seekableDest = join(genDir, 'seekable-bit-stream.ts');
+  copyFileSync(seekableSource, seekableDest);
+
+  console.log(`Copied runtime library to ${genDir}/`);
 }
 
 async function main() {
