@@ -2,7 +2,19 @@
 
 ## Overview
 
-The `typescript.ts` file is currently 4,055 lines. This document outlines the plan to split it into manageable, cohesive modules.
+The `typescript.ts` file started at 4,055 lines. This document outlines the plan to split it into manageable, cohesive modules.
+
+**Current status**: Reduced to ~2,611 lines (35% reduction) after completing Phases 1, 2a-2e.
+
+**Completed modules**:
+- ✅ runtime-helpers.ts (~150 lines)
+- ✅ bitfield-support.ts (~200 lines)
+- ✅ computed-fields.ts (~220 lines)
+- ✅ back-references.ts (~290 lines)
+- ✅ string-support.ts (~370 lines)
+- ✅ array-support.ts (~560 lines)
+
+**Total extracted**: ~1,790 lines across 6 modules
 
 ## Progress
 
@@ -106,27 +118,27 @@ grep -n "^function.*String" typescript.ts
 
 ---
 
-### 🔲 Phase 2f: Union Support (TODO)
-**File**: `src/generators/typescript/union-support.ts` (~400 lines)
+### ⏸️ Phase 2f: Union Support (POSTPONED)
+**File**: `src/generators/typescript/union-support.ts` (~2,000 lines - much larger than estimated!)
 
-**Functions to extract**:
+**Note**: This phase is postponed due to size. The union support functions are approximately ~2,000 lines (not ~400 as estimated), making this a complex extraction that should be handled separately or split into multiple modules.
 
-**Discriminated Unions**:
-- `generateEncodeDiscriminatedUnion(field, schema, globalEndianness, valuePath, indent)`
-- `generateDecodeDiscriminatedUnion(field, schema, globalEndianness, fieldName, indent, addTraceLogs)`
-- `generateFunctionalEncodeDiscriminatedUnionField(...)`
-- `generateFunctionalDecodeDiscriminatedUnionField(...)`
+**Functions to extract** (7 functions total):
 
-**Choice (Flat Unions)**:
-- `generateEncodeChoice(field, schema, globalEndianness, valuePath, indent)` - Lines ~2253-2293
-- `generateDecodeChoice(field, schema, globalEndianness, fieldName, indent, addTraceLogs)` - Lines ~2295-2332
+**Class-based encoding/decoding**:
+- `generateEncodeChoice(...)` - Line 1688, ~41 lines
+- `generateDecodeChoice(...)` - Line 1729, ~58 lines
+- `generateEncodeDiscriminatedUnion(...)` - Line 1787, ~421 lines (very large!)
+- `generateDecodeDiscriminatedUnion(...)` - Line 2208, ~792 lines (very large!)
 
-**Find functions**:
-```bash
-grep -n "^function.*Choice\|^function.*DiscriminatedUnion" typescript.ts
-```
+**Functional-style encoding/decoding**:
+- `generateFunctionalDiscriminatedUnion(...)` - Line 469, ~193 lines
+- `generateFunctionalEncodeDiscriminatedUnionField(...)` - Line 662, ~94 lines
+- `generateFunctionalDecodeDiscriminatedUnionField(...)` - Line 756, ~373 lines
 
-**Dependencies**: `shared.ts`, `type-utils.ts`, `runtime-helpers.ts`, `documentation.ts`
+**Potential approach**: Split into choice-support.ts (~100 lines) and discriminated-union-support.ts (~1,900 lines), or extract incrementally.
+
+**Dependencies**: `shared.ts`, `type-utils.ts`, `runtime-helpers.ts`, `documentation.ts`, `getTargetPath`, `generateEncodeTypeReference`, `generateDecodeFieldCore`, `capitalize`
 
 ---
 
