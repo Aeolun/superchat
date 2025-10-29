@@ -798,6 +798,42 @@ function validateDiscriminatedUnion(
 /**
  * Validate a back_reference
  */
+function validateChoice(
+  element: any,
+  path: string,
+  schema: BinarySchema,
+  errors: ValidationError[]
+): void {
+  if (!element.choices || !Array.isArray(element.choices)) {
+    errors.push({ path, message: "Choice missing 'choices' array property" });
+    return;
+  }
+
+  if (element.choices.length < 2) {
+    errors.push({ path, message: "Choice must have at least 2 choices" });
+    return;
+  }
+
+  // Validate that all choice types exist
+  for (let i = 0; i < element.choices.length; i++) {
+    const choice = element.choices[i];
+    if (!choice.type) {
+      errors.push({ path: `${path}.choices[${i}]`, message: "Choice missing 'type' property" });
+      continue;
+    }
+
+    if (!schema.types[choice.type]) {
+      errors.push({
+        path: `${path}.choices[${i}]`,
+        message: `Choice type '${choice.type}' not found in schema.types`
+      });
+    }
+  }
+
+  // TODO: Validate that all choice types have a common discriminator field
+  // This will be implemented when we add the auto-detection logic
+}
+
 function validateBackReference(
   field: any,
   path: string,
@@ -1197,6 +1233,12 @@ function validateElementType(
   // Check back_reference elements
   if (elementType === "back_reference") {
     validateBackReference(element, path, schema, errors);
+    return;
+  }
+
+  // Check choice elements
+  if (elementType === "choice") {
+    validateChoice(element, path, schema, errors);
     return;
   }
 

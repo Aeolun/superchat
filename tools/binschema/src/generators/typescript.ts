@@ -2,6 +2,40 @@ import { BinarySchema, TypeDef, Field, Endianness } from "../schema/binary-schem
 import type { GeneratedCode, DocInput, DocBlock } from "./typescript/shared.js";
 import { isTypeAlias, getTypeFields, isBackReferenceTypeDef, isBackReferenceType, sanitizeTypeName, sanitizeVarName, sanitizeEnumMemberName } from "./typescript/type-utils.js";
 import { getFieldDocumentation, generateJSDoc } from "./typescript/documentation.js";
+import { generateRuntimeHelpers } from "./typescript/runtime-helpers.js";
+import {
+  generateEncodeBitfield,
+  generateDecodeBitfield,
+  generateFunctionalEncodeBitfield,
+  generateFunctionalDecodeBitfield
+} from "./typescript/bitfield-support.js";
+import {
+  generateEncodeComputedField,
+  resolveComputedFieldPath,
+  parseSameIndexTarget,
+  detectSameIndexTracking
+} from "./typescript/computed-fields.js";
+import {
+  generateEncodeBackReference,
+  generateDecodeBackReference,
+  generateInlinedBackReferenceDecoder,
+  generateFunctionalBackReference,
+  resolveBackReferenceType,
+  capitalize
+} from "./typescript/back-references.js";
+import {
+  generateEncodeString,
+  generateDecodeString,
+  generateFunctionalEncodeString,
+  generateFunctionalDecodeString
+} from "./typescript/string-support.js";
+import {
+  generateEncodeArray,
+  generateDecodeArray,
+  generateFunctionalEncodeArray,
+  generateFunctionalDecodeArray,
+  getItemSize
+} from "./typescript/array-support.js";
 
 /**
  * TypeScript Code Generator
@@ -70,42 +104,7 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
   code += `import { crc32 } from "./crc32.js";\n\n`;
 
   // Helper utilities for safe conditional evaluation (avoid runtime errors during decode/encode)
-  code += `function __bs_get<T>(expr: () => T): T | undefined {\n`;
-  code += `  try {\n`;
-  code += `    return expr();\n`;
-  code += `  } catch {\n`;
-  code += `    return undefined;\n`;
-  code += `  }\n`;
-  code += `}\n\n`;
-
-  code += `function __bs_numeric(value: any): any {\n`;
-  code += `  if (typeof value === "bigint") {\n`;
-  code += `    return value;\n`;
-  code += `  }\n`;
-  code += `  if (typeof value === "number" && Number.isInteger(value)) {\n`;
-  code += `    return BigInt(value);\n`;
-  code += `  }\n`;
-  code += `  return value;\n`;
-  code += `}\n\n`;
-
-  code += `function __bs_literal(value: number): number | bigint {\n`;
-  code += `  if (Number.isInteger(value)) {\n`;
-  code += `    return BigInt(value);\n`;
-  code += `  }\n`;
-  code += `  return value;\n`;
-  code += `}\n\n`;
-
-  code += `function __bs_checkCondition(expr: () => any): boolean {\n`;
-  code += `  try {\n`;
-  code += `    const result = expr();\n`;
-  code += `    if (typeof result === "bigint") {\n`;
-  code += `      return result !== 0n;\n`;
-  code += `    }\n`;
-  code += `    return !!result;\n`;
-  code += `  } catch {\n`;
-  code += `    return false;\n`;
-  code += `  }\n`;
-  code += `}\n\n`;
+  code += generateRuntimeHelpers();
 
   // Generate code for each type (skip generic templates like Optional<T>)
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
@@ -290,7 +289,7 @@ function generateFunctionalDecoderForArray(
   globalEndianness: Endianness
 ): string {
   const arrayField = { ...typeDefAny, name: 'result' };
-  const decodeCode = generateFunctionalDecodeArray(arrayField, schema, globalEndianness, 'result', '  ');
+  const decodeCode = generateFunctionalDecodeArray(arrayField, schema, globalEndianness, 'result', '  ', getElementTypeScriptType, generateDecodeChoice, generateDecodeDiscriminatedUnionInline);
 
   return `export function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n${decodeCode}  return result;\n}`;
 }
@@ -463,69 +462,6 @@ function generateFunctionalDecoderWithEarlyReturns(
   return code;
 }
 
-/**
- * Generate decoder for single-field struct with inlined back_reference logic
- */
-function generateInlinedBackReferenceDecoder(
-  typeName: string,
-  fieldName: string,
-  backRefDef: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness
-): string {
-  const storage = backRefDef.storage;
-  const offsetMask = backRefDef.offset_mask;
-  const offsetFrom = backRefDef.offset_from;
-  const targetType = backRefDef.target_type;
-  const endianness = backRefDef.endianness || globalEndianness;
-
-  let code = `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
-
-  // Initialize visitedOffsets if needed
-  code += `  if (!visitedOffsets) visitedOffsets = new Set<number>();\n\n`;
-
-  // Read back_reference storage value
-  const storageMethodName = `read${capitalize(storage)}`;
-  if (storage === "uint8") {
-    code += `  const referenceValue = stream.${storageMethodName}();\n`;
-  } else {
-    code += `  const referenceValue = stream.${storageMethodName}('${endianness}');\n`;
-  }
-
-  // Extract offset using mask
-  code += `  const offset = referenceValue & ${offsetMask};\n\n`;
-
-  // Check for circular reference
-  code += `  if (visitedOffsets.has(offset)) {\n`;
-  code += `    throw new Error(\`Circular back_reference detected at offset \${offset}\`);\n`;
-  code += `  }\n`;
-  code += `  visitedOffsets.add(offset);\n\n`;
-
-  // Calculate actual seek position
-  if (offsetFrom === "current_position") {
-    code += `  const currentPos = stream.position;\n`;
-    code += `  stream.pushPosition();\n`;
-    code += `  stream.seek(currentPos + offset);\n`;
-  } else {
-    // message_start
-    code += `  stream.pushPosition();\n`;
-    code += `  stream.seek(offset);\n`;
-  }
-
-  // Decode target type
-  code += `  const ${fieldName} = decode${targetType}(stream);\n\n`;
-
-  // Restore position
-  code += `  stream.popPosition();\n\n`;
-
-  // Remove from visited set
-  code += `  visitedOffsets.delete(offset);\n\n`;
-
-  code += `  return { ${fieldName} };\n`;
-  code += `}`;
-
-  return code;
-}
 
 /**
  * Generate functional-style discriminated union
@@ -646,79 +582,6 @@ function generateFunctionalDiscriminatedUnion(
   return code;
 }
 
-/**
- * Generate functional-style back_reference
- */
-function generateFunctionalBackReference(
-  typeName: string,
-  backRefDef: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness
-): string {
-  const storage = backRefDef.storage;
-  const offsetMask = backRefDef.offset_mask;
-  const offsetFrom = backRefDef.offset_from;
-  const targetType = backRefDef.target_type;
-  const endianness = backRefDef.endianness || globalEndianness;
-
-  // Generate type alias (transparent to target type)
-  let code = generateJSDoc(backRefDef.description);
-  code += `export type ${typeName} = ${targetType};\n\n`;
-
-  // Generate encoder (just encode the target)
-  code += `function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
-  code += `  encode${targetType}(stream, value);\n`;
-  code += `}\n\n`;
-
-  // Generate decoder (with back_reference following logic)
-  code += `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
-
-  // Initialize visitedOffsets if needed
-  code += `  if (!visitedOffsets) visitedOffsets = new Set<number>();\n`;
-  code += `  visitedOffsets.clear();\n\n`;
-
-  // Read back_reference storage value
-  const storageMethodName = `read${capitalize(storage)}`;
-  if (storage === "uint8") {
-    code += `  const referenceValue = stream.${storageMethodName}();\n`;
-  } else {
-    code += `  const referenceValue = stream.${storageMethodName}('${endianness}');\n`;
-  }
-
-  // Extract offset using mask
-  code += `  const offset = referenceValue & ${offsetMask};\n\n`;
-
-  // Check for circular reference
-  code += `  if (visitedOffsets.has(offset)) {\n`;
-  code += `    throw new Error(\`Circular back_reference detected at offset \${offset}\`);\n`;
-  code += `  }\n`;
-  code += `  visitedOffsets.add(offset);\n\n`;
-
-  // Calculate actual seek position
-  if (offsetFrom === "current_position") {
-    code += `  const currentPos = stream.position;\n`;
-    code += `  stream.pushPosition();\n`;
-    code += `  stream.seek(currentPos + offset);\n`;
-  } else {
-    // message_start
-    code += `  stream.pushPosition();\n`;
-    code += `  stream.seek(offset);\n`;
-  }
-
-  // Decode target type
-  code += `  const value = decode${targetType}(stream);\n\n`;
-
-  // Restore position
-  code += `  stream.popPosition();\n\n`;
-
-  // Cleanup visited offsets
-  code += `  visitedOffsets.clear();\n`;
-
-  code += `  return value;\n`;
-  code += `}`;
-
-  return code;
-}
 
 /**
  * Generate functional encoding for a field
@@ -792,13 +655,6 @@ function generateFunctionalEncodeField(
 /**
  * Generate functional encoding for bitfield
  */
-function generateFunctionalEncodeBitfield(field: any, valuePath: string, indent: string): string {
-  let code = "";
-  for (const subField of field.fields) {
-    code += `${indent}stream.writeBits(${valuePath}.${subField.name}, ${subField.size});\n`;
-  }
-  return code;
-}
 
 /**
  * Generate functional encoding for discriminated union field
@@ -837,124 +693,13 @@ function generateFunctionalEncodeDiscriminatedUnionField(
 /**
  * Resolve back_reference types to their target type (for encoding - references are transparent)
  */
-function resolveBackReferenceType(typeName: string, schema: BinarySchema): string {
-  const typeDef = schema.types[typeName];
-  if (typeDef && (typeDef as any).type === "back_reference") {
-    return (typeDef as any).target_type;
-  }
-  return typeName;
-}
-
 /**
  * Generate functional encoding for array
  */
-function generateFunctionalEncodeArray(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  valuePath: string,
-  indent: string
-): string {
-  let code = "";
-
-  // Write length prefix if length_prefixed
-  if (field.kind === "length_prefixed") {
-    const lengthType = field.length_type;
-    switch (lengthType) {
-      case "uint8":
-        code += `${indent}stream.writeUint8(${valuePath}.length);\n`;
-        break;
-      case "uint16":
-        code += `${indent}stream.writeUint16(${valuePath}.length, '${globalEndianness}');\n`;
-        break;
-      case "uint32":
-        code += `${indent}stream.writeUint32(${valuePath}.length, '${globalEndianness}');\n`;
-        break;
-    }
-  }
-
-  // Write array elements
-  const itemVar = valuePath.replace(/[.\[\]]/g, "_") + "_item";
-  code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
-  const itemType = field.items?.type || "unknown";
-  if (itemType === "uint8") {
-    code += `${indent}  stream.writeUint8(${itemVar});\n`;
-  } else {
-    code += `${indent}  encode${itemType}(stream, ${itemVar});\n`;
-  }
-  code += `${indent}}\n`;
-
-  // Write null terminator for null-terminated arrays
-  if (field.kind === "null_terminated") {
-    if (itemType === "uint8") {
-      code += `${indent}stream.writeUint8(0);\n`;
-    }
-    // For complex types with terminal variants, the terminal variant IS the terminator
-    // so we don't add anything extra
-  }
-
-  return code;
-}
 
 /**
  * Generate functional encoding for string
  */
-function generateFunctionalEncodeString(
-  field: any,
-  globalEndianness: Endianness,
-  valuePath: string,
-  indent: string
-): string {
-  const encoding = field.encoding || "utf8";
-  let kind = field.kind;
-  let code = "";
-
-  // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
-  if (kind === "fixed" && field.length_field && !field.length) {
-    kind = "field_referenced";
-  }
-
-  const bytesVarName = valuePath.replace(/\./g, "_") + "_bytes";
-
-  // Convert string to bytes
-  if (encoding === "utf8") {
-    code += `${indent}const ${bytesVarName} = new TextEncoder().encode(${valuePath});\n`;
-  } else if (encoding === "ascii") {
-    code += `${indent}const ${bytesVarName} = Array.from(${valuePath}, c => c.charCodeAt(0));\n`;
-  }
-
-  if (kind === "length_prefixed") {
-    const lengthType = field.length_type || "uint8";
-    switch (lengthType) {
-      case "uint8":
-        code += `${indent}stream.writeUint8(${bytesVarName}.length);\n`;
-        break;
-      case "uint16":
-        code += `${indent}stream.writeUint16(${bytesVarName}.length, '${globalEndianness}');\n`;
-        break;
-    }
-    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
-    code += `${indent}  stream.writeUint8(byte);\n`;
-    code += `${indent}}\n`;
-  } else if (kind === "null_terminated") {
-    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
-    code += `${indent}  stream.writeUint8(byte);\n`;
-    code += `${indent}}\n`;
-    code += `${indent}stream.writeUint8(0);\n`;
-  } else if (kind === "fixed") {
-    const fixedLength = field.length || 0;
-    code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
-    code += `${indent}  stream.writeUint8(i < ${bytesVarName}.length ? ${bytesVarName}[i] : 0);\n`;
-    code += `${indent}}\n`;
-  } else if (kind === "field_referenced") {
-    // Length comes from another field, we just write the bytes (length was already written)
-    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
-    code += `${indent}  stream.writeUint8(byte);\n`;
-    code += `${indent}}\n`;
-  }
-
-  return code;
-}
 
 /**
  * Generate functional decoding for a field
@@ -988,7 +733,7 @@ function generateFunctionalDecodeField(
     case "int64":
       return `${indent}const ${fieldName} = stream.readInt64('${fieldEndianness}');\n`;
     case "array":
-      return generateFunctionalDecodeArray(field, schema, globalEndianness, fieldName, indent);
+      return generateFunctionalDecodeArray(field, schema, globalEndianness, fieldName, indent, getElementTypeScriptType, generateDecodeChoice, generateDecodeDiscriminatedUnionInline);
     case "string":
       return generateFunctionalDecodeString(field, globalEndianness, fieldName, indent);
     case "bitfield":
@@ -1004,14 +749,6 @@ function generateFunctionalDecodeField(
 /**
  * Generate functional decoding for bitfield
  */
-function generateFunctionalDecodeBitfield(field: any, fieldName: string, indent: string): string {
-  let code = `${indent}const ${fieldName} = {\n`;
-  for (const subField of field.fields) {
-    code += `${indent}  ${subField.name}: Number(stream.readBits(${subField.size})),\n`;
-  }
-  code += `${indent}};\n`;
-  return code;
-}
 
 /**
  * Generate functional decoding for discriminated union field
@@ -1106,174 +843,10 @@ function generateFunctionalDecodeDiscriminatedUnionField(
 /**
  * Generate functional decoding for array
  */
-function generateFunctionalDecodeArray(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  fieldName: string,
-  indent: string
-): string {
-  // Get proper type annotation for array
-  const itemType = field.items?.type || "any";
-  const tsItemType = getElementTypeScriptType(field.items, schema);
-  const typeAnnotation = `${tsItemType}[]`;
-  let code = `${indent}const ${fieldName}: ${typeAnnotation} = [];\n`;
-
-  // Read length if length_prefixed
-  if (field.kind === "length_prefixed") {
-    const lengthType = field.length_type;
-    let lengthRead = "";
-    switch (lengthType) {
-      case "uint8":
-        lengthRead = "stream.readUint8()";
-        break;
-      case "uint16":
-        lengthRead = `stream.readUint16('${globalEndianness}')`;
-        break;
-      case "uint32":
-        lengthRead = `stream.readUint32('${globalEndianness}')`;
-        break;
-    }
-    code += `${indent}const ${fieldName}_length = ${lengthRead};\n`;
-    code += `${indent}for (let i = 0; i < ${fieldName}_length; i++) {\n`;
-  } else if (field.kind === "fixed") {
-    code += `${indent}for (let i = 0; i < ${field.length}; i++) {\n`;
-  } else if (field.kind === "field_referenced") {
-    // Length comes from a previously-decoded field in the same sequence
-    const lengthField = sanitizeVarName(field.length_field);
-    code += `${indent}for (let i = 0; i < ${lengthField}; i++) {\n`;
-  } else if (field.kind === "null_terminated") {
-    // Null-terminated array - read until null terminator or terminal variant
-    code += `${indent}while (true) {\n`;
-
-    // Check for terminal variants if specified
-    if (field.terminal_variants && field.terminal_variants.length > 0) {
-      // For discriminated unions with terminal variants, check if we got a terminal
-      code += `${indent}  const item = decode${itemType}(stream);\n`;
-      code += `${indent}  ${fieldName}.push(item);\n`;
-      // Check if this item is a terminal variant
-      code += `${indent}  if (`;
-      code += field.terminal_variants.map((v: string) => `item.type === '${v}'`).join(' || ');
-      code += `) break;\n`;
-      // Also check for empty label/string (common terminator pattern in protocols like DNS)
-      code += `${indent}  if (item.type === 'Label' && item.value === '') break;\n`;
-      code += `${indent}}\n`;
-      return code;
-    }
-
-    // For simple types, check for zero byte
-    if (itemType === "uint8") {
-      code += `${indent}  const byte = stream.readUint8();\n`;
-      code += `${indent}  if (byte === 0) break;\n`;
-      code += `${indent}  ${fieldName}.push(byte);\n`;
-      code += `${indent}}\n`;
-      return code;
-    }
-
-    // For complex types without terminal variants, this is an error
-    throw new Error(`Null-terminated array of ${itemType} requires terminal_variants`);
-  }
-
-  // Read array item (for non-null-terminated arrays)
-  if (itemType === "uint8") {
-    code += `${indent}  ${fieldName}.push(stream.readUint8());\n`;
-  } else {
-    code += `${indent}  ${fieldName}.push(decode${itemType}(stream));\n`;
-  }
-  code += `${indent}}\n`;
-
-  return code;
-}
 
 /**
  * Generate functional decoding for string
  */
-function generateFunctionalDecodeString(
-  field: any,
-  globalEndianness: Endianness,
-  fieldName: string,
-  indent: string
-): string {
-  const encoding = field.encoding || "utf8";
-  let kind = field.kind;
-  let code = "";
-
-  // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
-  if (kind === "fixed" && field.length_field && !field.length) {
-    kind = "field_referenced";
-  }
-
-  if (kind === "length_prefixed") {
-    const lengthType = field.length_type || "uint8";
-    let lengthRead = "";
-    switch (lengthType) {
-      case "uint8":
-        lengthRead = "stream.readUint8()";
-        break;
-      case "uint16":
-        lengthRead = `stream.readUint16('${globalEndianness}')`;
-        break;
-      case "uint32":
-        lengthRead = `stream.readUint32('${globalEndianness}')`;
-        break;
-    }
-
-    code += `${indent}const ${fieldName}_length = ${lengthRead};\n`;
-    code += `${indent}const ${fieldName}_bytes: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${fieldName}_length; i++) {\n`;
-    code += `${indent}  ${fieldName}_bytes.push(stream.readUint8());\n`;
-    code += `${indent}}\n`;
-
-    if (encoding === "utf8") {
-      code += `${indent}const ${fieldName} = new TextDecoder().decode(new Uint8Array(${fieldName}_bytes));\n`;
-    } else if (encoding === "ascii") {
-      code += `${indent}const ${fieldName} = String.fromCharCode(...${fieldName}_bytes);\n`;
-    }
-  } else if (kind === "null_terminated") {
-    code += `${indent}const ${fieldName}_bytes: number[] = [];\n`;
-    code += `${indent}while (true) {\n`;
-    code += `${indent}  const byte = stream.readUint8();\n`;
-    code += `${indent}  if (byte === 0) break;\n`;
-    code += `${indent}  ${fieldName}_bytes.push(byte);\n`;
-    code += `${indent}}\n`;
-
-    if (encoding === "utf8") {
-      code += `${indent}const ${fieldName} = new TextDecoder().decode(new Uint8Array(${fieldName}_bytes));\n`;
-    } else if (encoding === "ascii") {
-      code += `${indent}const ${fieldName} = String.fromCharCode(...${fieldName}_bytes);\n`;
-    }
-  } else if (kind === "fixed") {
-    const fixedLength = field.length || 0;
-    code += `${indent}const ${fieldName}_bytes: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
-    code += `${indent}  ${fieldName}_bytes.push(stream.readUint8());\n`;
-    code += `${indent}}\n`;
-    code += `${indent}let actualLength = ${fieldName}_bytes.indexOf(0);\n`;
-    code += `${indent}if (actualLength === -1) actualLength = ${fieldName}_bytes.length;\n`;
-
-    if (encoding === "utf8") {
-      code += `${indent}const ${fieldName} = new TextDecoder().decode(new Uint8Array(${fieldName}_bytes.slice(0, actualLength)));\n`;
-    } else if (encoding === "ascii") {
-      code += `${indent}const ${fieldName} = String.fromCharCode(...${fieldName}_bytes.slice(0, actualLength));\n`;
-    }
-  } else if (kind === "field_referenced") {
-    // Length comes from another field in the same value/result object
-    const lengthField = field.length_field;
-    code += `${indent}const ${fieldName}_length = ${lengthField};\n`;
-    code += `${indent}const ${fieldName}_bytes: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${fieldName}_length; i++) {\n`;
-    code += `${indent}  ${fieldName}_bytes.push(stream.readUint8());\n`;
-    code += `${indent}}\n`;
-
-    if (encoding === "utf8") {
-      code += `${indent}const ${fieldName} = new TextDecoder().decode(new Uint8Array(${fieldName}_bytes));\n`;
-    } else if (encoding === "ascii") {
-      code += `${indent}const ${fieldName} = String.fromCharCode(...${fieldName}_bytes);\n`;
-    }
-  }
-
-  return code;
-}
 
 /**
  * Generate code for a single type
@@ -1536,6 +1109,9 @@ function getElementTypeScriptType(element: any, schema: BinarySchema): string {
       case "discriminated_union":
         // Generate union type from variants
         return generateDiscriminatedUnionType(element, schema);
+      case "choice":
+        // Generate flat union type from choices
+        return generateChoiceType(element, schema);
       case "back_reference":
         // Pointer is transparent - just the target type
         return resolveTypeReference(element.target_type, schema);
@@ -1545,6 +1121,20 @@ function getElementTypeScriptType(element: any, schema: BinarySchema): string {
     }
   }
   return "any";
+}
+
+/**
+ * Generate TypeScript union type for choice (flat discriminated union)
+ */
+function generateChoiceType(choiceDef: any, schema: BinarySchema): string {
+  const choices: string[] = [];
+  for (const choice of choiceDef.choices) {
+    const choiceType = resolveTypeReference(choice.type, schema);
+    // Flat union: each choice type includes { type: string } as part of its structure
+    // The discriminator field is part of the type itself, not a wrapper
+    choices.push(`(${choiceType} & { type: '${choice.type}' })`);
+  }
+  return "\n  | " + choices.join("\n  | ");
 }
 
 /**
@@ -1890,8 +1480,27 @@ function generateEncoder(
 ): string {
   const fields = getTypeFields(typeDef);
   let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
-  code += `  private compressionDict: Map<string, number> = new Map();\n\n`;
-  code += `  constructor() {\n`;
+  code += `  private compressionDict: Map<string, number> = new Map();\n`;
+
+  // Detect if any fields need same_index tracking and declare tracking variables
+  for (const field of fields) {
+    if ('type' in field && field.type === 'array') {
+      const trackingTypes = detectSameIndexTracking(field as any, schema);
+      if (trackingTypes) {
+        const fieldName = field.name;
+        for (const typeName of trackingTypes) {
+          code += `  private _positions_${fieldName}_${typeName}: number[] = [];\n`;
+        }
+        // Declare index counters for all choice types
+        const choices = (field as any).items?.choices || [];
+        for (const choice of choices) {
+          code += `  private _index_${fieldName}_${choice.type}: number = 0;\n`;
+        }
+      }
+    }
+  }
+
+  code += `\n  constructor() {\n`;
   code += `    super("${globalBitOrder}");\n`;
   code += `  }\n\n`;
 
@@ -1924,116 +1533,17 @@ function generateEncoder(
 }
 
 /**
- * Generate encoding code for computed field
- * Computes the value and writes it instead of reading from input
+ * Resolve parent references in computed field targets
+ *
+ * When nested structs are inlined (current implementation), all encoding happens
+ * in the context of the root struct. Therefore, all parent references (../, ../../, etc.)
+ * resolve to fields in the root `value` object.
+ *
+ * Examples:
+ *   "field" → "value.field" (sibling field)
+ *   "../field" → "value.field" (parent's field, but inlined so same as root)
+ *   "../../field" → "value.field" (grandparent's field, but inlined so same as root)
  */
-function generateEncodeComputedField(
-  field: Field,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  indent: string
-): string {
-  if (!('type' in field)) return "";
-
-  const fieldAny = field as any;
-  const computed = fieldAny.computed;
-  const fieldName = field.name;
-
-  const endianness = 'endianness' in field && field.endianness
-    ? field.endianness
-    : globalEndianness;
-
-  let code = "";
-
-  // Generate computation based on computed field type
-  if (computed.type === "length_of") {
-    const targetField = computed.target;
-    const targetPath = `value.${targetField}`;
-
-    // Compute the length value
-    code += `${indent}// Computed field '${fieldName}': auto-compute length_of '${targetField}'\n`;
-    code += `${indent}let ${fieldName}_computed: number;\n`;
-
-    // Check if encoding is specified (for string byte length)
-    if (computed.encoding) {
-      // String byte length with specific encoding
-      code += `${indent}{\n`;
-      code += `${indent}  const encoder = new TextEncoder();\n`;
-      code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
-      code += `${indent}}\n`;
-    } else {
-      // Array element count or string character count
-      code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
-    }
-
-    // Write the computed value using appropriate write method
-    switch (field.type) {
-      case "uint8":
-        code += `${indent}this.writeUint8(${fieldName}_computed);\n`;
-        break;
-      case "uint16":
-        code += `${indent}this.writeUint16(${fieldName}_computed, "${endianness}");\n`;
-        break;
-      case "uint32":
-        code += `${indent}this.writeUint32(${fieldName}_computed, "${endianness}");\n`;
-        break;
-      case "uint64":
-        code += `${indent}this.writeUint64(BigInt(${fieldName}_computed), "${endianness}");\n`;
-        break;
-      default:
-        code += `${indent}// TODO: Unsupported computed field type: ${field.type}\n`;
-    }
-  } else if (computed.type === "crc32_of") {
-    const targetField = computed.target;
-    const targetPath = `value.${targetField}`;
-
-    // Compute CRC32 checksum
-    code += `${indent}// Computed field '${fieldName}': auto-compute CRC32 of '${targetField}'\n`;
-    code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
-    code += `${indent}this.writeUint32(${fieldName}_computed, "${endianness}");\n`;
-  } else if (computed.type === "position_of") {
-    const targetField = computed.target;
-
-    // Compute position: current byte offset + size of this position field
-    code += `${indent}// Computed field '${fieldName}': auto-compute position of '${targetField}'\n`;
-    code += `${indent}const ${fieldName}_computed = this.byteOffset`;
-
-    // Add the size of the position field itself
-    const fieldSizeMap: Record<string, number> = {
-      "uint8": 1,
-      "uint16": 2,
-      "uint32": 4,
-      "uint64": 8
-    };
-
-    const fieldSize = fieldSizeMap[field.type as string] || 0;
-    if (fieldSize > 0) {
-      code += ` + ${fieldSize}`;
-    }
-    code += `;\n`;
-
-    // Write the computed position using appropriate write method
-    switch (field.type) {
-      case "uint8":
-        code += `${indent}this.writeUint8(${fieldName}_computed);\n`;
-        break;
-      case "uint16":
-        code += `${indent}this.writeUint16(${fieldName}_computed, "${endianness}");\n`;
-        break;
-      case "uint32":
-        code += `${indent}this.writeUint32(${fieldName}_computed, "${endianness}");\n`;
-        break;
-      case "uint64":
-        code += `${indent}this.writeUint64(BigInt(${fieldName}_computed), "${endianness}");\n`;
-        break;
-      default:
-        code += `${indent}// TODO: Unsupported position field type: ${field.type}\n`;
-    }
-  }
-
-  return code;
-}
-
 /**
  * Generate encoding code for a single field
  */
@@ -2070,6 +1580,13 @@ function generateEncodeFieldCore(
   indent: string
 ): string {
   if (!('type' in field)) return "";
+
+  const fieldAny = field as any;
+
+  // Handle computed fields - generate computation code instead of reading from value
+  if (fieldAny.computed) {
+    return generateEncodeComputedField(field, schema, globalEndianness, indent);
+  }
 
   // Handle conditional fields
   if (isFieldConditional(field)) {
@@ -2139,7 +1656,7 @@ function generateEncodeFieldCoreImpl(
       return `${indent}this.writeFloat64(${valuePath}, "${endianness}");\n`;
 
     case "array":
-      return generateEncodeArray(field, schema, globalEndianness, valuePath, indent);
+      return generateEncodeArray(field, schema, globalEndianness, valuePath, indent, generateEncodeFieldCoreImpl);
 
     case "string":
       return generateEncodeString(field, globalEndianness, valuePath, indent);
@@ -2150,8 +1667,11 @@ function generateEncodeFieldCoreImpl(
     case "discriminated_union":
       return generateEncodeDiscriminatedUnion(field, schema, globalEndianness, valuePath, indent);
 
+    case "choice":
+      return generateEncodeChoice(field, schema, globalEndianness, valuePath, indent);
+
     case "back_reference":
-      return generateEncodeBackReference(field, schema, globalEndianness, valuePath, indent);
+      return generateEncodeBackReference(field, schema, globalEndianness, valuePath, indent, generateEncodeTypeReference);
 
     case "optional":
       return generateEncodeOptional(field, schema, globalEndianness, valuePath, indent);
@@ -2165,6 +1685,105 @@ function generateEncodeFieldCoreImpl(
 /**
  * Generate encoding for discriminated union
  */
+function generateEncodeChoice(
+  field: any,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  valuePath: string,
+  indent: string
+): string {
+  let code = "";
+  const choices = field.choices || [];
+
+  // TODO: Auto-detect discriminator field from choice types
+  // For now, assume first field of each type is the discriminator
+
+  // Generate if-else chain for each choice
+  // Unlike discriminated_union, choice uses flat structure (no .value wrapper)
+  for (let i = 0; i < choices.length; i++) {
+    const choice = choices[i];
+    const ifKeyword = i === 0 ? "if" : "else if";
+
+    code += `${indent}${ifKeyword} (${valuePath}.type === '${choice.type}') {\n`;
+
+    // Encode the choice directly (no .value wrapper like discriminated_union)
+    code += generateEncodeTypeReference(choice.type, schema, globalEndianness, valuePath, indent + "  ");
+
+    code += `${indent}}`;
+    if (i < choices.length - 1) {
+      code += "\n";
+    }
+  }
+
+  // Add fallthrough error
+  code += ` else {\n`;
+  code += `${indent}  throw new Error(\`Unknown variant type: \${(${valuePath} as any).type}\`);\n`;
+  code += `${indent}}\n`;
+
+  return code;
+}
+
+/**
+ * Generate decoding for choice (flat discriminated union)
+ */
+function generateDecodeChoice(
+  field: any,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  fieldName: string,
+  indent: string,
+  addTraceLogs: boolean = false
+): string {
+  const target = getTargetPath(fieldName);
+  let code = "";
+
+  if (addTraceLogs) {
+    code += `${indent}console.log('[TRACE] Decoding choice field ${fieldName}');\n`;
+  }
+
+  const choices = field.choices || [];
+
+  // TODO: Auto-detect discriminator field from all choice types
+  // For now, peek at first byte (assuming uint8 discriminator as first field)
+
+  // Peek discriminator value (first byte of first field)
+  code += `${indent}const discriminator = this.peekUint8();\n`;
+
+  // Generate if-else chain for each choice
+  for (let i = 0; i < choices.length; i++) {
+    const choice = choices[i];
+    const ifKeyword = i === 0 ? "if" : "else if";
+
+    // We need to get the discriminator value for this choice type
+    // For now, assume the discriminator values are 0x01, 0x02, etc.
+    // TODO: Extract actual discriminator values from type definitions
+    const discriminatorValue = i + 1;
+
+    code += `${indent}${ifKeyword} (discriminator === 0x${discriminatorValue.toString(16).padStart(2, '0')}) {\n`;
+
+    // Determine the base object for context
+    const baseObject = target.includes(".") ? target.split(".")[0] : "value";
+
+    // Choice uses flat structure - decode directly into target without wrapper
+    code += `${indent}  const decoder = new ${choice.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
+    code += `${indent}  const decodedValue = decoder.decode();\n`;
+    code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
+
+    // Add type property for TypeScript discrimination (flat structure, not wrapped)
+    code += `${indent}  ${target} = { ...decodedValue, type: '${choice.type}' };\n`;
+    code += `${indent}}`;
+    if (i < choices.length - 1) {
+      code += "\n";
+    }
+  }
+
+  code += ` else {\n`;
+  code += `${indent}  throw new Error(\`Unknown choice discriminator: 0x\${discriminator.toString(16)}\`);\n`;
+  code += `${indent}}\n`;
+
+  return code;
+}
+
 function generateEncodeDiscriminatedUnion(
   field: any,
   schema: BinarySchema,
@@ -2268,326 +1887,12 @@ function generateEncodeOptional(
 }
 
 /**
- * Generate encoding for back_reference with compression support
- *
- * Back references use compression by default:
- * - If value exists in compressionDict → emit compression pointer bytes (0xC000 | offset)
- * - Otherwise record current offset, encode target value, add to dictionary
- */
-function generateEncodeBackReference(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  valuePath: string,
-  indent: string
-): string {
-  const storage = field.storage || "uint16"; // uint8, uint16, uint32
-  const offsetMask = field.offset_mask || "0x3FFF"; // Default mask for 14-bit offset
-  const targetType = field.target_type;
-  const endianness = field.endianness || globalEndianness;
-
-  if (typeof targetType !== "string" || targetType.length === 0) {
-    throw new Error(
-      [
-        "Back-reference field is missing a valid 'target_type'.",
-        `field: ${field?.name ?? "<unnamed>"}`,
-        `valuePath: ${valuePath}`,
-        `storage: ${storage}`,
-      ].join(" ")
-    );
-  }
-
-  let code = "";
-
-  // Serialize value for dictionary key (use JSON.stringify for structural equality)
-  code += `${indent}const valueKey = JSON.stringify(${valuePath});\n`;
-  code += `${indent}const existingOffset = this.compressionDict.get(valueKey);\n\n`;
-
-  // If found in dictionary, encode as compression pointer bytes
-  code += `${indent}if (existingOffset !== undefined) {\n`;
-  code += `${indent}  // Encode compression pointer: set top bits (0xC0 for uint16) and mask offset\n`;
-
-  if (storage === "uint8") {
-    code += `${indent}  const referenceValue = 0xC0 | (existingOffset & ${offsetMask});\n`;
-    code += `${indent}  this.writeUint8(referenceValue);\n`;
-  } else if (storage === "uint16") {
-    code += `${indent}  const referenceValue = 0xC000 | (existingOffset & ${offsetMask});\n`;
-    code += `${indent}  this.writeUint16(referenceValue, "${endianness}");\n`;
-  } else if (storage === "uint32") {
-    code += `${indent}  const referenceValue = 0xC0000000 | (existingOffset & ${offsetMask});\n`;
-    code += `${indent}  this.writeUint32(referenceValue, "${endianness}");\n`;
-  }
-
-  code += `${indent}} else {\n`;
-
-  // Otherwise, record offset and encode target value
-  code += `${indent}  // First occurrence - record offset and encode target value\n`;
-  code += `${indent}  const currentOffset = this.byteOffset;\n`;
-  code += `${indent}  this.compressionDict.set(valueKey, currentOffset);\n`;
-  code += generateEncodeTypeReference(targetType, schema, globalEndianness, valuePath, indent + "  ");
-  code += `${indent}}\n`;
-
-  return code;
-}
-
-/**
  * Generate encoding for array field
  */
-function generateEncodeArray(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  valuePath: string,
-  indent: string
-): string {
-  let code = "";
-
-  // Write length prefix if length_prefixed or length_prefixed_items
-  if (field.kind === "length_prefixed" || field.kind === "length_prefixed_items") {
-    const lengthType = field.length_type;
-    switch (lengthType) {
-      case "uint8":
-        code += `${indent}this.writeUint8(${valuePath}.length);\n`;
-        break;
-      case "uint16":
-        code += `${indent}this.writeUint16(${valuePath}.length, "${globalEndianness}");\n`;
-        break;
-      case "uint32":
-        code += `${indent}this.writeUint32(${valuePath}.length, "${globalEndianness}");\n`;
-        break;
-      case "uint64":
-        code += `${indent}this.writeUint64(BigInt(${valuePath}.length), "${globalEndianness}");\n`;
-        break;
-    }
-  }
-  // Note: field_referenced arrays don't write their own length - the length field was already written earlier
-
-  // Safety check for items field
-  if (!field.items || typeof field.items !== 'object' || !('type' in field.items)) {
-    return `${indent}// ERROR: Array field '${valuePath}' has undefined or invalid items\n`;
-  }
-
-  // Write array elements
-  // Use unique variable name to avoid shadowing in nested arrays
-  const itemVar = valuePath.replace(/[.\[\]]/g, "_") + "_item";
-
-  // Track if we encounter a terminal variant (to skip null terminator)
-  const hasTerminalVariants = field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants) && field.terminal_variants.length > 0;
-  if (hasTerminalVariants) {
-    const terminatedVar = valuePath.replace(/[.\[\]]/g, "_") + "_terminated";
-    code += `${indent}let ${terminatedVar} = false;\n`;
-  }
-
-  code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
-
-  // Write item length prefix if length_prefixed_items
-  if (field.kind === "length_prefixed_items" && field.item_length_type) {
-    const itemLengthType = field.item_length_type;
-
-    // Check if this is a fixed-size primitive type
-    const itemType = field.items?.type;
-    const isFixedSizePrimitive = ['uint8', 'int8', 'uint16', 'int16', 'uint32', 'int32', 'float32', 'uint64', 'int64', 'float64'].includes(itemType);
-
-    if (isFixedSizePrimitive) {
-      // For fixed-size primitives, we can write the size directly as a constant
-      const itemSize = getItemSize(field.items, schema, globalEndianness);
-      switch (itemLengthType) {
-        case "uint8":
-          code += `${indent}  this.writeUint8(${itemSize});\n`;
-          break;
-        case "uint16":
-          code += `${indent}  this.writeUint16(${itemSize}, "${globalEndianness}");\n`;
-          break;
-        case "uint32":
-          code += `${indent}  this.writeUint32(${itemSize}, "${globalEndianness}");\n`;
-          break;
-        case "uint64":
-          code += `${indent}  this.writeUint64(BigInt(${itemSize}), "${globalEndianness}");\n`;
-          break;
-      }
-    } else {
-      // For variable-length types, encode to temporary encoder and measure
-      code += `${indent}  // Encode item to temporary encoder to measure size\n`;
-      code += `${indent}  const ${itemVar}_temp = new BitStreamEncoder("${globalEndianness === 'big_endian' ? 'msb_first' : 'lsb_first'}");\n`;
-
-      // Generate inline encoding by reusing the encode logic
-      // We'll encode to temp encoder, then copy the bytes
-      const tempEncoding = generateEncodeFieldCoreImpl(
-        field.items as Field,
-        schema,
-        globalEndianness,
-        itemVar,
-        indent + "  "
-      );
-
-      // Replace 'this.' with '${itemVar}_temp.' in the generated encoding code
-      const modifiedEncoding = tempEncoding.replace(/\bthis\./g, `${itemVar}_temp.`);
-      code += modifiedEncoding;
-
-      code += `${indent}  const ${itemVar}_bytes = ${itemVar}_temp.finish();\n`;
-      code += `${indent}  const ${itemVar}_length = ${itemVar}_bytes.length;\n`;
-
-      // Validate size doesn't exceed max for item_length_type
-      const maxSizes: {[key: string]: number} = {
-        'uint8': 255,
-        'uint16': 65535,
-        'uint32': 4294967295,
-        'uint64': Number.MAX_SAFE_INTEGER
-      };
-      const maxSize = maxSizes[itemLengthType];
-      code += `${indent}  if (${itemVar}_length > ${maxSize}) {\n`;
-      code += `${indent}    throw new Error(\`Item size \${${itemVar}_length} exceeds maximum ${maxSize} bytes for ${itemLengthType}\`);\n`;
-      code += `${indent}  }\n`;
-
-      // Write item length
-      switch (itemLengthType) {
-        case "uint8":
-          code += `${indent}  this.writeUint8(${itemVar}_length);\n`;
-          break;
-        case "uint16":
-          code += `${indent}  this.writeUint16(${itemVar}_length, "${globalEndianness}");\n`;
-          break;
-        case "uint32":
-          code += `${indent}  this.writeUint32(${itemVar}_length, "${globalEndianness}");\n`;
-          break;
-        case "uint64":
-          code += `${indent}  this.writeUint64(BigInt(${itemVar}_length), "${globalEndianness}");\n`;
-          break;
-      }
-
-      // Write item bytes
-      code += `${indent}  for (const byte of ${itemVar}_bytes) {\n`;
-      code += `${indent}    this.writeUint8(byte);\n`;
-      code += `${indent}  }\n`;
-
-      // Continue to next iteration (don't encode again)
-      code += `${indent}  continue;\n`;
-    }
-  }
-
-  // Only encode if we didn't already handle it in length_prefixed_items above
-  if (!(field.kind === "length_prefixed_items" && field.item_length_type && !['uint8', 'int8', 'uint16', 'int16', 'uint32', 'int32', 'float32', 'uint64', 'int64', 'float64'].includes(field.items?.type))) {
-    code += generateEncodeFieldCoreImpl(
-      field.items as Field,
-      schema,
-      globalEndianness,
-      itemVar,
-      indent + "  "
-    );
-  }
-
-  // Check if this is a terminal variant (for null_terminated arrays with discriminated unions)
-  if (hasTerminalVariants) {
-    const terminatedVar = valuePath.replace(/[.\[\]]/g, "_") + "_terminated";
-    code += `${indent}  // Check if item is a terminal variant\n`;
-    const conditions = field.terminal_variants.map((v: string) => `${itemVar}.type === '${v}'`).join(' || ');
-    code += `${indent}  if (${conditions}) {\n`;
-    code += `${indent}    ${terminatedVar} = true;\n`;
-    code += `${indent}    break;\n`;
-    code += `${indent}  }\n`;
-  }
-
-  code += `${indent}}\n`;
-
-  // Write null terminator if null_terminated and no terminal variant was encountered
-  if (field.kind === "null_terminated") {
-    if (hasTerminalVariants) {
-      const terminatedVar = valuePath.replace(/[.\[\]]/g, "_") + "_terminated";
-      code += `${indent}if (!${terminatedVar}) {\n`;
-      code += `${indent}  this.writeUint8(0);\n`;
-      code += `${indent}}\n`;
-    } else {
-      code += `${indent}this.writeUint8(0);\n`;
-    }
-  }
-
-  return code;
-}
-
-/**
- * Generate encoding for string field
- */
-function generateEncodeString(
-  field: any,
-  globalEndianness: Endianness,
-  valuePath: string,
-  indent: string
-): string {
-  const encoding = field.encoding || "utf8";
-  let kind = field.kind;
-  let code = "";
-
-  // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
-  if (kind === "fixed" && field.length_field && !field.length) {
-    kind = "field_referenced";
-  }
-
-  // Sanitize variable name (replace dots with underscores)
-  const bytesVarName = valuePath.replace(/\./g, "_") + "_bytes";
-
-  // Convert string to bytes
-  if (encoding === "utf8") {
-    code += `${indent}const ${bytesVarName} = new TextEncoder().encode(${valuePath});\n`;
-  } else if (encoding === "ascii") {
-    code += `${indent}const ${bytesVarName} = Array.from(${valuePath}, c => c.charCodeAt(0));\n`;
-  }
-
-  if (kind === "length_prefixed") {
-    const lengthType = field.length_type || "uint8";
-    // Write length prefix
-    switch (lengthType) {
-      case "uint8":
-        code += `${indent}this.writeUint8(${bytesVarName}.length);\n`;
-        break;
-      case "uint16":
-        code += `${indent}this.writeUint16(${bytesVarName}.length, "${globalEndianness}");\n`;
-        break;
-      case "uint32":
-        code += `${indent}this.writeUint32(${bytesVarName}.length, "${globalEndianness}");\n`;
-        break;
-      case "uint64":
-        code += `${indent}this.writeUint64(BigInt(${bytesVarName}.length), "${globalEndianness}");\n`;
-        break;
-    }
-    // Write bytes
-    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
-    code += `${indent}  this.writeUint8(byte);\n`;
-    code += `${indent}}\n`;
-  } else if (kind === "null_terminated") {
-    // Write bytes
-    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
-    code += `${indent}  this.writeUint8(byte);\n`;
-    code += `${indent}}\n`;
-    // Write null terminator
-    code += `${indent}this.writeUint8(0);\n`;
-  } else if (kind === "fixed") {
-    const fixedLength = field.length || 0;
-    // Write bytes (padded or truncated to fixed length)
-    code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
-    code += `${indent}  this.writeUint8(i < ${bytesVarName}.length ? ${bytesVarName}[i] : 0);\n`;
-    code += `${indent}}\n`;
-  } else if (kind === "field_referenced") {
-    // Length comes from another field, we just write the bytes (length was already written)
-    code += `${indent}for (const byte of ${bytesVarName}) {\n`;
-    code += `${indent}  this.writeUint8(byte);\n`;
-    code += `${indent}}\n`;
-  }
-
-  return code;
-}
 
 /**
  * Generate encoding for bitfield
  */
-function generateEncodeBitfield(field: any, valuePath: string, indent: string): string {
-  let code = "";
-
-  for (const subField of field.fields) {
-    code += `${indent}this.writeBits(${valuePath}.${subField.name}, ${subField.size});\n`;
-  }
-
-  return code;
-}
 
 /**
  * Generate encoding for type reference
@@ -2871,19 +2176,22 @@ function generateDecodeFieldCoreImpl(
       return `${indent}${target} = this.readFloat64("${endianness}");\n`;
 
     case "array":
-      return generateDecodeArray(field, schema, globalEndianness, fieldName, indent, addTraceLogs);
+      return generateDecodeArray(field, schema, globalEndianness, fieldName, indent, addTraceLogs, getTargetPath, generateDecodeFieldCore);
 
     case "string":
-      return generateDecodeString(field, globalEndianness, fieldName, indent, addTraceLogs);
+      return generateDecodeString(field, globalEndianness, fieldName, indent, addTraceLogs, getTargetPath);
 
     case "bitfield":
-      return generateDecodeBitfield(field, fieldName, indent);
+      return generateDecodeBitfield(field, fieldName, indent, getTargetPath);
 
     case "discriminated_union":
       return generateDecodeDiscriminatedUnion(field, schema, globalEndianness, fieldName, indent, addTraceLogs);
 
+    case "choice":
+      return generateDecodeChoice(field, schema, globalEndianness, fieldName, indent, addTraceLogs);
+
     case "back_reference":
-      return generateDecodeBackReference(field, schema, globalEndianness, fieldName, indent);
+      return generateDecodeBackReference(field, schema, globalEndianness, fieldName, indent, getTargetPath, generateDecodeTypeReference);
 
     case "optional":
       return generateDecodeOptional(field, schema, globalEndianness, fieldName, indent);
@@ -3110,283 +2418,10 @@ function generateDecodeOptional(
   return code;
 }
 
-/**
- * Generate decoding for back_reference
- */
-function generateDecodeBackReference(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  fieldName: string,
-  indent: string
-): string {
-  const target = getTargetPath(fieldName);
-  const storage = field.storage; // uint8, uint16, uint32
-  const offsetMask = field.offset_mask; // e.g., "0x3FFF"
-  const offsetFrom = field.offset_from; // "message_start" or "current_position"
-  const targetType = field.target_type;
-  const endianness = field.endianness || globalEndianness;
-  const endiannessArg = storage !== "uint8" ? `'${endianness}'` : "";
-
-  let code = "";
-
-  // Initialize visitedOffsets set (shared across all back_reference decoders)
-  code += `${indent}if (!this.visitedOffsets) {\n`;
-  code += `${indent}  this.visitedOffsets = new Set<number>();\n`;
-  code += `${indent}}\n\n`;
-
-  // Read back_reference storage value
-  if (storage === "uint8") {
-    code += `${indent}const referenceValue = this.read${capitalize(storage)}();\n`;
-  } else {
-    code += `${indent}const referenceValue = this.read${capitalize(storage)}(${endiannessArg});\n`;
-  }
-
-  // Extract offset using mask
-  code += `${indent}const offset = referenceValue & ${offsetMask};\n\n`;
-
-  // Check for circular reference
-  code += `${indent}if (this.visitedOffsets.has(offset)) {\n`;
-  code += `${indent}  throw new Error(\`Circular back_reference detected at offset \${offset}\`);\n`;
-  code += `${indent}}\n`;
-  code += `${indent}this.visitedOffsets.add(offset);\n\n`;
-
-  // Calculate actual seek position
-  if (offsetFrom === "current_position") {
-    code += `${indent}const currentPos = this.position;\n`;
-    code += `${indent}this.pushPosition();\n`;
-    code += `${indent}this.seek(currentPos + offset);\n`;
-  } else {
-    // message_start
-    code += `${indent}this.pushPosition();\n`;
-    code += `${indent}this.seek(offset);\n`;
-  }
-
-  // Decode target type inline (we're already positioned at the target)
-  // Pass fieldName (not target path) since generateDecodeTypeReference will add "value." prefix
-  code += generateDecodeTypeReference(targetType, schema, globalEndianness, fieldName, indent);
-
-  // Restore position
-  code += `${indent}this.popPosition();\n\n`;
-
-  // Remove from visited set (allow same offset from different paths)
-  code += `${indent}this.visitedOffsets.delete(offset);\n`;
-
-  return code;
-}
-
-/**
- * Capitalize first letter of a string
- */
-function capitalize(str: string): string {
-  return str.charAt(0).toUpperCase() + str.slice(1);
-}
-
 
 /**
  * Generate decoding for array field
  */
-function generateDecodeArray(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  fieldName: string,
-  indent: string,
-  addTraceLogs: boolean = false
-): string {
-  const target = getTargetPath(fieldName);
-  let code = "";
-
-  if (addTraceLogs) {
-    code += `${indent}console.log('[TRACE] Decoding array field ${fieldName}');\n`;
-  }
-
-  code += `${indent}${target} = [];\n`;
-
-  // Read length if length_prefixed or length_prefixed_items
-  if (field.kind === "length_prefixed" || field.kind === "length_prefixed_items") {
-    const lengthType = field.length_type;
-    let lengthRead = "";
-    switch (lengthType) {
-      case "uint8":
-        lengthRead = "this.readUint8()";
-        break;
-      case "uint16":
-        lengthRead = `this.readUint16("${globalEndianness}")`;
-        break;
-      case "uint32":
-        lengthRead = `this.readUint32("${globalEndianness}")`;
-        break;
-      case "uint64":
-        lengthRead = `Number(this.readUint64("${globalEndianness}"))`;
-        break;
-    }
-    // Sanitize fieldName for use in variable name (replace dots with underscores)
-    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
-    code += `${indent}const ${lengthVarName} = ${lengthRead};\n`;
-    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
-
-    // Read item length prefix if length_prefixed_items
-    if (field.kind === "length_prefixed_items" && field.item_length_type) {
-      const itemLengthType = field.item_length_type;
-      const itemLengthVarName = fieldName.replace(/\./g, "_") + "_item_length";
-      let itemLengthRead = "";
-      switch (itemLengthType) {
-        case "uint8":
-          itemLengthRead = "this.readUint8()";
-          break;
-        case "uint16":
-          itemLengthRead = `this.readUint16("${globalEndianness}")`;
-          break;
-        case "uint32":
-          itemLengthRead = `this.readUint32("${globalEndianness}")`;
-          break;
-        case "uint64":
-          itemLengthRead = `Number(this.readUint64("${globalEndianness}"))`;
-          break;
-      }
-      code += `${indent}  const ${itemLengthVarName} = ${itemLengthRead};\n`;
-      // Note: We read the item length but don't use it for validation yet
-      // In a real implementation, you might validate that the item size matches expectations
-    }
-  } else if (field.kind === "fixed") {
-    code += `${indent}for (let i = 0; i < ${field.length}; i++) {\n`;
-  } else if (field.kind === "field_referenced") {
-    // Length comes from a previously-decoded field
-    const lengthField = field.length_field;
-    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
-
-    // Check for _root reference
-    if (lengthField.startsWith('_root.')) {
-      // Reference to root object - access via context._root
-      const rootPath = lengthField.substring(6); // Remove "_root."
-      code += `${indent}const ${lengthVarName} = this.context?._root?.${rootPath};\n`;
-      code += `${indent}if (${lengthVarName} === undefined) {\n`;
-      code += `${indent}  throw new Error('Field-referenced array length field "${lengthField}" not found in context._root');\n`;
-      code += `${indent}}\n`;
-    } else {
-      // Regular field reference - need to account for inline type decoding and array items
-      // If fieldName is "local_file.entries", lengthField should be resolved relative to "local_file"
-      // If fieldName is "entries_item.data", use "entries_item" directly (no "value." prefix)
-      const isArrayItem = fieldName.includes('_item');
-      const parentPath = fieldName.includes('.') ? fieldName.substring(0, fieldName.lastIndexOf('.')) + '.' : '';
-      const fullLengthPath = parentPath + lengthField;
-
-      if (isArrayItem) {
-        // For array items, the variable is already scoped (e.g., "entries_item")
-        code += `${indent}const ${lengthVarName} = ${fullLengthPath} ?? this.context?.${lengthField};\n`;
-      } else {
-        // For regular fields, prefix with "value."
-        code += `${indent}const ${lengthVarName} = value.${fullLengthPath} ?? this.context?.${lengthField};\n`;
-      }
-      code += `${indent}if (${lengthVarName} === undefined) {\n`;
-      code += `${indent}  throw new Error('Field-referenced array length field "${lengthField}" not found in value or context');\n`;
-      code += `${indent}}\n`;
-    }
-    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
-  } else if (field.kind === "null_terminated") {
-    // For null-terminated arrays, we need to peek ahead to check for null terminator
-    // If item type is uint8, we can optimize by reading bytes directly
-    const itemType = field.items?.type;
-
-    if (itemType === "uint8") {
-      // Optimized path for byte arrays
-      code += `${indent}while (true) {\n`;
-      code += `${indent}  const byte = this.readUint8();\n`;
-      code += `${indent}  if (byte === 0) break;\n`;
-      code += `${indent}  ${target}.push(byte);\n`;
-      code += `${indent}}\n`;
-      return code;
-    } else {
-      // For complex types, peek at the first byte to check for null terminator
-      // This assumes the first byte of the item can distinguish null terminator
-      code += `${indent}while (true) {\n`;
-      code += `${indent}  const firstByte = this.readUint8();\n`;
-      code += `${indent}  if (firstByte === 0) break;\n`;
-      code += `${indent}  // Rewind one byte since we peeked ahead\n`;
-      code += `${indent}  this.byteOffset--;\n`;
-      // Fall through to normal item decoding below
-    }
-  } else if (field.kind === "signature_terminated") {
-    // For signature-terminated arrays, peek ahead to check for terminator value
-    const terminatorValue = (field as any).terminator_value;
-    const terminatorType = (field as any).terminator_type;
-    const terminatorEndianness = (field as any).terminator_endianness || globalEndianness;
-
-    if (terminatorValue === undefined || terminatorType === undefined) {
-      throw new Error(`signature_terminated array '${field.name}' requires terminator_value and terminator_type`);
-    }
-
-    // Generate peek method name based on terminator type
-    const peekMethod = `peek${terminatorType.charAt(0).toUpperCase() + terminatorType.slice(1)}`;
-    const endiannessArg = terminatorType !== "uint8" ? `"${terminatorEndianness}"` : "";
-
-    code += `${indent}while (true) {\n`;
-    code += `${indent}  // Peek ahead to check for terminator signature\n`;
-    code += `${indent}  const signature = this.${peekMethod}(${endiannessArg});\n`;
-    code += `${indent}  if (signature === ${terminatorValue}) break;\n`;
-    // Fall through to normal item decoding below (inside the loop)
-  } else if (field.kind === "eof_terminated") {
-    // For EOF-terminated arrays, read items until end of stream
-    code += `${indent}while (this.byteOffset < this.bytes.length) {\n`;
-    code += `${indent}  try {\n`;
-    // Fall through to normal item decoding below (inside try block)
-  }
-
-  // Safety check for items field
-  if (!field.items || typeof field.items !== 'object' || !('type' in field.items)) {
-    code += `${indent}  // ERROR: Array items undefined\n`;
-    if (field.kind === "null_terminated" || field.kind === "signature_terminated" || field.kind === "eof_terminated") {
-      code += `${indent}}\n`;
-    } else {
-      code += `${indent}}\n`;
-    }
-    return code;
-  }
-
-  // Read array item
-  // Use unique variable name to avoid shadowing in nested arrays
-  const itemVar = fieldName.replace(/[.\[\]]/g, "_") + "_item";
-  const itemDecodeCode = generateDecodeFieldCore(
-    field.items as Field,
-    schema,
-    globalEndianness,
-    itemVar,
-    indent + "  ",
-    addTraceLogs
-  );
-
-  // For primitive types, directly push
-  if (itemDecodeCode.includes(`${itemVar} =`)) {
-    code += `${indent}  let ${itemVar}: any;\n`;
-    code += itemDecodeCode;
-    code += `${indent}  ${target}.push(${itemVar});\n`;
-
-    // Check if this is a terminal variant (for null_terminated arrays with discriminated unions)
-    if (field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants)) {
-      code += `${indent}  // Check if item is a terminal variant\n`;
-      const conditions = field.terminal_variants.map((v: string) => `${itemVar}.type === '${v}'`).join(' || ');
-      code += `${indent}  if (${conditions}) {\n`;
-      code += `${indent}    break;\n`;
-      code += `${indent}  }\n`;
-    }
-  }
-
-  // Close eof_terminated try-catch block
-  if (field.kind === "eof_terminated") {
-    code += `${indent}  } catch (error) {\n`;
-    code += `${indent}    // EOF reached - stop reading items\n`;
-    code += `${indent}    if (error instanceof Error && error.message.includes('Unexpected end of stream')) {\n`;
-    code += `${indent}      break;\n`;
-    code += `${indent}    }\n`;
-    code += `${indent}    throw error; // Re-throw other errors\n`;
-    code += `${indent}  }\n`;
-  }
-
-  code += `${indent}}\n`;
-
-  return code;
-}
 
 /**
  * Get the target path for a field (handles array item variables)
@@ -3442,197 +2477,11 @@ function generateDecodeValueField(
  * Calculate the size in bytes of an item type
  * Used for length_prefixed_items arrays
  */
-function getItemSize(itemDef: any, schema: BinarySchema, globalEndianness: Endianness): number {
-  const itemType = itemDef.type;
 
-  // Primitive types
-  switch (itemType) {
-    case "uint8":
-    case "int8":
-      return 1;
-    case "uint16":
-    case "int16":
-      return 2;
-    case "uint32":
-    case "int32":
-    case "float32":
-      return 4;
-    case "uint64":
-    case "int64":
-    case "float64":
-      return 8;
-    default:
-      throw new Error(`length_prefixed_items: Cannot determine size for item type "${itemType}". Only fixed-size primitive types are supported.`);
-  }
-}
-
-/**
- * Generate decoding for string field
- */
-function generateDecodeString(
-  field: any,
-  globalEndianness: Endianness,
-  fieldName: string,
-  indent: string,
-  addTraceLogs: boolean = false
-): string {
-  const encoding = field.encoding || "utf8";
-  let kind = field.kind;
-  const target = getTargetPath(fieldName);
-  let code = "";
-
-  if (addTraceLogs) {
-    code += `${indent}console.log('[TRACE] Decoding string field ${fieldName}, kind: ${kind}, length_field: ${field.length_field}, length: ${field.length}');\n`;
-  }
-
-  // Auto-detect field_referenced: if kind is "fixed" but length_field exists, treat as field_referenced
-  if (kind === "fixed" && field.length_field && !field.length) {
-    kind = "field_referenced";
-    if (addTraceLogs) {
-      code += `${indent}console.log('[TRACE] Auto-detected field_referenced string for ${fieldName}');\n`;
-    }
-  }
-
-  if (kind === "length_prefixed") {
-    const lengthType = field.length_type || "uint8";
-    let lengthRead = "";
-    switch (lengthType) {
-      case "uint8":
-        lengthRead = "this.readUint8()";
-        break;
-      case "uint16":
-        lengthRead = `this.readUint16("${globalEndianness}")`;
-        break;
-      case "uint32":
-        lengthRead = `this.readUint32("${globalEndianness}")`;
-        break;
-      case "uint64":
-        lengthRead = `Number(this.readUint64("${globalEndianness}"))`;
-        break;
-    }
-
-    // Read length
-    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
-    code += `${indent}const ${lengthVarName} = ${lengthRead};\n`;
-
-    // Read bytes
-    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
-    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
-    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
-    code += `${indent}}\n`;
-
-    // Convert bytes to string
-    if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
-    } else if (encoding === "ascii") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
-    }
-  } else if (kind === "null_terminated") {
-    // Read bytes until null terminator
-    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
-    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
-    code += `${indent}while (true) {\n`;
-    code += `${indent}  const byte = this.readUint8();\n`;
-    code += `${indent}  if (byte === 0) break;\n`;
-    code += `${indent}  ${bytesVarName}.push(byte);\n`;
-    code += `${indent}}\n`;
-
-    // Convert bytes to string
-    if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
-    } else if (encoding === "ascii") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
-    }
-  } else if (kind === "fixed") {
-    const fixedLength = field.length || 0;
-
-    // Read fixed number of bytes
-    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
-    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
-    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
-    code += `${indent}}\n`;
-
-    // Find actual string length (before first null byte)
-    code += `${indent}let actualLength = ${bytesVarName}.indexOf(0);\n`;
-    code += `${indent}if (actualLength === -1) actualLength = ${bytesVarName}.length;\n`;
-
-    // Convert bytes to string (only up to first null)
-    if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}.slice(0, actualLength)));\n`;
-    } else if (encoding === "ascii") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName}.slice(0, actualLength));\n`;
-    }
-  } else if (kind === "field_referenced") {
-    // Length comes from a previously-decoded field
-    const lengthField = field.length_field;
-    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
-
-    // Resolve the length field (same logic as field_referenced arrays)
-    if (lengthField.startsWith('_root.')) {
-      // Reference to root object - access via context._root
-      const rootPath = lengthField.substring(6); // Remove "_root."
-      code += `${indent}const ${lengthVarName} = this.context?._root?.${rootPath};\n`;
-      code += `${indent}if (${lengthVarName} === undefined) {\n`;
-      code += `${indent}  throw new Error('Field-referenced string length field "${lengthField}" not found in context._root');\n`;
-      code += `${indent}}\n`;
-    } else {
-      // Regular field reference - need to account for inline type decoding and array items
-      // If fieldName is "local_file.filename", lengthField should be resolved relative to "local_file"
-      // If fieldName is "entries_item.filename", use "entries_item" directly (no "value." prefix)
-      const isArrayItem = fieldName.includes('_item');
-      const parentPath = fieldName.includes('.') ? fieldName.substring(0, fieldName.lastIndexOf('.')) + '.' : '';
-      const fullLengthPath = parentPath + lengthField;
-
-      if (isArrayItem) {
-        // For array items, the variable is already scoped (e.g., "entries_item")
-        code += `${indent}const ${lengthVarName} = ${fullLengthPath} ?? this.context?.${lengthField};\n`;
-      } else {
-        // For regular fields, prefix with "value."
-        code += `${indent}const ${lengthVarName} = value.${fullLengthPath} ?? this.context?.${lengthField};\n`;
-      }
-      code += `${indent}if (${lengthVarName} === undefined) {\n`;
-      code += `${indent}  throw new Error('Field-referenced string length field "${lengthField}" not found in value or context');\n`;
-      code += `${indent}}\n`;
-    }
-
-    // Read bytes
-    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
-    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
-    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
-    code += `${indent}}\n`;
-
-    // Convert bytes to string
-    if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
-    } else if (encoding === "ascii") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
-    }
-  }
-
-  return code;
-}
 
 /**
  * Generate decoding for bitfield
  */
-function generateDecodeBitfield(field: any, fieldName: string, indent: string): string {
-  const target = getTargetPath(fieldName);
-  let code = `${indent}${target} = {};\n`;
-
-  for (const subField of field.fields) {
-    // Keep as bigint for > 53 bits to preserve precision
-    if (subField.size > 53) {
-      code += `${indent}${target}.${subField.name} = this.readBits(${subField.size});\n`;
-    } else {
-      code += `${indent}${target}.${subField.name} = Number(this.readBits(${subField.size}));\n`;
-    }
-  }
-
-  return code;
-}
 
 /**
  * Generate decoding for type reference

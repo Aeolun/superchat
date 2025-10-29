@@ -192,6 +192,11 @@ function setupRuntimeLibrary(): void {
   const seekableDest = join(genDir, 'seekable-bit-stream.ts');
   copyFileSync(seekableSource, seekableDest);
 
+  // Copy crc32.ts
+  const crc32Source = join(__dirname, 'runtime/crc32.ts');
+  const crc32Dest = join(genDir, 'crc32.ts');
+  copyFileSync(crc32Source, crc32Dest);
+
   console.log(`Copied runtime library to ${genDir}/`);
 }
 

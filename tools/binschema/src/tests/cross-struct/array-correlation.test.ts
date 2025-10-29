@@ -19,6 +19,7 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
     types: {
       "DataBlock": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
           { name: "id", type: "uint8" },
           {
             name: "data",
@@ -31,6 +32,7 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
       },
       "IndexEntry": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
           { name: "id", type: "uint8" },
           {
             name: "data_offset",
@@ -47,8 +49,8 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
           {
             name: "sections",
             type: "array",
-            kind: "fixed",
-            length: 2,
+            kind: "length_prefixed",
+            length_type: "uint8",
             items: {
               type: "choice",
               choices: [
@@ -69,11 +71,13 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
         sections: [
           {
             type: "DataBlock",
+            type_tag: 0x01,
             id: 1,
             data: [0xAA, 0xBB, 0xCC, 0xDD]
           },
           {
             type: "IndexEntry",
+            type_tag: 0x02,
             id: 1
             // data_offset is computed from sections[same_index<DataBlock>]
           }
@@ -83,23 +87,28 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
         sections: [
           {
             type: "DataBlock",
+            type_tag: 0x01,
             id: 1,
             data: [0xAA, 0xBB, 0xCC, 0xDD]
           },
           {
             type: "IndexEntry",
+            type_tag: 0x02,
             id: 1,
-            data_offset: 0  // Position of first DataBlock (at start)
+            data_offset: 1  // Position of first DataBlock (after length prefix)
           }
         ]
       },
       bytes: [
-        // sections[0]: DataBlock (starts at position 0)
+        2,  // sections.length (uint8 length prefix)
+        // sections[0]: DataBlock (starts at position 1)
+        0x01,  // type_tag (discriminator)
         1,  // id
         0xAA, 0xBB, 0xCC, 0xDD,  // data (4 bytes)
-        // sections[1]: IndexEntry (starts at position 5)
+        // sections[1]: IndexEntry (starts at position 7)
+        0x02,  // type_tag (discriminator)
         1,  // id
-        0, 0, 0, 0  // data_offset = 0 (position of corresponding DataBlock)
+        1, 0, 0, 0  // data_offset = 1 (position of corresponding DataBlock)
       ]
     },
     {
@@ -108,21 +117,25 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
         sections: [
           {
             type: "DataBlock",
+            type_tag: 0x01,
             id: 1,
             data: [0x01, 0x02, 0x03, 0x04]
           },
           {
             type: "DataBlock",
+            type_tag: 0x01,
             id: 2,
             data: [0x05, 0x06, 0x07, 0x08]
           },
           {
             type: "IndexEntry",
+            type_tag: 0x02,
             id: 1
             // References sections[0] (first DataBlock)
           },
           {
             type: "IndexEntry",
+            type_tag: 0x02,
             id: 2
             // References sections[1] (second DataBlock)
           }
@@ -132,39 +145,48 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
         sections: [
           {
             type: "DataBlock",
+            type_tag: 0x01,
             id: 1,
             data: [0x01, 0x02, 0x03, 0x04]
           },
           {
             type: "DataBlock",
+            type_tag: 0x01,
             id: 2,
             data: [0x05, 0x06, 0x07, 0x08]
           },
           {
             type: "IndexEntry",
+            type_tag: 0x02,
             id: 1,
-            data_offset: 0  // Position of sections[0]
+            data_offset: 1  // Position of sections[0] (after length prefix)
           },
           {
             type: "IndexEntry",
+            type_tag: 0x02,
             id: 2,
-            data_offset: 5  // Position of sections[1] (after first DataBlock: 1 + 4 bytes)
+            data_offset: 7  // Position of sections[1] (1 length + 1 type_tag + 1 id + 4 data = 7)
           }
         ]
       },
       bytes: [
-        // sections[0]: DataBlock (starts at position 0)
+        4,  // sections.length (uint8 length prefix)
+        // sections[0]: DataBlock (starts at position 1)
+        0x01,  // type_tag
         1,  // id
         0x01, 0x02, 0x03, 0x04,  // data
-        // sections[1]: DataBlock (starts at position 5)
+        // sections[1]: DataBlock (starts at position 7)
+        0x01,  // type_tag
         2,  // id
         0x05, 0x06, 0x07, 0x08,  // data
-        // sections[2]: IndexEntry
+        // sections[2]: IndexEntry (starts at position 13)
+        0x02,  // type_tag
         1,  // id
-        0, 0, 0, 0,  // data_offset = 0
-        // sections[3]: IndexEntry
+        1, 0, 0, 0,  // data_offset = 1 (little endian)
+        // sections[3]: IndexEntry (starts at position 19)
+        0x02,  // type_tag
         2,  // id
-        5, 0, 0, 0  // data_offset = 5
+        7, 0, 0, 0  // data_offset = 7 (little endian)
       ]
     }
   ]

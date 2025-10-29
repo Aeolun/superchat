@@ -919,6 +919,26 @@ const DiscriminatedUnionElementSchema = z.object({
 });
 
 /**
+ * Choice element (without name - for array items)
+ * Flat discriminated union where discriminator is a field within each variant type
+ */
+const ChoiceElementSchema = z.object({
+  type: z.literal("choice").meta({
+    description: "Element type (always 'choice')"
+  }),
+  choices: z.array(z.object({
+    type: z.string().meta({
+      description: "Name of the variant type"
+    })
+  })).min(2).meta({
+    description: "List of possible types (must be at least 2)"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this choice"
+  }),
+});
+
+/**
  * Back reference element (without name - for type aliases)
  * Used for compression via backwards references (like DNS name compression)
  */
@@ -1076,6 +1096,7 @@ const ElementTypeSchema: z.ZodType<any> = z.union([
     ArrayElementSchema, // Support nested arrays
     StringElementSchema, // Support strings
     DiscriminatedUnionElementSchema, // Support discriminated unions
+    ChoiceElementSchema, // Support choice (flat discriminated unions)
     BackReferenceElementSchema, // Support back references
   ]),
   // Type reference for user-defined types

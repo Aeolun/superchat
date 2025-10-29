@@ -391,8 +391,8 @@ export const parentReferenceCrc32TestSuite = defineTestSuite({
           {
             name: "data",
             type: "array",
-            kind: "field_referenced",
-            length_field: "header.data_crc32",  // Just for reference, not actually used
+            kind: "fixed",
+            length: 4,
             items: { type: "uint8" }
           }
         ]

@@ -250,8 +250,6 @@ The `loadtest` tool simulates concurrent clients to stress test the server:
 
 ### Performance Profiling
 
-**TODO**: Profile server CPU usage to identify bottlenecks at high connection counts (10k+).
-
 Current observations:
 - Local machine maxes out at ~10k concurrent connections (CPU-bound)
 - Average response time: 75ms (after switching to in-memory writes with background flush)
