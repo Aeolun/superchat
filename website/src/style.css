@@ -96,7 +96,50 @@ h4 {
     font-size: 1.2em;
     color: var(--text-muted);
     max-width: 700px;
-    margin: 0 auto;
+    margin: 0 auto 30px;
+}
+
+.cta-buttons {
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+    margin-top: 30px;
+}
+
+.cta-button {
+    display: inline-block;
+    padding: 15px 40px;
+    border-radius: 6px;
+    font-size: 1.1em;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s;
+    border: 2px solid transparent;
+}
+
+.cta-button.primary {
+    background: var(--accent);
+    color: var(--bg);
+}
+
+.cta-button.primary:hover {
+    background: var(--accent-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(88, 166, 255, 0.4);
+    text-decoration: none;
+}
+
+.cta-button.secondary {
+    background: transparent;
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.cta-button.secondary:hover {
+    background: var(--accent);
+    color: var(--bg);
+    transform: translateY(-2px);
+    text-decoration: none;
 }
 
 .screenshot {
@@ -276,5 +319,14 @@ footer {
 
     .download-links {
         grid-template-columns: 1fr;
+    }
+
+    .cta-buttons {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .cta-button {
+        width: 100%;
     }
 }
