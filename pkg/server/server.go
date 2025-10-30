@@ -594,6 +594,10 @@ func (s *Server) handleMessage(sess *Session, frame *protocol.Frame) error {
 		return s.handleListUsers(sess, frame)
 	case protocol.TypeListChannelUsers:
 		return s.handleListChannelUsers(sess, frame)
+	case protocol.TypeGetUnreadCounts:
+		return s.handleGetUnreadCounts(sess, frame)
+	case protocol.TypeUpdateReadState:
+		return s.handleUpdateReadState(sess, frame)
 	case protocol.TypePing:
 		return s.handlePing(sess, frame)
 	case protocol.TypeDisconnect:

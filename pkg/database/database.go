@@ -2118,3 +2118,71 @@ func (db *DB) DeleteUser(userID uint64) (string, error) {
 
 	return nickname, nil
 }
+
+// UpdateUserChannelState updates or inserts the last_read_at timestamp for a user+channel
+func (db *DB) UpdateUserChannelState(userID uint64, channelID uint64, subchannelID *uint64, timestamp int64) error {
+	query := `
+		INSERT INTO UserChannelState (user_id, channel_id, subchannel_id, last_read_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, channel_id, subchannel_id)
+		DO UPDATE SET last_read_at = excluded.last_read_at, updated_at = excluded.updated_at
+	`
+	now := time.Now().Unix()
+
+	_, err := db.writeConn.Exec(query, userID, channelID, subchannelID, timestamp, now)
+	if err != nil {
+		return fmt.Errorf("failed to update user channel state: %w", err)
+	}
+	return nil
+}
+
+// GetUserChannelState retrieves the last_read_at timestamp for a user+channel
+// Returns 0 if no state exists (user has never read this channel)
+func (db *DB) GetUserChannelState(userID uint64, channelID uint64, subchannelID *uint64) (int64, error) {
+	var lastReadAt int64
+	query := `SELECT last_read_at FROM UserChannelState WHERE user_id = ? AND channel_id = ? AND subchannel_id IS ?`
+
+	err := db.conn.QueryRow(query, userID, channelID, subchannelID).Scan(&lastReadAt)
+	if err == sql.ErrNoRows {
+		return 0, nil // No state = never read
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to get user channel state: %w", err)
+	}
+	return lastReadAt, nil
+}
+
+// GetUnreadCountForChannel counts unread messages in a channel after the given timestamp
+func (db *DB) GetUnreadCountForChannel(channelID uint64, subchannelID *uint64, sinceTimestamp int64) (uint32, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM Message
+		WHERE channel_id = ?
+		  AND subchannel_id IS ?
+		  AND created_at > ?
+		  AND deleted_at IS NULL
+	`
+	var count uint32
+	err := db.conn.QueryRow(query, channelID, subchannelID, sinceTimestamp).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count unread messages: %w", err)
+	}
+	return count, nil
+}
+
+// GetUnreadCountForThread counts unread messages in a specific thread after the given timestamp
+func (db *DB) GetUnreadCountForThread(threadID uint64, sinceTimestamp int64) (uint32, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM Message
+		WHERE thread_id = ?
+		  AND created_at > ?
+		  AND deleted_at IS NULL
+	`
+	var count uint32
+	err := db.conn.QueryRow(query, threadID, sinceTimestamp).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count unread messages in thread: %w", err)
+	}
+	return count, nil
+}

@@ -2864,3 +2864,102 @@ func (s *Server) handleDeleteChannel(sess *Session, frame *protocol.Frame) error
 
 	return nil
 }
+
+func (s *Server) handleGetUnreadCounts(sess *Session, frame *protocol.Frame) error {
+	msg := &protocol.GetUnreadCountsMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	// Determine the reference timestamp
+	var sinceTimestamp int64
+	if msg.SinceTimestamp != nil {
+		// Client provided explicit timestamp
+		sinceTimestamp = *msg.SinceTimestamp
+	} else {
+		// Use server-stored state (registered users only)
+		sess.mu.RLock()
+		userID := sess.UserID
+		sess.mu.RUnlock()
+
+		if userID == nil {
+			return s.sendError(sess, protocol.ErrCodeAuthRequired, "Anonymous users must provide since_timestamp")
+		}
+	}
+
+	// Build response with counts for each target
+	counts := make([]protocol.UnreadCount, 0, len(msg.Targets))
+
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	for _, target := range msg.Targets {
+		var count uint32
+		var err error
+
+		// If no explicit timestamp provided, get user's last read timestamp for this target
+		timestamp := sinceTimestamp
+		if msg.SinceTimestamp == nil && userID != nil {
+			timestamp, err = s.db.GetUserChannelState(uint64(*userID), target.ChannelID, target.SubchannelID)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get user channel state: %v", err)
+				return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to retrieve read state")
+			}
+		}
+
+		// Count based on whether thread_id is specified
+		if target.ThreadID != nil {
+			// Thread-specific count
+			count, err = s.db.GetUnreadCountForThread(*target.ThreadID, timestamp)
+		} else {
+			// Channel-wide count
+			count, err = s.db.GetUnreadCountForChannel(target.ChannelID, target.SubchannelID, timestamp)
+		}
+
+		if err != nil {
+			log.Printf("[ERROR] Failed to get unread count: %v", err)
+			return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to count unread messages")
+		}
+
+		counts = append(counts, protocol.UnreadCount{
+			ChannelID:    target.ChannelID,
+			SubchannelID: target.SubchannelID,
+			ThreadID:     target.ThreadID,
+			UnreadCount:  count,
+		})
+	}
+
+	// Send response
+	resp := &protocol.UnreadCountsMessage{
+		Counts: counts,
+	}
+	return s.sendMessage(sess, protocol.TypeUnreadCounts, resp)
+}
+
+func (s *Server) handleUpdateReadState(sess *Session, frame *protocol.Frame) error {
+	msg := &protocol.UpdateReadStateMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		return s.sendError(sess, protocol.ErrCodeInvalidFormat, "Invalid message format")
+	}
+
+	sess.mu.RLock()
+	userID := sess.UserID
+	sess.mu.RUnlock()
+
+	// Only registered users can update read state on server
+	// Anonymous users handle this locally
+	if userID == nil {
+		// Silent success for anonymous users (they track locally)
+		return nil
+	}
+
+	// Update the user's read state
+	if err := s.db.UpdateUserChannelState(uint64(*userID), msg.ChannelID, msg.SubchannelID, msg.Timestamp); err != nil {
+		log.Printf("[ERROR] Failed to update read state: %v", err)
+		return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to update read state")
+	}
+
+	// Silent success (no response message defined for UPDATE_READ_STATE)
+	return nil
+}

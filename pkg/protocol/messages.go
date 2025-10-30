@@ -41,6 +41,8 @@ const (
 	TypeDisconnect         = 0x11
 	TypeListUsers          = 0x16
 	TypeListChannelUsers   = 0x17
+	TypeGetUnreadCounts    = 0x18
+	TypeUpdateReadState    = 0x1D
 	TypeSubscribeThread    = 0x51
 	TypeUnsubscribeThread  = 0x52
 	TypeSubscribeChannel   = 0x53
@@ -83,6 +85,7 @@ const (
 	TypeSSHKeyDeleted      = 0x93
 	TypeSSHKeyList         = 0x94
 	TypeSSHKeyAdded        = 0x95
+	TypeUnreadCounts       = 0x97
 	TypeServerConfig       = 0x98
 	TypeSubscribeOk        = 0x99
 	TypeUserList           = 0x9A
@@ -1959,9 +1962,9 @@ func (m *UnsubscribeChannelMessage) Decode(payload []byte) error {
 
 // SubscribeOkMessage (0x99) - Subscription confirmed
 type SubscribeOkMessage struct {
-	Type         uint8   // 1=thread, 2=channel
-	ID           uint64  // thread_id or channel_id
-	SubchannelID *uint64 // Present if subscribing to subchannel
+	Type         uint8   // Type of subscription: 1=thread, 2=channel
+	ID           uint64  // thread_id or channel_id depending on Type
+	SubchannelID *uint64 // Present only for channel subscriptions (Type=2)
 }
 
 func (m *SubscribeOkMessage) EncodeTo(w io.Writer) error {
@@ -4055,6 +4058,205 @@ func (m *ChannelDeletedMessage) Decode(payload []byte) error {
 	return nil
 }
 
+// UnreadTarget represents a channel/subchannel/thread for unread count requests
+type UnreadTarget struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+	ThreadID     *uint64 // Optional: if present, count only messages in this thread
+}
+
+// GetUnreadCountsMessage (0x18) - Request unread counts for channels
+type GetUnreadCountsMessage struct {
+	SinceTimestamp *int64         // Optional: if null, uses server's stored last_read_at (registered users only)
+	Targets        []UnreadTarget // Channels/subchannels to get counts for
+}
+
+func (m *GetUnreadCountsMessage) EncodeTo(w io.Writer) error {
+	if err := WriteOptionalInt64(w, m.SinceTimestamp); err != nil {
+		return err
+	}
+	if err := WriteUint16(w, uint16(len(m.Targets))); err != nil {
+		return err
+	}
+	for _, target := range m.Targets {
+		if err := WriteUint64(w, target.ChannelID); err != nil {
+			return err
+		}
+		if err := WriteOptionalUint64(w, target.SubchannelID); err != nil {
+			return err
+		}
+		if err := WriteOptionalUint64(w, target.ThreadID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *GetUnreadCountsMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *GetUnreadCountsMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	sinceTimestamp, err := ReadOptionalInt64(buf)
+	if err != nil {
+		return err
+	}
+	targetCount, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+	targets := make([]UnreadTarget, targetCount)
+	for i := uint16(0); i < targetCount; i++ {
+		channelID, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		subchannelID, err := ReadOptionalUint64(buf)
+		if err != nil {
+			return err
+		}
+		threadID, err := ReadOptionalUint64(buf)
+		if err != nil {
+			return err
+		}
+		targets[i] = UnreadTarget{
+			ChannelID:    channelID,
+			SubchannelID: subchannelID,
+			ThreadID:     threadID,
+		}
+	}
+	m.SinceTimestamp = sinceTimestamp
+	m.Targets = targets
+	return nil
+}
+
+// UnreadCount represents unread count for a single channel/subchannel/thread
+type UnreadCount struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+	ThreadID     *uint64 // Optional: if present, this count is for a specific thread
+	UnreadCount  uint32
+}
+
+// UnreadCountsMessage (0x97) - Response with unread counts
+type UnreadCountsMessage struct {
+	Counts []UnreadCount
+}
+
+func (m *UnreadCountsMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint16(w, uint16(len(m.Counts))); err != nil {
+		return err
+	}
+	for _, count := range m.Counts {
+		if err := WriteUint64(w, count.ChannelID); err != nil {
+			return err
+		}
+		if err := WriteOptionalUint64(w, count.SubchannelID); err != nil {
+			return err
+		}
+		if err := WriteOptionalUint64(w, count.ThreadID); err != nil {
+			return err
+		}
+		if err := WriteUint32(w, count.UnreadCount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *UnreadCountsMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UnreadCountsMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	countCount, err := ReadUint16(buf)
+	if err != nil {
+		return err
+	}
+	counts := make([]UnreadCount, countCount)
+	for i := uint16(0); i < countCount; i++ {
+		channelID, err := ReadUint64(buf)
+		if err != nil {
+			return err
+		}
+		subchannelID, err := ReadOptionalUint64(buf)
+		if err != nil {
+			return err
+		}
+		threadID, err := ReadOptionalUint64(buf)
+		if err != nil {
+			return err
+		}
+		unreadCount, err := ReadUint32(buf)
+		if err != nil {
+			return err
+		}
+		counts[i] = UnreadCount{
+			ChannelID:    channelID,
+			SubchannelID: subchannelID,
+			ThreadID:     threadID,
+			UnreadCount:  unreadCount,
+		}
+	}
+	m.Counts = counts
+	return nil
+}
+
+// UpdateReadStateMessage (0x1D) - Update last read timestamp for a channel
+type UpdateReadStateMessage struct {
+	ChannelID    uint64
+	SubchannelID *uint64
+	Timestamp    int64 // Unix timestamp (seconds)
+}
+
+func (m *UpdateReadStateMessage) EncodeTo(w io.Writer) error {
+	if err := WriteUint64(w, m.ChannelID); err != nil {
+		return err
+	}
+	if err := WriteOptionalUint64(w, m.SubchannelID); err != nil {
+		return err
+	}
+	return WriteInt64(w, m.Timestamp)
+}
+
+func (m *UpdateReadStateMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := m.EncodeTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *UpdateReadStateMessage) Decode(payload []byte) error {
+	buf := bytes.NewReader(payload)
+	channelID, err := ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+	subchannelID, err := ReadOptionalUint64(buf)
+	if err != nil {
+		return err
+	}
+	timestamp, err := ReadInt64(buf)
+	if err != nil {
+		return err
+	}
+	m.ChannelID = channelID
+	m.SubchannelID = subchannelID
+	m.Timestamp = timestamp
+	return nil
+}
+
 // Compile-time checks to ensure all message types implement the ProtocolMessage interface
 // This will cause a compile error if any message type is missing Encode(), EncodeTo(), or Decode()
 var (
@@ -4132,4 +4334,7 @@ var (
 	_ ProtocolMessage = (*IPUnbannedMessage)(nil)
 	_ ProtocolMessage = (*BanListMessage)(nil)
 	_ ProtocolMessage = (*UserDeletedMessage)(nil)
+	_ ProtocolMessage = (*GetUnreadCountsMessage)(nil)
+	_ ProtocolMessage = (*UnreadCountsMessage)(nil)
+	_ ProtocolMessage = (*UpdateReadStateMessage)(nil)
 )

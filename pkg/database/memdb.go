@@ -1237,3 +1237,77 @@ func (m *MemDB) DeleteUser(userID uint64) (string, error) {
 	log.Printf("MemDB: deleted user and anonymized messages: id=%d, nickname=%s", userID, nickname)
 	return nickname, nil
 }
+
+// UpdateUserChannelState updates or inserts the last_read_at timestamp for a user+channel
+// Delegates to underlying SQLite DB (no caching needed for read state)
+func (m *MemDB) UpdateUserChannelState(userID uint64, channelID uint64, subchannelID *uint64, timestamp int64) error {
+	return m.sqliteDB.UpdateUserChannelState(userID, channelID, subchannelID, timestamp)
+}
+
+// GetUserChannelState retrieves the last_read_at timestamp for a user+channel
+// Delegates to underlying SQLite DB (no caching needed for read state)
+func (m *MemDB) GetUserChannelState(userID uint64, channelID uint64, subchannelID *uint64) (int64, error) {
+	return m.sqliteDB.GetUserChannelState(userID, channelID, subchannelID)
+}
+
+// GetUnreadCountForChannel counts unread messages in a channel after the given timestamp
+// Uses in-memory data for fast counting
+func (m *MemDB) GetUnreadCountForChannel(channelID uint64, subchannelID *uint64, sinceTimestamp int64) (uint32, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	messageIDs, exists := m.messagesByChannel[int64(channelID)]
+	if !exists {
+		return 0, nil
+	}
+
+	var count uint32
+	for _, msgID := range messageIDs {
+		msg, exists := m.messages[msgID]
+		if !exists {
+			continue
+		}
+
+		// Check subchannel match (both nil, or both equal)
+		if subchannelID == nil && msg.SubchannelID != nil {
+			continue
+		}
+		if subchannelID != nil && (msg.SubchannelID == nil || *subchannelID != uint64(*msg.SubchannelID)) {
+			continue
+		}
+
+		// Count if created after timestamp and not deleted
+		if msg.CreatedAt > sinceTimestamp && msg.DeletedAt == nil {
+			count++
+		}
+	}
+
+	return count, nil
+}
+
+// GetUnreadCountForThread counts unread messages in a specific thread after the given timestamp
+// Uses in-memory data for fast counting
+func (m *MemDB) GetUnreadCountForThread(threadID uint64, sinceTimestamp int64) (uint32, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	messageIDs, exists := m.messagesByThread[int64(threadID)]
+	if !exists {
+		return 0, nil
+	}
+
+	var count uint32
+	for _, msgID := range messageIDs {
+		msg, exists := m.messages[msgID]
+		if !exists {
+			continue
+		}
+
+		// Count if created after timestamp and not deleted
+		if msg.CreatedAt > sinceTimestamp && msg.DeletedAt == nil {
+			count++
+		}
+	}
+
+	return count, nil
+}

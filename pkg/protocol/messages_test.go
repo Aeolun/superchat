@@ -1905,6 +1905,9 @@ func TestMessageTypeConstants(t *testing.T) {
 	assert.Equal(t, 0xAB, TypeChannelUserList)
 	assert.Equal(t, 0xAC, TypeChannelPresence)
 	assert.Equal(t, 0xAD, TypeServerPresence)
+	assert.Equal(t, 0x18, TypeGetUnreadCounts)
+	assert.Equal(t, 0x1D, TypeUpdateReadState)
+	assert.Equal(t, 0x97, TypeUnreadCounts)
 }
 
 func TestErrorCodeConstants(t *testing.T) {
@@ -1917,4 +1920,298 @@ func TestErrorCodeConstants(t *testing.T) {
 	assert.Equal(t, 5000, ErrCodeRateLimitExceeded)
 	assert.Equal(t, 6000, ErrCodeInvalidInput)
 	assert.Equal(t, 9000, ErrCodeInternalError)
+}
+
+func TestGetUnreadCountsMessage(t *testing.T) {
+	uint64Ptr := func(v uint64) *uint64 { return &v }
+	int64Ptr := func(v int64) *int64 { return &v }
+
+	tests := []struct {
+		name string
+		msg  GetUnreadCountsMessage
+	}{
+		{
+			name: "with timestamp and single channel",
+			msg: GetUnreadCountsMessage{
+				SinceTimestamp: int64Ptr(1234567890),
+				Targets: []UnreadTarget{
+					{ChannelID: 1, SubchannelID: nil},
+				},
+			},
+		},
+		{
+			name: "with timestamp and multiple channels",
+			msg: GetUnreadCountsMessage{
+				SinceTimestamp: int64Ptr(9876543210),
+				Targets: []UnreadTarget{
+					{ChannelID: 1, SubchannelID: nil},
+					{ChannelID: 2, SubchannelID: uint64Ptr(5)},
+					{ChannelID: 3, SubchannelID: nil},
+				},
+			},
+		},
+		{
+			name: "without timestamp (use server state)",
+			msg: GetUnreadCountsMessage{
+				SinceTimestamp: nil,
+				Targets: []UnreadTarget{
+					{ChannelID: 42, SubchannelID: nil},
+				},
+			},
+		},
+		{
+			name: "empty targets list",
+			msg: GetUnreadCountsMessage{
+				SinceTimestamp: int64Ptr(1000),
+				Targets:        []UnreadTarget{},
+			},
+		},
+		{
+			name: "with subchannels",
+			msg: GetUnreadCountsMessage{
+				SinceTimestamp: int64Ptr(5000),
+				Targets: []UnreadTarget{
+					{ChannelID: 10, SubchannelID: uint64Ptr(1), ThreadID: nil},
+					{ChannelID: 10, SubchannelID: uint64Ptr(2), ThreadID: nil},
+					{ChannelID: 20, SubchannelID: nil, ThreadID: nil},
+				},
+			},
+		},
+		{
+			name: "with thread IDs",
+			msg: GetUnreadCountsMessage{
+				SinceTimestamp: int64Ptr(2000),
+				Targets: []UnreadTarget{
+					{ChannelID: 1, SubchannelID: nil, ThreadID: uint64Ptr(42)},
+					{ChannelID: 1, SubchannelID: nil, ThreadID: uint64Ptr(99)},
+					{ChannelID: 2, SubchannelID: uint64Ptr(5), ThreadID: uint64Ptr(100)},
+				},
+			},
+		},
+		{
+			name: "mixed - channels and threads",
+			msg: GetUnreadCountsMessage{
+				SinceTimestamp: int64Ptr(3000),
+				Targets: []UnreadTarget{
+					{ChannelID: 1, SubchannelID: nil, ThreadID: nil},          // whole channel
+					{ChannelID: 1, SubchannelID: nil, ThreadID: uint64Ptr(5)}, // specific thread
+					{ChannelID: 2, SubchannelID: nil, ThreadID: nil},          // another channel
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &GetUnreadCountsMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+
+			if tt.msg.SinceTimestamp == nil {
+				assert.Nil(t, decoded.SinceTimestamp)
+			} else {
+				require.NotNil(t, decoded.SinceTimestamp)
+				assert.Equal(t, *tt.msg.SinceTimestamp, *decoded.SinceTimestamp)
+			}
+
+			assert.Equal(t, len(tt.msg.Targets), len(decoded.Targets))
+			for i := range tt.msg.Targets {
+				assert.Equal(t, tt.msg.Targets[i].ChannelID, decoded.Targets[i].ChannelID)
+				if tt.msg.Targets[i].SubchannelID == nil {
+					assert.Nil(t, decoded.Targets[i].SubchannelID)
+				} else {
+					require.NotNil(t, decoded.Targets[i].SubchannelID)
+					assert.Equal(t, *tt.msg.Targets[i].SubchannelID, *decoded.Targets[i].SubchannelID)
+				}
+				if tt.msg.Targets[i].ThreadID == nil {
+					assert.Nil(t, decoded.Targets[i].ThreadID)
+				} else {
+					require.NotNil(t, decoded.Targets[i].ThreadID)
+					assert.Equal(t, *tt.msg.Targets[i].ThreadID, *decoded.Targets[i].ThreadID)
+				}
+			}
+		})
+	}
+}
+
+func TestUnreadCountsMessage(t *testing.T) {
+	uint64Ptr := func(v uint64) *uint64 { return &v }
+
+	tests := []struct {
+		name string
+		msg  UnreadCountsMessage
+	}{
+		{
+			name: "single channel with count",
+			msg: UnreadCountsMessage{
+				Counts: []UnreadCount{
+					{ChannelID: 1, SubchannelID: nil, UnreadCount: 42},
+				},
+			},
+		},
+		{
+			name: "multiple channels",
+			msg: UnreadCountsMessage{
+				Counts: []UnreadCount{
+					{ChannelID: 1, SubchannelID: nil, UnreadCount: 10},
+					{ChannelID: 2, SubchannelID: uint64Ptr(3), UnreadCount: 25},
+					{ChannelID: 3, SubchannelID: nil, UnreadCount: 0},
+				},
+			},
+		},
+		{
+			name: "zero counts",
+			msg: UnreadCountsMessage{
+				Counts: []UnreadCount{
+					{ChannelID: 1, SubchannelID: nil, UnreadCount: 0},
+					{ChannelID: 2, SubchannelID: nil, UnreadCount: 0},
+				},
+			},
+		},
+		{
+			name: "empty counts list",
+			msg: UnreadCountsMessage{
+				Counts: []UnreadCount{},
+			},
+		},
+		{
+			name: "large count values",
+			msg: UnreadCountsMessage{
+				Counts: []UnreadCount{
+					{ChannelID: 999, SubchannelID: uint64Ptr(888), UnreadCount: 4294967295}, // max uint32
+				},
+			},
+		},
+		{
+			name: "mixed subchannels",
+			msg: UnreadCountsMessage{
+				Counts: []UnreadCount{
+					{ChannelID: 10, SubchannelID: nil, ThreadID: nil, UnreadCount: 5},
+					{ChannelID: 10, SubchannelID: uint64Ptr(1), ThreadID: nil, UnreadCount: 3},
+					{ChannelID: 10, SubchannelID: uint64Ptr(2), ThreadID: nil, UnreadCount: 7},
+				},
+			},
+		},
+		{
+			name: "with thread counts",
+			msg: UnreadCountsMessage{
+				Counts: []UnreadCount{
+					{ChannelID: 1, SubchannelID: nil, ThreadID: uint64Ptr(42), UnreadCount: 3},
+					{ChannelID: 1, SubchannelID: nil, ThreadID: uint64Ptr(99), UnreadCount: 7},
+				},
+			},
+		},
+		{
+			name: "mixed channels and threads",
+			msg: UnreadCountsMessage{
+				Counts: []UnreadCount{
+					{ChannelID: 1, SubchannelID: nil, ThreadID: nil, UnreadCount: 50},          // whole channel
+					{ChannelID: 1, SubchannelID: nil, ThreadID: uint64Ptr(10), UnreadCount: 5}, // specific thread
+					{ChannelID: 2, SubchannelID: nil, ThreadID: nil, UnreadCount: 0},           // another channel, no unreads
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &UnreadCountsMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+
+			assert.Equal(t, len(tt.msg.Counts), len(decoded.Counts))
+			for i := range tt.msg.Counts {
+				assert.Equal(t, tt.msg.Counts[i].ChannelID, decoded.Counts[i].ChannelID)
+				assert.Equal(t, tt.msg.Counts[i].UnreadCount, decoded.Counts[i].UnreadCount)
+				if tt.msg.Counts[i].SubchannelID == nil {
+					assert.Nil(t, decoded.Counts[i].SubchannelID)
+				} else {
+					require.NotNil(t, decoded.Counts[i].SubchannelID)
+					assert.Equal(t, *tt.msg.Counts[i].SubchannelID, *decoded.Counts[i].SubchannelID)
+				}
+				if tt.msg.Counts[i].ThreadID == nil {
+					assert.Nil(t, decoded.Counts[i].ThreadID)
+				} else {
+					require.NotNil(t, decoded.Counts[i].ThreadID)
+					assert.Equal(t, *tt.msg.Counts[i].ThreadID, *decoded.Counts[i].ThreadID)
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateReadStateMessage(t *testing.T) {
+	uint64Ptr := func(v uint64) *uint64 { return &v }
+
+	tests := []struct {
+		name string
+		msg  UpdateReadStateMessage
+	}{
+		{
+			name: "channel without subchannel",
+			msg: UpdateReadStateMessage{
+				ChannelID:    1,
+				SubchannelID: nil,
+				Timestamp:    1234567890,
+			},
+		},
+		{
+			name: "channel with subchannel",
+			msg: UpdateReadStateMessage{
+				ChannelID:    42,
+				SubchannelID: uint64Ptr(7),
+				Timestamp:    9876543210,
+			},
+		},
+		{
+			name: "zero timestamp",
+			msg: UpdateReadStateMessage{
+				ChannelID:    100,
+				SubchannelID: nil,
+				Timestamp:    0,
+			},
+		},
+		{
+			name: "negative timestamp",
+			msg: UpdateReadStateMessage{
+				ChannelID:    5,
+				SubchannelID: uint64Ptr(2),
+				Timestamp:    -1000,
+			},
+		},
+		{
+			name: "large timestamp",
+			msg: UpdateReadStateMessage{
+				ChannelID:    999,
+				SubchannelID: nil,
+				Timestamp:    9223372036854775807, // max int64
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.msg.Encode()
+			require.NoError(t, err)
+
+			decoded := &UpdateReadStateMessage{}
+			err = decoded.Decode(payload)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.msg.ChannelID, decoded.ChannelID)
+			assert.Equal(t, tt.msg.Timestamp, decoded.Timestamp)
+			if tt.msg.SubchannelID == nil {
+				assert.Nil(t, decoded.SubchannelID)
+			} else {
+				require.NotNil(t, decoded.SubchannelID)
+				assert.Equal(t, *tt.msg.SubchannelID, *decoded.SubchannelID)
+			}
+		})
+	}
 }

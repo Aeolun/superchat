@@ -214,6 +214,7 @@ Challenge-response authentication was considered but rejected because:
 | 0x1A | PROVIDE_PUBLIC_KEY | Upload public key for encryption |
 | 0x1B | ALLOW_UNENCRYPTED | Explicitly allow unencrypted DMs |
 | 0x1C | LOGOUT | Clear authentication, become anonymous |
+| 0x1D | UPDATE_READ_STATE | Update last read timestamp for a channel |
 | 0x51 | SUBSCRIBE_THREAD | Subscribe to thread updates |
 | 0x52 | UNSUBSCRIBE_THREAD | Unsubscribe from thread updates |
 | 0x53 | SUBSCRIBE_CHANNEL | Subscribe to new threads in channel |
@@ -725,35 +726,39 @@ Add an SSH public key to the authenticated user's account.
 +-------------------+-------------------+------------------------+------------------------+
 ```
 
-### 0x17 - UPDATE_READ_STATE (Client → Server)
+### 0x1D - UPDATE_READ_STATE (Client → Server)
 
-Update last read position (registered users only).
+Update last read timestamp for a channel/subchannel.
 
 ```
-+-------------------+-----------------------------+-------------------+
-| channel_id (u64)  | subchannel_id (Optional u64)| message_id (u64)  |
-+-------------------+-----------------------------+-------------------+
-| timestamp (Timestamp)                                              |
-+--------------------------------------------------------------------+
++-------------------+-----------------------------+----------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| timestamp (i64)      |
++-------------------+-----------------------------+----------------------+
 ```
 
-**Recommended client behavior:**
-- **On channel/subchannel leave**: Update to the newest message that was displayed
-  - Typically only if `message_id > current last_read_message_id` (don't move backwards)
-  - Skip if user has already manually marked ahead
+**Fields:**
+- `channel_id`: Channel to mark as read
+- `subchannel_id`: Optional subchannel (nullable for forward compatibility)
+- `timestamp`: Unix timestamp (seconds) to mark as "last read at"
 
-- **On manual "mark as read" action**: User presses shortcut to mark up to current position
-  - Allows clearing unreads without reading everything
-  - Or marking older position as read for custom workflows
+**Behavior:**
+- **Registered users**: Server stores in `UserChannelState` table
+- **Anonymous users**: Client should handle this locally (this message is accepted but ignored by server for anonymous sessions)
+- Server accepts any timestamp value (client can move read position forward or backward)
+- Client UI should prompt user when leaving a channel: "Mark as read?" with options:
+  - "Yes, mark read to now"
+  - "No, leave as-is"
+  - "Always mark read automatically" (saves preference)
 
-**Server behavior:**
-- Stores in `UserChannelState` table
-- Accepts any `message_id` value (allows moving backwards for custom client logic)
-- Simply updates the stored position
+**When to send:**
+- When user leaves a channel (if "mark as read" is enabled)
+- When user manually triggers "mark as read" action
+- NOT sent automatically on every message view (too chatty)
 
 **Anonymous users:**
-- Handle this locally in client-side database
-- Same flexibility applies
+- Store `last_read_at` in local client database
+- Persists across sessions on same device
+- Use this timestamp when requesting GET_UNREAD_COUNTS
 
 ### 0x0E - CHANGE_PASSWORD (Client → Server)
 
@@ -858,30 +863,49 @@ Each key:
 
 ### 0x18 - GET_UNREAD_COUNTS (Client → Server)
 
-Request unread counts for specific channels/subchannels (registered users only).
+Request unread message counts for specific channels/subchannels/threads.
 
 ```
-+----------------------+----------------+
-| target_count (u16)   | targets []     |
-+----------------------+----------------+
++------------------------+----------------------+----------------+
+| since_timestamp (i64?) | target_count (u16)   | targets []     |
++------------------------+----------------------+----------------+
 
 Each target:
-+-------------------+-----------------------------+
-| channel_id (u64)  | subchannel_id (Optional u64)|
-+-------------------+-----------------------------+
++-------------------+-----------------------------+----------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| thread_id (Optional u64)|
++-------------------+-----------------------------+----------------------+
 ```
 
-Client specifies which channels/subchannels they want unread counts for. Server responds with UNREAD_COUNTS.
+**Fields:**
+- `since_timestamp`: Optional unix timestamp (seconds). If present, count messages after this time. If null:
+  - **Registered users**: Server uses stored `last_read_at` from `UserChannelState` table
+  - **Anonymous users**: Returns error (must provide timestamp)
+- `target_count`: Number of targets to request counts for
+- `targets`: Array of channel/subchannel/thread identifiers
+  - `channel_id`: Required - which channel to count
+  - `subchannel_id`: Optional - if present, count only this subchannel
+  - `thread_id`: Optional - if present, count only messages in this thread (root message ID)
+
+**Usage patterns:**
+- **Channel-wide count**: `{channel_id: 1, subchannel_id: null, thread_id: null}` - all messages in channel
+- **Specific thread**: `{channel_id: 1, subchannel_id: null, thread_id: 42}` - only replies to message 42
+- **Subchannel thread**: `{channel_id: 1, subchannel_id: 5, thread_id: 100}` - thread in subchannel
+- **Registered user, first request**: Omit `since_timestamp`, server uses stored state
+- **Anonymous user**: Must always provide `since_timestamp` (typically from local client database)
+
+**Response:**
+Server responds with UNREAD_COUNTS (0x97) message.
 
 **Performance Note:**
-- Clients should request counts for one channel at a time (or small batches)
-- Server query: `SELECT COUNT(*) FROM Message WHERE channel_id = ? AND subchannel_id = ? AND created_at > last_read_at`
-- Uses indexed lookup on `(channel_id, subchannel_id, created_at)` - very fast
-- Avoids expensive full-table scans
+- Clients should request counts for visible items only (not all channels/threads at once)
+- Server queries use indexed lookups:
+  - Channel-wide: `WHERE channel_id = ? AND created_at > ?`
+  - Thread-specific: `WHERE thread_id = ? AND created_at > ?`
+- Very fast with proper indexes
 
 ### 0x97 - UNREAD_COUNTS (Server → Client)
 
-Response with unread message counts (registered users only).
+Response with unread message counts for requested channels/threads.
 
 ```
 +----------------------+----------------+
@@ -889,15 +913,23 @@ Response with unread message counts (registered users only).
 +----------------------+----------------+
 
 Each count entry:
-+-------------------+-----------------------------+----------------------+
-| channel_id (u64)  | subchannel_id (Optional u64)| unread_count (u32)   |
-+-------------------+-----------------------------+----------------------+
++-------------------+-----------------------------+----------------------+----------------------+
+| channel_id (u64)  | subchannel_id (Optional u64)| thread_id (Optional u64)| unread_count (u32)   |
++-------------------+-----------------------------+----------------------+----------------------+
 ```
 
+**Fields:**
+- `count_count`: Number of count entries
+- `counts`: Array of unread counts per channel/subchannel/thread
+- `unread_count`: Number of messages created after the reference timestamp
+
 **Notes:**
-- Only sent to registered users (anonymous users track locally)
-- `unread_count` is calculated from `UserChannelState.last_read_at`
-- If user has never read a channel, count is total messages in that channel
+- Sent in response to GET_UNREAD_COUNTS (0x18)
+- Count is based on either:
+  - The `since_timestamp` provided in the request, OR
+  - The stored `last_read_at` from `UserChannelState` table (registered users only)
+- If a requested target has 0 unread messages, it's still included in the response with `unread_count = 0`
+- Response entries match the structure of request targets (include `thread_id` if it was requested)
 
 ### 0x0F - GET_USER_INFO (Client → Server)
 
@@ -1545,11 +1577,11 @@ Confirmation that a subscription was successful.
 ```
 
 **Type values:**
-- 0x51 = Thread subscription confirmed
-- 0x53 = Channel subscription confirmed
+- 1 = Thread subscription confirmed
+- 2 = Channel subscription confirmed
 
 **Fields:**
-- `type`: Indicates which type of subscription was confirmed (matches request type)
+- `type`: Indicates which type of subscription was confirmed
 - `id`: The ID that was subscribed to (thread_id or channel_id depending on type)
 - `subchannel_id`: Only present for channel subscriptions, null for thread subscriptions
 
