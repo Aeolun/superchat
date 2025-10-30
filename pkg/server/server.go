@@ -250,8 +250,7 @@ func (s *Server) Start() error {
 		Control: func(network, address string, c syscall.RawConn) error {
 			var opErr error
 			err := c.Control(func(fd uintptr) {
-				// Set SO_REUSEADDR to allow quick restart
-				opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				opErr = setSocketOptions(fd)
 			})
 			if err != nil {
 				return err
