@@ -970,8 +970,6 @@
   var MSG_CHANNEL_PRESENCE = 172;
   var MSG_ERROR = 145;
   var MSG_SERVER_CONFIG = 152;
-  var SUBSCRIBE_TYPE_THREAD = 1;
-  var SUBSCRIBE_TYPE_CHANNEL = 2;
   var SuperChatClient = class {
     constructor() {
       this.ws = null;
@@ -1054,21 +1052,11 @@
       }
       const savedServerIndex = localStorage.getItem("superchat_server_index");
       const savedCustomUrl = localStorage.getItem("superchat_custom_url");
-      const savedServerSecure = localStorage.getItem("superchat_server_secure");
-      console.log("Restoring from localStorage:", {
-        savedServerIndex,
-        savedCustomUrl,
-        savedServerSecure
-      });
       this.renderServerList();
       this.checkServerStatus();
       if (savedServerIndex !== null) {
         const index = parseInt(savedServerIndex, 10);
         if (index >= 0 && index < this.servers.length) {
-          if (savedServerSecure !== null) {
-            this.servers[index].isSecure = savedServerSecure === "true";
-            console.log(`Restored server ${index} with isSecure=${this.servers[index].isSecure}`);
-          }
           this.selectServer(index);
           if (index === this.servers.length - 1 && savedCustomUrl) {
             const serverUrlInput = document.getElementById("server-url");
@@ -1087,18 +1075,8 @@
         const nickname = document.getElementById("nickname").value;
         const throttle = parseInt(document.getElementById("throttle-speed").value, 10);
         this.throttleBytesPerSecond = throttle;
-        console.log("Saving to localStorage:", {
-          nickname,
-          serverIndex: this.selectedServerIndex,
-          isSecure: this.servers[this.selectedServerIndex]?.isSecure,
-          url
-        });
         localStorage.setItem("superchat_nickname", nickname);
         localStorage.setItem("superchat_server_index", this.selectedServerIndex.toString());
-        const selectedServer = this.servers[this.selectedServerIndex];
-        if (selectedServer) {
-          localStorage.setItem("superchat_server_secure", selectedServer.isSecure.toString());
-        }
         if (this.selectedServerIndex === this.servers.length - 1) {
           localStorage.setItem("superchat_custom_url", url);
         }
@@ -1487,7 +1465,7 @@
         const prefix = channel.type === 0 ? ">" : "#";
         item.innerHTML = `
         <div class="channel-name">${prefix} ${channel.name}</div>
-        <div class="channel-info">${channel.type === 0 ? "Chat" : "Forum"}</div>
+        <div class="channel-info">${channel.user_count} online \u2022 ${channel.type === 0 ? "Chat" : "Forum"}</div>
       `;
         item.addEventListener("click", () => {
           this.joinChannel(channel);
@@ -1533,7 +1511,7 @@
       }
     }
     subscribeToChannel(channelId) {
-      if (this.subscribedChannelId !== null) {
+      if (this.subscribedChannelId !== null && this.subscribedChannelId !== channelId) {
         this.unsubscribeFromChannel(this.subscribedChannelId);
       }
       const encoder = new SubscribeChannelEncoder();
@@ -1543,7 +1521,6 @@
       });
       this.sendFrame(MSG_SUBSCRIBE_CHANNEL, payload);
       console.log(`Subscribing to channel ${channelId}...`);
-      this.subscribedChannelId = channelId;
     }
     unsubscribeFromChannel(channelId) {
       const encoder = new UnsubscribeChannelEncoder();
@@ -1552,35 +1529,36 @@
         subchannel_id: { present: 0 }
       });
       this.sendFrame(MSG_UNSUBSCRIBE_CHANNEL, payload);
-      console.log(`Unsubscribing from channel ${channelId}...`);
+      console.log(`Unsubscribed from channel ${channelId}`);
       this.subscribedChannelId = null;
     }
     subscribeToThread(threadId) {
-      if (this.subscribedThreadId !== null) {
+      if (this.subscribedThreadId !== null && this.subscribedThreadId !== threadId) {
         this.unsubscribeFromThread(this.subscribedThreadId);
       }
       const encoder = new SubscribeThreadEncoder();
       const payload = encoder.encode({ thread_id: threadId });
       this.sendFrame(MSG_SUBSCRIBE_THREAD, payload);
       console.log(`Subscribing to thread ${threadId}...`);
-      this.subscribedThreadId = threadId;
     }
     unsubscribeFromThread(threadId) {
       const encoder = new UnsubscribeThreadEncoder();
       const payload = encoder.encode({ thread_id: threadId });
       this.sendFrame(MSG_UNSUBSCRIBE_THREAD, payload);
-      console.log(`Unsubscribing from thread ${threadId}...`);
+      console.log(`Unsubscribed from thread ${threadId}`);
       this.subscribedThreadId = null;
     }
     handleSubscribeOk(payload) {
       try {
         const decoder = new SubscribeOkDecoder(payload);
         const response = decoder.decode();
-        if (response.type === SUBSCRIBE_TYPE_CHANNEL) {
-          console.log(`Subscription confirmed for channel ${response.id}`);
+        if (response.type === MSG_SUBSCRIBE_CHANNEL) {
+          this.subscribedChannelId = response.id;
+          console.log(`Successfully subscribed to channel ${response.id}`);
           this.updateChannelTitle();
-        } else if (response.type === SUBSCRIBE_TYPE_THREAD) {
-          console.log(`Subscription confirmed for thread ${response.id}`);
+        } else if (response.type === MSG_SUBSCRIBE_THREAD) {
+          this.subscribedThreadId = response.id;
+          console.log(`Successfully subscribed to thread ${response.id}`);
         }
       } catch (error) {
         console.error("Error decoding SUBSCRIBE_OK:", error);
@@ -1688,13 +1666,16 @@
         const date = new Date(Number(thread.created_at));
         const timeStr = date.toLocaleTimeString();
         const preview = thread.content.length > 80 ? thread.content.substring(0, 80) + "..." : thread.content;
-        const replyCount = thread.reply_count > 0 ? ` \u2022 ${thread.reply_count} ${thread.reply_count === 1 ? "reply" : "replies"}` : "";
+        const replyBadge = thread.reply_count > 0 ? `<span class="reply-count-badge">${thread.reply_count} ${thread.reply_count === 1 ? "reply" : "replies"}</span>` : "";
         div.innerHTML = `
         <div class="thread-header">
           <span class="thread-author">${this.escapeHtml(thread.author_nickname)}</span>
-          <span class="thread-time">${timeStr}${replyCount}</span>
+          <span class="thread-time">${timeStr}</span>
         </div>
         <div class="thread-preview">${this.escapeHtml(preview)}</div>
+        <div class="thread-footer">
+          ${replyBadge}
+        </div>
       `;
         div.addEventListener("click", () => {
           this.openThread(thread);

@@ -47,8 +47,13 @@ const MSG_UNSUBSCRIBE_THREAD = 0x52;
 const MSG_SUBSCRIBE_CHANNEL = 0x53;
 const MSG_UNSUBSCRIBE_CHANNEL = 0x54;
 const MSG_SUBSCRIBE_OK = 0x99;
+const MSG_CHANNEL_PRESENCE = 0xAC;
 const MSG_ERROR = 0x91;
 const MSG_SERVER_CONFIG = 0x98;
+
+// SUBSCRIBE_OK type field values (not message types!)
+const SUBSCRIBE_TYPE_THREAD = 1;
+const SUBSCRIBE_TYPE_CHANNEL = 2;
 
 // Application state
 class SuperChatClient {
@@ -86,18 +91,93 @@ class SuperChatClient {
   private subscribedChannelId: bigint | null = null;
   private subscribedThreadId: bigint | null = null;
 
+  // Server list
+  private servers: Array<{name: string, wsUrl: string, wssUrl: string, status: 'checking' | 'online' | 'offline', isSecure: boolean}> = [];
+  private selectedServerUrl: string = '';
+  private selectedServerIndex: number = -1;
+
   constructor() {
     this.setupEventListeners();
-    this.setDefaultServerUrl();
+    this.initializeServers();
   }
 
-  private setDefaultServerUrl() {
-    const serverUrlInput = document.getElementById('server-url') as HTMLInputElement;
-    if (serverUrlInput) {
-      // Use current page's hostname with port 8080
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const hostname = window.location.hostname || 'localhost';
-      serverUrlInput.value = `${protocol}//${hostname}:8080/ws`;
+  private initializeServers() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const hostname = window.location.hostname || 'localhost';
+
+    this.servers = [
+      {
+        name: 'Current Server',
+        wsUrl: `ws://${hostname}:8080/ws`,
+        wssUrl: `wss://${hostname}:8080/ws`,
+        status: 'checking',
+        isSecure: protocol === 'wss:'
+      }
+    ];
+
+    // Only add superchat.win if we're not already on it
+    if (hostname !== 'superchat.win') {
+      this.servers.push({
+        name: 'superchat.win',
+        wsUrl: 'ws://superchat.win:8080/ws',
+        wssUrl: 'wss://superchat.win:8080/ws',
+        status: 'checking',
+        isSecure: false
+      });
+    }
+
+    // Always add Custom Server last
+    this.servers.push({
+      name: 'Custom Server',
+      wsUrl: '',
+      wssUrl: '',
+      status: 'offline',
+      isSecure: false
+    });
+
+    // Restore last nickname
+    const savedNickname = localStorage.getItem('superchat_nickname');
+    if (savedNickname) {
+      const nicknameInput = document.getElementById('nickname') as HTMLInputElement;
+      if (nicknameInput) {
+        nicknameInput.value = savedNickname;
+      }
+    }
+
+    // Restore last selected server
+    const savedServerIndex = localStorage.getItem('superchat_server_index');
+    const savedCustomUrl = localStorage.getItem('superchat_custom_url');
+    const savedServerSecure = localStorage.getItem('superchat_server_secure');
+
+    console.log('Restoring from localStorage:', {
+      savedServerIndex,
+      savedCustomUrl,
+      savedServerSecure
+    });
+
+    this.renderServerList();
+    this.checkServerStatus();
+
+    // Select saved server after rendering
+    if (savedServerIndex !== null) {
+      const index = parseInt(savedServerIndex, 10);
+      if (index >= 0 && index < this.servers.length) {
+        // Restore the isSecure flag before selecting
+        if (savedServerSecure !== null) {
+          this.servers[index].isSecure = savedServerSecure === 'true';
+          console.log(`Restored server ${index} with isSecure=${this.servers[index].isSecure}`);
+        }
+
+        this.selectServer(index);
+
+        // Restore custom URL if it was custom server
+        if (index === this.servers.length - 1 && savedCustomUrl) {
+          const serverUrlInput = document.getElementById('server-url') as HTMLInputElement;
+          if (serverUrlInput) {
+            serverUrlInput.value = savedCustomUrl;
+          }
+        }
+      }
     }
   }
 
@@ -110,6 +190,28 @@ class SuperChatClient {
       const nickname = (document.getElementById('nickname') as HTMLInputElement).value;
       const throttle = parseInt((document.getElementById('throttle-speed') as HTMLSelectElement).value, 10);
       this.throttleBytesPerSecond = throttle;
+
+      // Save nickname and server selection to localStorage
+      console.log('Saving to localStorage:', {
+        nickname,
+        serverIndex: this.selectedServerIndex,
+        isSecure: this.servers[this.selectedServerIndex]?.isSecure,
+        url
+      });
+      localStorage.setItem('superchat_nickname', nickname);
+      localStorage.setItem('superchat_server_index', this.selectedServerIndex.toString());
+
+      // Save which protocol (ws/wss) was used
+      const selectedServer = this.servers[this.selectedServerIndex];
+      if (selectedServer) {
+        localStorage.setItem('superchat_server_secure', selectedServer.isSecure.toString());
+      }
+
+      // Save custom URL if custom server is selected
+      if (this.selectedServerIndex === this.servers.length - 1) {
+        localStorage.setItem('superchat_custom_url', url);
+      }
+
       this.connect(url, nickname);
     });
 
@@ -285,12 +387,17 @@ class SuperChatClient {
 
       this.ws.onerror = (error) => {
         console.error('WebSocket error:', error);
-        this.showStatus('Connection error', 'error');
+        const errorMsg = error instanceof ErrorEvent && error.message ? error.message : error.toString();
+        this.showStatus(`Failed to connect to ${url}: ${errorMsg}`, 'error');
       };
 
-      this.ws.onclose = () => {
-        console.log('WebSocket closed');
-        this.showStatus('Disconnected from server', 'error');
+      this.ws.onclose = (event) => {
+        console.log('WebSocket closed', event);
+        if (event.wasClean) {
+          this.showStatus('Disconnected from server', 'error');
+        } else {
+          this.showStatus(`Connection lost (code: ${event.code}). Server may be offline or unreachable.`, 'error');
+        }
         if (this.pingInterval) {
           clearInterval(this.pingInterval);
           this.pingInterval = null;
@@ -511,6 +618,10 @@ class SuperChatClient {
         case MSG_SUBSCRIBE_OK:
           this.handleSubscribeOk(payload);
           break;
+        case MSG_CHANNEL_PRESENCE:
+          // Channel presence notifications (users joining/leaving) - ignore for now
+          console.log('Received CHANNEL_PRESENCE notification');
+          break;
         case MSG_ERROR:
           this.handleError(payload);
           break;
@@ -616,7 +727,7 @@ class SuperChatClient {
       const prefix = channel.type === 0 ? '>' : '#';
       item.innerHTML = `
         <div class="channel-name">${prefix} ${channel.name}</div>
-        <div class="channel-info">${channel.user_count} online • ${channel.type === 0 ? 'Chat' : 'Forum'}</div>
+        <div class="channel-info">${channel.type === 0 ? 'Chat' : 'Forum'}</div>
       `;
 
       item.addEventListener('click', () => {
@@ -645,7 +756,6 @@ class SuperChatClient {
       if (channel) {
         this.currentChannel = channel;
         console.log('Joined channel:', channel.name);
-        this.showStatus(`Joined #${channel.name}`, 'success');
 
         // Reset view state when switching channels
         if (this.subscribedThreadId !== null) {
@@ -659,8 +769,7 @@ class SuperChatClient {
         this.threadReplies.clear();
 
         // Update UI
-        const prefix = channel.type === 0 ? '>' : '#';
-        document.getElementById('channel-title')!.textContent = `${prefix} ${channel.name}`;
+        this.updateChannelTitle();
         this.renderChannels();
         this.updateBackButton();
         this.updateComposeArea();
@@ -677,8 +786,8 @@ class SuperChatClient {
   }
 
   private subscribeToChannel(channelId: bigint) {
-    // Unsubscribe from previous channel if any
-    if (this.subscribedChannelId !== null && this.subscribedChannelId !== channelId) {
+    // Always unsubscribe from previous channel if we think we're subscribed to one
+    if (this.subscribedChannelId !== null) {
       this.unsubscribeFromChannel(this.subscribedChannelId);
     }
 
@@ -689,6 +798,9 @@ class SuperChatClient {
     });
     this.sendFrame(MSG_SUBSCRIBE_CHANNEL, payload);
     console.log(`Subscribing to channel ${channelId}...`);
+
+    // Optimistically set the subscribed channel immediately
+    this.subscribedChannelId = channelId;
   }
 
   private unsubscribeFromChannel(channelId: bigint) {
@@ -698,13 +810,15 @@ class SuperChatClient {
       subchannel_id: { present: 0 }
     });
     this.sendFrame(MSG_UNSUBSCRIBE_CHANNEL, payload);
-    console.log(`Unsubscribed from channel ${channelId}`);
+    console.log(`Unsubscribing from channel ${channelId}...`);
+
+    // Clear local state immediately
     this.subscribedChannelId = null;
   }
 
   private subscribeToThread(threadId: bigint) {
-    // Unsubscribe from previous thread if any
-    if (this.subscribedThreadId !== null && this.subscribedThreadId !== threadId) {
+    // Always unsubscribe from previous thread if we think we're subscribed to one
+    if (this.subscribedThreadId !== null) {
       this.unsubscribeFromThread(this.subscribedThreadId);
     }
 
@@ -712,13 +826,18 @@ class SuperChatClient {
     const payload = encoder.encode({ thread_id: threadId });
     this.sendFrame(MSG_SUBSCRIBE_THREAD, payload);
     console.log(`Subscribing to thread ${threadId}...`);
+
+    // Optimistically set the subscribed thread immediately
+    this.subscribedThreadId = threadId;
   }
 
   private unsubscribeFromThread(threadId: bigint) {
     const encoder = new UnsubscribeThreadEncoder();
     const payload = encoder.encode({ thread_id: threadId });
     this.sendFrame(MSG_UNSUBSCRIBE_THREAD, payload);
-    console.log(`Unsubscribed from thread ${threadId}`);
+    console.log(`Unsubscribing from thread ${threadId}...`);
+
+    // Clear local state immediately
     this.subscribedThreadId = null;
   }
 
@@ -727,12 +846,11 @@ class SuperChatClient {
       const decoder = new SubscribeOkDecoder(payload);
       const response = decoder.decode();
 
-      if (response.type === MSG_SUBSCRIBE_CHANNEL) {
-        this.subscribedChannelId = response.id;
-        console.log(`Successfully subscribed to channel ${response.id}`);
-      } else if (response.type === MSG_SUBSCRIBE_THREAD) {
-        this.subscribedThreadId = response.id;
-        console.log(`Successfully subscribed to thread ${response.id}`);
+      if (response.type === SUBSCRIBE_TYPE_CHANNEL) {
+        console.log(`Subscription confirmed for channel ${response.id}`);
+        this.updateChannelTitle(); // Update title to show connection indicator
+      } else if (response.type === SUBSCRIBE_TYPE_THREAD) {
+        console.log(`Subscription confirmed for thread ${response.id}`);
       }
     } catch (error) {
       console.error('Error decoding SUBSCRIBE_OK:', error);
@@ -818,14 +936,26 @@ class SuperChatClient {
 
     container.innerHTML = '';
 
+    let lastDate: string | null = null;
+
     // Render all messages in chronological order
     for (const message of this.threads) {
+      const date = new Date(Number(message.created_at));
+      const dateStr = date.toLocaleDateString();
+      const timeStr = date.toLocaleTimeString();
+
+      // Show date separator if date changed
+      if (lastDate !== dateStr) {
+        const dateSeparator = document.createElement('div');
+        dateSeparator.className = 'date-separator';
+        dateSeparator.textContent = dateStr;
+        container.appendChild(dateSeparator);
+        lastDate = dateStr;
+      }
+
       const div = document.createElement('div');
       div.className = 'chat-message';
       div.setAttribute('data-message-id', message.message_id.toString());
-
-      const date = new Date(Number(message.created_at));
-      const timeStr = date.toLocaleTimeString();
 
       div.innerHTML = `
         <span class="chat-time">${timeStr}</span>
@@ -868,20 +998,17 @@ class SuperChatClient {
         ? thread.content.substring(0, 80) + '...'
         : thread.content;
 
-      // Reply count badge
-      const replyBadge = thread.reply_count > 0
-        ? `<span class="reply-count-badge">${thread.reply_count} ${thread.reply_count === 1 ? 'reply' : 'replies'}</span>`
+      // Reply count (show next to time in header)
+      const replyCount = thread.reply_count > 0
+        ? ` • ${thread.reply_count} ${thread.reply_count === 1 ? 'reply' : 'replies'}`
         : '';
 
       div.innerHTML = `
         <div class="thread-header">
           <span class="thread-author">${this.escapeHtml(thread.author_nickname)}</span>
-          <span class="thread-time">${timeStr}</span>
+          <span class="thread-time">${timeStr}${replyCount}</span>
         </div>
         <div class="thread-preview">${this.escapeHtml(preview)}</div>
-        <div class="thread-footer">
-          ${replyBadge}
-        </div>
       `;
 
       // Click to open thread
@@ -1201,6 +1328,169 @@ class SuperChatClient {
     }
     const units = 'KMGTPE';
     return `${(bytes / div).toFixed(1)}${units[exp]}B`;
+  }
+
+  private renderServerList() {
+    const serverList = document.getElementById('server-list');
+    if (!serverList) return;
+
+    serverList.innerHTML = '';
+
+    this.servers.forEach((server, index) => {
+      const url = server.isSecure ? server.wssUrl : server.wsUrl;
+      const isCustom = server.name === 'Custom Server';
+      const isSelected = this.selectedServerIndex === index;
+
+      const serverItem = document.createElement('div');
+      serverItem.className = `server-item ${isSelected ? 'selected' : ''}`;
+      serverItem.onclick = () => this.selectServer(index);
+
+      const serverInfo = document.createElement('div');
+      serverInfo.className = 'server-info';
+
+      const serverName = document.createElement('div');
+      serverName.className = 'server-name';
+      serverName.textContent = server.name;
+
+      serverInfo.appendChild(serverName);
+
+      // Only show URL and badge for non-custom servers
+      if (!isCustom) {
+        const statusDot = document.createElement('div');
+        statusDot.className = `server-status ${server.status}`;
+        serverItem.appendChild(statusDot);
+
+        const serverUrl = document.createElement('div');
+        serverUrl.className = 'server-url';
+        serverUrl.textContent = url;
+        serverInfo.appendChild(serverUrl);
+
+        serverItem.appendChild(serverInfo);
+
+        const badge = document.createElement('span');
+        badge.className = `server-badge ${server.isSecure ? 'secure' : 'insecure'}`;
+        badge.textContent = server.isSecure ? 'WSS' : 'WS';
+        serverItem.appendChild(badge);
+      } else {
+        const serverDescription = document.createElement('div');
+        serverDescription.className = 'server-url';
+        serverDescription.textContent = 'Enter your own server URL';
+        serverInfo.appendChild(serverDescription);
+
+        serverItem.appendChild(serverInfo);
+      }
+
+      serverList.appendChild(serverItem);
+    });
+
+    // Select first server by default if none selected
+    if (this.selectedServerIndex === -1 && this.servers.length > 0) {
+      this.selectServer(0);
+    }
+  }
+
+  private selectServer(index: number) {
+    const server = this.servers[index];
+    const isCustom = server.name === 'Custom Server';
+
+    this.selectedServerIndex = index;
+    this.selectedServerUrl = server.isSecure ? server.wssUrl : server.wsUrl;
+
+    const serverUrlInput = document.getElementById('server-url') as HTMLInputElement;
+    const serverUrlGroup = serverUrlInput?.closest('.form-group') as HTMLElement;
+
+    if (serverUrlInput) {
+      serverUrlInput.value = this.selectedServerUrl;
+      serverUrlInput.readOnly = !isCustom;
+      serverUrlInput.placeholder = isCustom ? 'Enter server URL (ws:// or wss://)' : '';
+
+      // Show/hide the server URL field
+      if (serverUrlGroup) {
+        serverUrlGroup.style.display = isCustom ? 'block' : 'none';
+      }
+
+      // Focus the input if custom server is selected
+      if (isCustom) {
+        serverUrlInput.focus();
+      }
+    }
+
+    this.renderServerList();
+  }
+
+  private async checkServerStatus() {
+    for (let i = 0; i < this.servers.length; i++) {
+      const server = this.servers[i];
+
+      // Try secure first, then insecure
+      const urlsToTry = [server.wssUrl, server.wsUrl];
+      let isOnline = false;
+      let secureWorks = false;
+
+      for (const url of urlsToTry) {
+        try {
+          const online = await this.probeServer(url);
+          if (online) {
+            isOnline = true;
+            secureWorks = url === server.wssUrl;
+            break;
+          }
+        } catch (error) {
+          // Try next URL
+        }
+      }
+
+      this.servers[i].status = isOnline ? 'online' : 'offline';
+      this.servers[i].isSecure = secureWorks;
+      this.renderServerList();
+    }
+  }
+
+  private probeServer(url: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const ws = new WebSocket(url);
+      const timeout = setTimeout(() => {
+        ws.close();
+        resolve(false);
+      }, 3000);
+
+      ws.onopen = () => {
+        clearTimeout(timeout);
+        ws.close();
+        resolve(true);
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timeout);
+        resolve(false);
+      };
+    });
+  }
+
+  private updateChannelTitle() {
+    if (!this.currentChannel) return;
+
+    const titleEl = document.getElementById('channel-title');
+    if (!titleEl) {
+      console.warn('channel-title element not found');
+      return;
+    }
+
+    const prefix = this.currentChannel.type === 0 ? '>' : '#';
+
+    // Create title with connection indicator using flexbox for alignment
+    titleEl.innerHTML = '';
+    titleEl.style.display = 'flex';
+    titleEl.style.alignItems = 'center';
+    titleEl.style.gap = '8px';
+
+    // Show green indicator when we have an active channel
+    const indicator = document.createElement('span');
+    indicator.style.cssText = 'display: block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.6); flex-shrink: 0;';
+    titleEl.appendChild(indicator);
+
+    const text = document.createTextNode(`${prefix} ${this.currentChannel.name}`);
+    titleEl.appendChild(text);
   }
 
   private formatBandwidth(bytesPerSec: number): string {

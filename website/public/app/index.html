@@ -107,6 +107,96 @@
       cursor: not-allowed;
     }
 
+    /* Server list */
+    .server-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .server-item {
+      display: flex;
+      align-items: center;
+      padding: 0.75rem;
+      background: #1a1a1a;
+      border: 2px solid #4a4a4a;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .server-item:hover {
+      border-color: #60a5fa;
+      background: #222;
+    }
+
+    .server-item.selected {
+      border-color: #60a5fa;
+      background: #1e3a5f;
+    }
+
+    .server-status {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 0.75rem;
+      flex-shrink: 0;
+    }
+
+    .server-status.online {
+      background: #10b981;
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+    }
+
+    .server-status.offline {
+      background: #ef4444;
+    }
+
+    .server-status.checking {
+      background: #6b7280;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .server-info {
+      flex: 1;
+    }
+
+    .server-name {
+      font-weight: 600;
+      font-size: 1rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .server-url {
+      font-size: 0.85rem;
+      color: #9ca3af;
+      font-family: monospace;
+    }
+
+    .server-badge {
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-left: 0.5rem;
+    }
+
+    .server-badge.secure {
+      background: #064e3b;
+      color: #10b981;
+    }
+
+    .server-badge.insecure {
+      background: #422006;
+      color: #f59e0b;
+    }
+
     /* Sidebar */
     #sidebar {
       width: 250px;
@@ -314,28 +404,37 @@
 
     /* Threading styles */
     .thread-item {
-      padding: 1rem;
-      background: #2a2a2a;
-      border-radius: 6px;
-      border-left: 3px solid #3a3a3a;
-      margin-bottom: 0.75rem;
+      padding: 1.25rem;
+      background: linear-gradient(135deg, #2a2a2a 0%, #242424 100%);
+      border-radius: 8px;
+      border: 2px solid #3a3a3a;
+      border-left: 4px solid #4a4a4a;
+      margin-bottom: 1rem;
       cursor: pointer;
       transition: all 0.2s;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
     }
 
     .thread-item:hover {
-      background: #333;
+      background: linear-gradient(135deg, #1e3a5f 0%, #1e3a8a 100%);
       border-left-color: #60a5fa;
+      border-color: #60a5fa;
+      box-shadow: 0 4px 8px rgba(96, 165, 250, 0.3);
+      transform: translateY(-2px);
     }
 
     .thread-header {
       display: flex;
       justify-content: space-between;
-      margin-bottom: 0.5rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #3a3a3a;
     }
 
     .thread-author {
-      font-weight: 600;
+      font-weight: 700;
+      font-size: 1.05rem;
       color: #60a5fa;
     }
 
@@ -346,33 +445,35 @@
 
     .thread-preview {
       color: #d1d5db;
-      line-height: 1.4;
-      margin-bottom: 0.5rem;
-    }
-
-    .thread-footer {
-      display: flex;
-      justify-content: flex-end;
-    }
-
-    .reply-count-badge {
-      background: #3b82f6;
-      color: white;
-      padding: 0.25rem 0.5rem;
-      border-radius: 12px;
-      font-size: 0.75rem;
-      font-weight: 600;
+      line-height: 1.5;
+      font-size: 0.95rem;
     }
 
     .thread-root {
       background: #1e3a8a;
       border-left-color: #60a5fa;
       border-left-width: 4px;
+      font-size: 1.05rem;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 2px 8px rgba(96, 165, 250, 0.2);
+    }
+
+    .thread-root .message-author {
+      font-size: 1.1rem;
+      font-weight: 700;
+    }
+
+    .thread-root .message-content {
+      margin-top: 0.5rem;
+      font-weight: 500;
     }
 
     .thread-reply {
       margin-left: 2rem;
       border-left-color: #4b5563;
+      font-size: 0.95rem;
+      background: #2a2a2a;
     }
 
     .message-actions {
@@ -423,9 +524,21 @@
     }
 
     /* Chat message styles (inline format) */
+    .date-separator {
+      text-align: center;
+      padding: 1rem 0;
+      margin: 0.5rem 0;
+      font-size: 0.85rem;
+      color: #9ca3af;
+      font-weight: 600;
+      border-top: 1px solid #3a3a3a;
+      border-bottom: 1px solid #3a3a3a;
+      background: #222;
+    }
+
     .chat-message {
-      padding: 0.25rem 0.5rem;
-      margin-bottom: 0.25rem;
+      padding: 0.1rem 0.5rem;
+      margin-bottom: 0.1rem;
       line-height: 1.5;
       font-family: monospace;
     }
@@ -551,6 +664,14 @@
   <div id="connect-panel">
     <div class="connect-form">
       <h2>Connect to SuperChat</h2>
+
+      <div class="form-group">
+        <label>Available Servers</label>
+        <div id="server-list" class="server-list">
+          <!-- Server list populated by JavaScript -->
+        </div>
+      </div>
+
       <form id="connect-form">
         <div class="form-group">
           <label for="server-url">Server URL</label>
