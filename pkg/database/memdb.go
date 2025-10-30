@@ -234,9 +234,6 @@ func (m *MemDB) snapshotLoop() {
 
 // snapshot writes current in-memory state to SQLite
 func (m *MemDB) snapshot() error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	start := time.Now()
 
 	// Note: We don't snapshot channels (admin-managed, rarely change)
@@ -249,15 +246,12 @@ func (m *MemDB) snapshot() error {
 	messagesWritten := 0
 	messagesSkipped := 0
 
+	// Collect dirty IDs and message data under read lock
+	m.mu.RLock()
 	dirtyIDs := make([]int64, 0, len(m.dirtyMessages))
 	for id := range m.dirtyMessages {
 		dirtyIDs = append(dirtyIDs, id)
 	}
-
-	// Sort by ID (ascending) - O(n log n) but much faster than recursion for large n
-	sort.Slice(dirtyIDs, func(i, j int) bool {
-		return dirtyIDs[i] < dirtyIDs[j]
-	})
 
 	// Filter out messages to skip and collect messages to write
 	messagesToWrite := make([]*Message, 0, len(dirtyIDs))
@@ -272,6 +266,12 @@ func (m *MemDB) snapshot() error {
 
 		messagesToWrite = append(messagesToWrite, msg)
 	}
+	m.mu.RUnlock()
+
+	// Sort by ID (ascending) - O(n log n) but much faster than recursion for large n
+	sort.Slice(messagesToWrite, func(i, j int) bool {
+		return messagesToWrite[i].ID < messagesToWrite[j].ID
+	})
 
 	// Batch write messages to SQLite using multi-row INSERT
 	// Batch size of 500 is optimal (balances SQL parsing vs statement count)
@@ -283,8 +283,12 @@ func (m *MemDB) snapshot() error {
 		messagesWritten = len(messagesToWrite)
 	}
 
-	// Clear dirty flags after successful write
-	m.dirtyMessages = make(map[int64]bool)
+	// Clear dirty flags after successful write (requires write lock)
+	m.mu.Lock()
+	for _, id := range dirtyIDs {
+		delete(m.dirtyMessages, id)
+	}
+	m.mu.Unlock()
 
 	log.Printf("MemDB: snapshot completed - %d messages written, %d old messages skipped (will be deleted) in %v",
 		messagesWritten, messagesSkipped, time.Since(start))

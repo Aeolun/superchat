@@ -479,17 +479,17 @@ Critical for: user registration, channel creation, message posting with versions
 **V1:** Complete ✅
 - Anonymous users, TCP connections, forum threading, client-side state
 
-**V2:** Partially complete (3/6 features)
-- ✅ User registration with passwords (commit eabf559)
-- ✅ User-created channels (commit eabf559)
+**V2:** Complete ✅
+- ✅ User registration with passwords
+- ✅ User-created channels
 - ✅ Message editing (EDIT_MESSAGE, MESSAGE_EDITED)
-- ❌ SSH key authentication (TODO - infrastructure exists)
-- ❌ Subchannels (TODO)
-- ❌ Chat channel type (TODO - moved from V3 to V2)
+- ✅ SSH key authentication with auto-registration
+- ✅ Chat channel type (type 0 for linear chat, type 1 for threaded forum)
 
-**See `docs/V2.md` for detailed V2 status, implementation plan, and priority order.**
+**See `docs/versions/V2.md` for complete V2 feature documentation.**
 
 **V3 (Future):**
+- Subchannels (two-level hierarchy)
 - Direct messages with encryption
 - Message compression
 

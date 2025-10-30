@@ -30,6 +30,8 @@ func (m *MockStateForHelpers) GetFirstRun() bool { return false }
 func (m *MockStateForHelpers) SetFirstRunComplete() error { return nil }
 func (m *MockStateForHelpers) SaveSuccessfulConnection(serverAddress string, method string) error { return nil }
 func (m *MockStateForHelpers) GetStateDir() string { return "" }
+func (m *MockStateForHelpers) GetFirstPostWarningDismissed() bool { return false }
+func (m *MockStateForHelpers) SetFirstPostWarningDismissed() error { return nil }
 func (m *MockStateForHelpers) Close() error { return nil }
 
 func TestResolveConnectionMethod(t *testing.T) {
