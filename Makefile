@@ -1,4 +1,4 @@
-.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean build run-server run-client run-website docker-build docker-build-push docker-build-server docker-build-website docker-build-binschema docker-run docker-push docker-stop
+.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean build run-server run-client run-website website docker-build docker-build-push docker-build-server docker-build-website docker-build-binschema docker-run docker-push docker-stop
 
 # Run all tests
 test:
@@ -82,6 +82,16 @@ run-server:
 # Run client
 run-client:
 	go run ./cmd/client
+
+# Build web client and copy to website
+website:
+	@echo "Building web client..."
+	cd web-client && npm run build
+	@echo "Copying to website/public/app/..."
+	cp web-client/index.html website/public/app/
+	cp web-client/dist/main.js website/public/app/dist/
+	cp web-client/dist/main.js.map website/public/app/dist/
+	@echo "Web client built and copied successfully!"
 
 # Run website dev server
 run-website:
