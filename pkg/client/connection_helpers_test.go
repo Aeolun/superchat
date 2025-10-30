@@ -24,8 +24,8 @@ func (m *MockStateForHelpers) GetLastNickname() string { return "" }
 func (m *MockStateForHelpers) SetLastNickname(nickname string) error { return nil }
 func (m *MockStateForHelpers) GetUserID() *uint64 { return nil }
 func (m *MockStateForHelpers) SetUserID(userID *uint64) error { return nil }
-func (m *MockStateForHelpers) GetReadState(channelID uint64) (int64, *uint64, error) { return 0, nil, nil }
-func (m *MockStateForHelpers) UpdateReadState(channelID uint64, timestamp int64, messageID *uint64) error { return nil }
+func (m *MockStateForHelpers) GetReadState(channelID uint64, subchannelID *uint64, threadID *uint64) (int64, error) { return 0, nil }
+func (m *MockStateForHelpers) UpdateReadState(channelID uint64, subchannelID *uint64, threadID *uint64, timestamp int64) error { return nil }
 func (m *MockStateForHelpers) GetFirstRun() bool { return false }
 func (m *MockStateForHelpers) SetFirstRunComplete() error { return nil }
 func (m *MockStateForHelpers) SaveSuccessfulConnection(serverAddress string, method string) error { return nil }
