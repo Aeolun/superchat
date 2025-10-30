@@ -9,9 +9,32 @@ permissions:
   contents: write
 
 jobs:
+  verify-builds:
+    name: Verify Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build server (verify)
+        run: go build ./cmd/server
+
+      - name: Build client (verify)
+        run: go build ./cmd/client
+
   build:
     name: Build Binaries
     runs-on: ubuntu-latest
+    needs: verify-builds
     strategy:
       matrix:
         include:
@@ -68,6 +91,7 @@ jobs:
   build-server:
     name: Build Server Binaries
     runs-on: ubuntu-latest
+    needs: verify-builds
     strategy:
       matrix:
         include:
