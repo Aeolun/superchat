@@ -64,6 +64,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Resize chat textarea
 		m.chatTextarea.SetWidth(msg.Width - 4)
 
+		// Initialize or resize splash viewport
+		// Modal max height: 20 lines (fits 80x24 with margins)
+		// If terminal is smaller, use most of available height
+		modalHeight := 20
+		if msg.Height < 20 {
+			modalHeight = msg.Height - 2 // Leave 2 lines margin
+			if modalHeight < 10 {
+				modalHeight = 10
+			}
+		}
+		// Content height = modal - 4 (border 2 + padding 2)
+		// Viewport height = content - 2 (title 1 + prompt 1)
+		contentHeight := modalHeight - 4
+		viewportHeight := contentHeight - 2
+		if viewportHeight < 8 {
+			viewportHeight = 8
+		}
+
+		if m.splashViewport.Width == 0 || m.splashViewport.Height == 0 {
+			m.splashViewport = viewport.New(58, viewportHeight)
+			m.splashViewport.SetContent(m.buildSplashContent())
+		} else {
+			m.splashViewport.Width = 58
+			m.splashViewport.Height = viewportHeight
+			m.splashViewport.SetContent(m.buildSplashContent())
+		}
+
 		return m, nil
 
 	case ServerFrameMsg:
@@ -419,7 +446,23 @@ func (m Model) handleLegacyKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleSplashKeys handles splash screen keys
 func (m Model) handleSplashKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Any key continues - go straight to browsing
+	// Handle scrolling keys
+	switch msg.String() {
+	case "up", "k":
+		m.splashViewport.LineUp(1)
+		return m, nil
+	case "down", "j":
+		m.splashViewport.LineDown(1)
+		return m, nil
+	case "pgup":
+		m.splashViewport.ViewUp()
+		return m, nil
+	case "pgdown":
+		m.splashViewport.ViewDown()
+		return m, nil
+	}
+
+	// Any other key continues - go straight to browsing
 	m.currentView = ViewChannelList
 	m.loadingChannels = true
 
@@ -565,7 +608,7 @@ func (m Model) handleThreadListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if m.currentChannel != nil {
 			cmd = tea.Batch(
-				m.sendLeaveChannel(),
+				m.sendLeaveChannel(m.currentChannel.ID),
 				m.sendUnsubscribeChannel(m.currentChannel.ID),
 			)
 			m.clearActiveChannel()
@@ -638,11 +681,11 @@ func (m Model) handleChatChannelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if m.currentChannel != nil {
 			channelID := m.currentChannel.ID
-			m.clearActiveChannel()
 			cmd = tea.Batch(
-				m.sendLeaveChannel(),
+				m.sendLeaveChannel(channelID),
 				m.sendUnsubscribeChannel(channelID),
 			)
+			m.clearActiveChannel()
 		}
 		m.currentChannel = nil
 		m.chatMessages = []protocol.Message{}
@@ -816,6 +859,8 @@ func (m Model) handleServerFrame(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 		return m.handleChannelPresence(frame)
 	case protocol.TypeServerPresence:
 		return m.handleServerPresence(frame)
+	case protocol.TypeUnreadCounts:
+		return m.handleUnreadCounts(frame)
 	}
 
 	// Continue listening
@@ -893,7 +938,9 @@ func (m Model) handleNicknameResponse(frame *protocol.Frame) (tea.Model, tea.Cmd
 		} else {
 			// Anonymous user set nickname (may prompt for auth if registered)
 			m.statusMessage = fmt.Sprintf("Nickname set to %s", m.nickname)
-			// Auth state will be determined by USER_INFO response
+			// Set auth state to anonymous (allows registration with Ctrl+R)
+			// This may change later if USER_INFO shows nickname is registered
+			m.authState = AuthStateAnonymous
 		}
 
 		// Close the nickname modal if open
@@ -1081,6 +1128,27 @@ func (m Model) handleChannelList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 
 	m.channels = msg.Channels
 	m.statusMessage = fmt.Sprintf("Loaded %d channels", len(m.channels))
+
+	// Request unread counts for all channels (server will use stored state for registered users)
+	if len(m.channels) > 0 {
+		targets := make([]protocol.UnreadTarget, len(m.channels))
+		for i, channel := range m.channels {
+			targets[i] = protocol.UnreadTarget{
+				ChannelID:    channel.ID,
+				SubchannelID: nil,
+				ThreadID:     nil,
+			}
+		}
+
+		unreadMsg := &protocol.GetUnreadCountsMessage{
+			SinceTimestamp: nil, // Server uses stored UserChannelState for registered users
+			Targets:        targets,
+		}
+
+		if err := m.conn.SendMessage(protocol.TypeGetUnreadCounts, unreadMsg); err != nil {
+			m.errorMessage = fmt.Sprintf("Failed to request unread counts: %v", err)
+		}
+	}
 
 	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
@@ -1816,13 +1884,37 @@ func (m Model) sendJoinChannel(channelID uint64) tea.Cmd {
 	}
 }
 
-func (m Model) sendLeaveChannel() tea.Cmd {
+func (m Model) sendLeaveChannel(channelID uint64) tea.Cmd {
 	return func() tea.Msg {
-		if m.activeChannelID == 0 {
+		if channelID == 0 {
 			return nil
 		}
+
+		// Update read state to "now" before leaving
+		// Use UnixMilli() to match database timestamp format (milliseconds)
+		now := time.Now().UnixMilli()
+
+		updateMsg := &protocol.UpdateReadStateMessage{
+			ChannelID:    channelID,
+			SubchannelID: nil,
+			Timestamp:    now,
+		}
+		if err := m.conn.SendMessage(protocol.TypeUpdateReadState, updateMsg); err != nil {
+			// Log error but don't fail the leave operation
+			if m.logger != nil {
+				m.logger.Printf("Failed to update read state: %v", err)
+			}
+		}
+
+		// Also update local state
+		if err := m.state.UpdateReadState(channelID, nil, nil, now); err != nil {
+			if m.logger != nil {
+				m.logger.Printf("Failed to update local read state: %v", err)
+			}
+		}
+
 		msg := &protocol.LeaveChannelMessage{
-			ChannelID:    m.activeChannelID,
+			ChannelID:    channelID,
 			SubchannelID: nil,
 		}
 		if err := m.conn.SendMessage(protocol.TypeLeaveChannel, msg); err != nil {
@@ -3117,6 +3209,25 @@ func (m Model) handleServerPresence(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 		func() tea.Msg { return ForceRenderMsg{} },
 	)
 	return m, cmd
+}
+
+// handleUnreadCounts processes UNREAD_COUNTS (0x97)
+func (m Model) handleUnreadCounts(frame *protocol.Frame) (tea.Model, tea.Cmd) {
+	msg := &protocol.UnreadCountsMessage{}
+	if err := msg.Decode(frame.Payload); err != nil {
+		m.errorMessage = fmt.Sprintf("Failed to decode UNREAD_COUNTS: %v", err)
+		return m, listenForServerFrames(m.conn, m.connGeneration)
+	}
+
+	// Update unread counts map
+	for _, count := range msg.Counts {
+		// For now, only handle channel-level counts (no subchannel or thread)
+		if count.SubchannelID == nil && count.ThreadID == nil {
+			m.unreadCounts[count.ChannelID] = count.UnreadCount
+		}
+	}
+
+	return m, listenForServerFrames(m.conn, m.connGeneration)
 }
 
 func (m Model) handleUserDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {

@@ -76,15 +76,11 @@ func (m Model) renderModalOverlay(baseView string, activeModal modal.Modal) stri
 	return modalContent
 }
 
-// renderSplash renders the splash screen
-func (m Model) renderSplash() string {
-	var s strings.Builder
-
-	title := SplashTitleStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
+// buildSplashContent builds the scrollable content for the splash screen
+func (m Model) buildSplashContent() string {
 	subtitle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("252")).
-		Align(lipgloss.Center).
-		MarginBottom(1).
+		Align(lipgloss.Left).
 		Render("A terminal-based threaded chat application")
 
 	body := SplashBodyStyle.Render(`Getting Started:
@@ -101,23 +97,80 @@ Anonymous vs Registered:
 You can browse anonymously without setting a nickname.
 When you want to post, you'll be prompted to set one.`)
 
-	prompt := SplashPromptStyle.Render("[Press any key to continue]")
-
-	content := lipgloss.JoinVertical(
+	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		title,
 		subtitle,
 		"",
 		body,
-		"",
-		prompt,
+	)
+}
+
+// renderSplash renders the splash screen
+func (m Model) renderSplash() string {
+	// Calculate modal dimensions: 58 content width + 4 padding + 2 border = 64 total width
+	// Max height for 80x24: 20 lines (leave 4 for margins)
+	modalWidth := 58
+	modalHeight := 20
+	if m.height < 20 {
+		modalHeight = m.height - 2 // Leave 2 lines margin
+		if modalHeight < 10 {
+			modalHeight = 10
+		}
+	}
+
+	// Account for modal border (2) and padding (2 vertical)
+	contentHeight := modalHeight - 4
+
+	// Use flexbox layout inside the modal for proper sizing
+	layout := flexbox.New(modalWidth, contentHeight)
+
+	// Title row (ratio: 1 part)
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(PrimaryColor).
+		Align(lipgloss.Center)
+	titleText := titleStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
+	titleRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(titleText),
 	)
 
-	box := ModalStyle.Render(content)
-	s.WriteString("\n\n")
-	s.WriteString(lipgloss.Place(m.width, m.height-4, lipgloss.Center, lipgloss.Center, box))
+	// Scrollable content area (ratio: contentHeight-2 parts to fill remaining space)
+	var viewportContent string
+	if m.splashViewport.Width > 0 && m.splashViewport.Height > 0 {
+		viewportContent = m.splashViewport.View()
+	} else {
+		// Fallback if viewport not initialized yet
+		viewportContent = m.buildSplashContent()
+	}
 
-	return s.String()
+	// Height ratio: give the viewport (contentHeight - 2) parts
+	// Total parts: 1 (title) + (contentHeight-2) (viewport) + 1 (prompt) = contentHeight
+	// So viewport gets (contentHeight-2)/contentHeight of the space
+	viewportDisplayHeight := contentHeight - 2
+	contentRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, viewportDisplayHeight).SetContent(viewportContent),
+	)
+
+	// Scroll indicator and prompt (ratio: 1 part)
+	scrollInfo := ""
+	if m.splashViewport.TotalLineCount() > m.splashViewport.Height {
+		scrollInfo = fmt.Sprintf(" (↑↓ to scroll %d%%)", int(m.splashViewport.ScrollPercent()*100))
+	}
+	promptStyle := lipgloss.NewStyle().
+		Foreground(MutedColor).
+		Italic(true).
+		Align(lipgloss.Center)
+	promptText := promptStyle.Render("[Press any key to continue" + scrollInfo + "]")
+	promptRow := layout.NewRow().AddCells(
+		flexbox.NewCell(1, 1).SetContent(promptText),
+	)
+
+	layout.AddRows([]*flexbox.Row{titleRow, contentRow, promptRow})
+
+	content := layout.Render()
+	box := ModalStyle.Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 // renderChannelList renders the channel list view using flexbox for stable layout
@@ -125,8 +178,14 @@ func (m Model) renderChannelList() string {
 	// Import flexbox at the top if not already imported
 	layout := flexbox.NewHorizontal(m.width, m.height-3) // Total height minus header(1) + footer(1) + spacing(1)
 
-	// Build channel pane content
-	channelPaneContent := m.buildChannelPaneContentString()
+	// Calculate channel width first
+	channelWidth := m.width/4 - 2
+	if channelWidth < 20 {
+		channelWidth = 20
+	}
+
+	// Build channel pane content with width for right alignment
+	channelPaneContent := m.buildChannelPaneContentString(channelWidth)
 
 	// Build main pane content (instructions)
 	welcomeLines := []string{
@@ -162,11 +221,6 @@ func (m Model) renderChannelList() string {
 	instructions := lipgloss.NewStyle().
 		PaddingLeft(2).
 		Render(lipgloss.JoinVertical(lipgloss.Left, welcomeLines...))
-
-	channelWidth := m.width/4 - 2
-	if channelWidth < 20 {
-		channelWidth = 20
-	}
 	channelCol := layout.NewColumn().AddCells(
 		flexbox.NewCell(1, 1).
 			SetStyle(ChannelPaneStyle.Width(channelWidth).Height(m.height - 4)).
@@ -213,18 +267,19 @@ func (m Model) renderChannelList() string {
 func (m Model) renderThreadList() string {
 	layout := flexbox.NewHorizontal(m.width, m.height-3) // Total height minus header(1) + footer(1) + spacing(1)
 
-	// Build channel pane content
-	channelPaneContent := m.buildChannelPaneContentString()
+	// Calculate channel width first
+	channelWidth := m.width/4 - 2
+	if channelWidth < 20 {
+		channelWidth = 20
+	}
+
+	// Build channel pane content with width for right alignment
+	channelPaneContent := m.buildChannelPaneContentString(channelWidth)
 
 	// Build thread list pane content
 	threadListContent := lipgloss.NewStyle().
 		PaddingLeft(2).
 		Render(m.threadListViewport.View())
-
-	channelWidth := m.width/4 - 2
-	if channelWidth < 20 {
-		channelWidth = 20
-	}
 	channelCol := layout.NewColumn().AddCells(
 		flexbox.NewCell(1, 1).
 			SetStyle(ChannelPaneStyle.Width(channelWidth).Height(m.height - 4)).
@@ -615,7 +670,7 @@ func (m Model) renderFooter(shortcuts string) string {
 }
 
 // buildChannelPaneContentString builds the channel list content without styling
-func (m Model) buildChannelPaneContentString() string {
+func (m Model) buildChannelPaneContentString(availableWidth int) string {
 	title := ChannelTitleStyle.Render("Channels")
 
 	// Format server address, hiding default port (6465)
@@ -631,6 +686,10 @@ func (m Model) buildChannelPaneContentString() string {
 	if m.loadingChannels {
 		items = append(items, MutedTextStyle.Render("  "+m.spinner.View()+" Loading channels..."))
 	} else {
+		// Account for ChannelPaneStyle's Padding(0, 1) which adds 2 chars total (left + right)
+		// Plus 1 extra for safety/border rendering
+		contentWidth := availableWidth - 3
+
 		for i, channel := range m.channels {
 			// Use '>' prefix for chat channels (type 0), '#' for forum channels (type 1)
 			var prefix string
@@ -640,14 +699,39 @@ func (m Model) buildChannelPaneContentString() string {
 				prefix = "#"
 			}
 			base := prefix + channel.Name
-			countLabel := MutedTextStyle.Render(fmt.Sprintf(" %d", channel.UserCount))
-			var item string
+
+			var label string
 			if i == m.channelCursor {
-				item = SelectedItemStyle.Render("▶ " + base)
+				label = SelectedItemStyle.Render("▶ " + base)
 			} else {
-				item = UnselectedItemStyle.Render("  " + base)
+				label = UnselectedItemStyle.Render("  " + base)
 			}
-			item = lipgloss.JoinHorizontal(lipgloss.Left, item, countLabel)
+
+			// Get unread count for this channel
+			unreadCount := m.unreadCounts[channel.ID]
+
+			// Only show count if there are unread messages
+			var item string
+			if unreadCount > 0 {
+				countStr := formatCount(unreadCount)
+
+				// Calculate padding to push count to the right edge
+				// Use lipgloss.Width to account for ANSI codes in the rendered label
+				labelWidth := lipgloss.Width(label)
+				countWidth := len(countStr)
+				// Leave 1 space between label and count
+				paddingWidth := contentWidth - labelWidth - countWidth - 1
+				if paddingWidth < 1 {
+					paddingWidth = 1
+				}
+				padding := strings.Repeat(" ", paddingWidth)
+
+				countLabel := MutedTextStyle.Render(countStr)
+				item = label + padding + countLabel
+			} else {
+				// No unread count, just show the label
+				item = label
+			}
 			items = append(items, item)
 		}
 
@@ -666,14 +750,14 @@ func (m Model) buildChannelPaneContentString() string {
 
 // renderChannelPane renders the channel list pane (used by thread list view)
 func (m Model) renderChannelPane() string {
-	content := m.buildChannelPaneContentString()
-
 	// Use 25% of width for channel pane
 	// Subtract 2 for border (lipgloss adds border on top of width)
 	channelWidth := m.width/4 - 2
 	if channelWidth < 20 {
 		channelWidth = 20
 	}
+
+	content := m.buildChannelPaneContentString(channelWidth)
 
 	return ChannelPaneStyle.
 		Width(channelWidth).
@@ -1525,4 +1609,23 @@ func (m Model) renderReconnectingOverlay() string {
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// formatCount formats a number with k/M suffixes for large values
+func formatCount(count uint32) string {
+	if count < 1000 {
+		return fmt.Sprintf("%d", count)
+	} else if count < 1000000 {
+		// Show 1 decimal for values like 1.5k, but not for exact thousands like 10k
+		if count%1000 == 0 {
+			return fmt.Sprintf("%dk", count/1000)
+		}
+		return fmt.Sprintf("%.1fk", float64(count)/1000.0)
+	} else {
+		// Show 1 decimal for values like 1.5M, but not for exact millions like 10M
+		if count%1000000 == 0 {
+			return fmt.Sprintf("%dM", count/1000000)
+		}
+		return fmt.Sprintf("%.1fM", float64(count)/1000000.0)
+	}
 }

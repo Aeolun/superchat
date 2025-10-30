@@ -98,6 +98,7 @@ type Model struct {
 	serverRoster     map[uint64]presenceEntry            // sessionID -> entry
 	selfSessionID    *uint64
 	showUserSidebar  bool
+	unreadCounts     map[uint64]uint32 // channelID -> unread count
 
 	// Loading states
 	loadingChannels      bool // True if fetching channel list
@@ -251,6 +252,7 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 		lastPingSent:           time.Now(),
 		channelRoster:          make(map[uint64]map[uint64]presenceEntry),
 		serverRoster:           make(map[uint64]presenceEntry),
+		unreadCounts:           make(map[uint64]uint32),
 	}
 
 	// Initialize state machine - detect SSH connection by address prefix
@@ -691,7 +693,7 @@ func (m *Model) registerCommands() {
 			var cmd tea.Cmd
 			if model.currentChannel != nil {
 				cmd = tea.Batch(
-					model.sendLeaveChannel(),
+					model.sendLeaveChannel(model.currentChannel.ID),
 					model.sendUnsubscribeChannel(model.currentChannel.ID),
 				)
 				model.clearActiveChannel()
@@ -701,6 +703,32 @@ func (m *Model) registerCommands() {
 			model.threadCursor = 0
 			model.loadingMore = false
 			model.allThreadsLoaded = false
+			return model, cmd
+		}).
+		Priority(800).
+		Build())
+
+	// Back to channel list from chat view
+	m.commands.Register(commands.NewCommand().
+		Keys("esc").
+		Name("Back").
+		Help("Return to channel list").
+		InViews(int(ViewChatChannel)).
+		Do(func(i interface{}) (interface{}, tea.Cmd) {
+			model := i.(*Model)
+			model.currentView = ViewChannelList
+			var cmd tea.Cmd
+			if model.currentChannel != nil {
+				cmd = tea.Batch(
+					model.sendLeaveChannel(model.currentChannel.ID),
+					model.sendUnsubscribeChannel(model.currentChannel.ID),
+				)
+				model.clearActiveChannel()
+			}
+			model.currentChannel = nil
+			model.chatMessages = []protocol.Message{}
+			model.chatTextarea.Blur() // Unfocus textarea
+			model.chatTextarea.Reset()
 			return model, cmd
 		}).
 		Priority(800).

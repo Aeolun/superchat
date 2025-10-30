@@ -384,6 +384,65 @@ See `docs/MIGRATIONS.md` for complete guide.
 - A pane with `.Width(50).Border(RoundedBorder())` renders at **52 characters** total
 - Always subtract border width (2) from desired total width when using borders
 
+**⚠️ CRITICAL: BubbleTea Command Closures and Model State**
+
+BubbleTea's Update function works asynchronously:
+1. `Update()` returns `(Model, Cmd)`
+2. The returned `Model` becomes the new application state
+3. Commands execute with a **copy** of the model at the time they were created
+
+**The Problem:**
+When you create a command closure (like `model.sendLeaveChannel()`), it captures the model **at that moment**. If that model's state gets updated by a later message handler (like `handleJoinResponse` setting `activeChannelID`), the command closure still has the **old model state**.
+
+**Example Bug Pattern:**
+```go
+// User presses Escape in chat view
+func escapeHandler(model *Model) tea.Cmd {
+    // Command created here with current model state
+    return model.sendLeaveChannel()  // ❌ Uses model.activeChannelID (might be 0!)
+}
+
+func (m Model) sendLeaveChannel() tea.Cmd {
+    return func() tea.Msg {
+        // This closure captured m.activeChannelID when command was created
+        // Even if handleJoinResponse later sets activeChannelID=20,
+        // this closure still sees the old value (0)
+        if m.activeChannelID == 0 {
+            return nil  // ❌ Returns early with stale state!
+        }
+        // ... send leave message ...
+    }
+}
+```
+
+**The Fix:**
+Pass explicit parameters to command functions instead of relying on captured model state:
+
+```go
+// ✅ GOOD: Pass channel ID explicitly
+func escapeHandler(model *Model) tea.Cmd {
+    if model.currentChannel != nil {
+        return model.sendLeaveChannel(model.currentChannel.ID)
+    }
+    return nil
+}
+
+func (m Model) sendLeaveChannel(channelID uint64) tea.Cmd {
+    return func() tea.Msg {
+        // Uses explicit parameter, not stale model state
+        if channelID == 0 {
+            return nil
+        }
+        // ... send leave message with channelID ...
+    }
+}
+```
+
+**Key Takeaway:**
+- Model fields that get updated by server responses (`activeChannelID`, etc.) are unreliable in command closures
+- Always pass explicit parameters for critical data instead of relying on captured model state
+- Use synchronously-set fields (`currentChannel`, etc.) that were set in the same Update cycle, not async server responses
+
 ### Real-Time Updates
 
 Server broadcasts these message types to relevant clients:

@@ -2123,7 +2123,7 @@ func (db *DB) DeleteUser(userID uint64) (string, error) {
 func (db *DB) UpdateUserChannelState(userID uint64, channelID uint64, subchannelID *uint64, timestamp int64) error {
 	query := `
 		INSERT INTO UserChannelState (user_id, channel_id, subchannel_id, last_read_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		VALUES (?, ?, COALESCE(?, 0), ?, ?)
 		ON CONFLICT(user_id, channel_id, subchannel_id)
 		DO UPDATE SET last_read_at = excluded.last_read_at, updated_at = excluded.updated_at
 	`
@@ -2140,7 +2140,7 @@ func (db *DB) UpdateUserChannelState(userID uint64, channelID uint64, subchannel
 // Returns 0 if no state exists (user has never read this channel)
 func (db *DB) GetUserChannelState(userID uint64, channelID uint64, subchannelID *uint64) (int64, error) {
 	var lastReadAt int64
-	query := `SELECT last_read_at FROM UserChannelState WHERE user_id = ? AND channel_id = ? AND subchannel_id IS ?`
+	query := `SELECT last_read_at FROM UserChannelState WHERE user_id = ? AND channel_id = ? AND subchannel_id = COALESCE(?, 0)`
 
 	err := db.conn.QueryRow(query, userID, channelID, subchannelID).Scan(&lastReadAt)
 	if err == sql.ErrNoRows {
