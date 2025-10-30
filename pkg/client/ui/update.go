@@ -3058,10 +3058,22 @@ func (m Model) handleChannelPresence(frame *protocol.Frame) (tea.Model, tea.Cmd)
 		UserFlags:    msg.UserFlags,
 	}
 
+	// Track presence for all users
 	if msg.Joined {
 		m.upsertChannelPresence(msg.ChannelID, entry)
 	} else {
 		m.removeChannelPresence(msg.ChannelID, msg.SessionID)
+	}
+
+	// Only adjust channel user count for OTHER users (not ourselves)
+	// We handle our own count adjustments in setActiveChannel/clearActiveChannel
+	isSelf := m.selfSessionID != nil && *m.selfSessionID == msg.SessionID
+	if !isSelf {
+		if msg.Joined {
+			m.adjustChannelUserCount(msg.ChannelID, 1)
+		} else {
+			m.adjustChannelUserCount(msg.ChannelID, -1)
+		}
 	}
 
 	if m.hasActiveChannel && m.activeChannelID == msg.ChannelID && m.currentChannel != nil {

@@ -50,10 +50,10 @@ func OpenState(path string) (*State, error) {
 		dir: dir,
 	}
 
-	// Initialize schema
-	if err := state.initSchema(); err != nil {
+	// Run migrations
+	if err := runMigrations(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
 	return state, nil
@@ -62,30 +62,6 @@ func OpenState(path string) (*State, error) {
 // Close closes the state database
 func (s *State) Close() error {
 	return s.db.Close()
-}
-
-// initSchema creates tables if they don't exist
-func (s *State) initSchema() error {
-	schema := `
-CREATE TABLE IF NOT EXISTS Config (
-	key TEXT PRIMARY KEY,
-	value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ReadState (
-	channel_id INTEGER PRIMARY KEY,
-	last_read_at INTEGER NOT NULL,
-	last_read_message_id INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS ConnectionHistory (
-	server_address TEXT PRIMARY KEY,
-	last_successful_method TEXT NOT NULL,
-	last_success_at INTEGER NOT NULL
-);
-`
-	_, err := s.db.Exec(schema)
-	return err
 }
 
 // GetConfig retrieves a configuration value
@@ -138,42 +114,32 @@ func (s *State) SetUserID(userID *uint64) error {
 	return s.SetConfig("user_id", fmt.Sprintf("%d", *userID))
 }
 
-// GetReadState returns the read state for a channel
-func (s *State) GetReadState(channelID uint64) (lastReadAt int64, lastReadMessageID *uint64, err error) {
-	var messageID sql.NullInt64
-	err = s.db.QueryRow(`
-		SELECT last_read_at, last_read_message_id
+// GetReadState returns the read state for a channel/subchannel/thread
+// Returns 0 if no state exists (never read)
+func (s *State) GetReadState(channelID uint64, subchannelID *uint64, threadID *uint64) (int64, error) {
+	var lastReadAt int64
+	err := s.db.QueryRow(`
+		SELECT last_read_at
 		FROM ReadState
-		WHERE channel_id = ?
-	`, channelID).Scan(&lastReadAt, &messageID)
+		WHERE channel_id = ? AND subchannel_id IS ? AND thread_id IS ?
+	`, channelID, subchannelID, threadID).Scan(&lastReadAt)
 
 	if err == sql.ErrNoRows {
-		return 0, nil, nil
+		return 0, nil // Never read
 	}
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 
-	if messageID.Valid {
-		id := uint64(messageID.Int64)
-		lastReadMessageID = &id
-	}
-
-	return lastReadAt, lastReadMessageID, nil
+	return lastReadAt, nil
 }
 
-// UpdateReadState updates the read state for a channel
-func (s *State) UpdateReadState(channelID uint64, timestamp int64, messageID *uint64) error {
-	var msgID sql.NullInt64
-	if messageID != nil {
-		msgID.Valid = true
-		msgID.Int64 = int64(*messageID)
-	}
-
+// UpdateReadState updates the read state for a channel/subchannel/thread
+func (s *State) UpdateReadState(channelID uint64, subchannelID *uint64, threadID *uint64, timestamp int64) error {
 	_, err := s.db.Exec(`
-		INSERT OR REPLACE INTO ReadState (channel_id, last_read_at, last_read_message_id)
-		VALUES (?, ?, ?)
-	`, channelID, timestamp, msgID)
+		INSERT OR REPLACE INTO ReadState (channel_id, subchannel_id, thread_id, last_read_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, channelID, subchannelID, threadID, timestamp, time.Now().Unix())
 
 	return err
 }

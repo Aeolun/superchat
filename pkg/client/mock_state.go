@@ -82,25 +82,26 @@ func (s *MockState) SetUserID(userID *uint64) error {
 	return nil // Mock does nothing for now
 }
 
-// GetReadState returns the read state for a channel
-func (s *MockState) GetReadState(channelID uint64) (lastReadAt int64, lastReadMessageID *uint64, err error) {
+// GetReadState returns the read state for a channel/subchannel/thread
+func (s *MockState) GetReadState(channelID uint64, subchannelID *uint64, threadID *uint64) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	if s.getReadStateErr != nil {
-		return 0, nil, s.getReadStateErr
+		return 0, s.getReadStateErr
 	}
 
+	// For mock, just use channelID as key (ignore subchannel/thread)
 	data, exists := s.readState[channelID]
 	if !exists {
-		return 0, nil, nil
+		return 0, nil
 	}
 
-	return data.LastReadAt, data.LastReadMessageID, nil
+	return data.LastReadAt, nil
 }
 
-// UpdateReadState updates the read state for a channel
-func (s *MockState) UpdateReadState(channelID uint64, timestamp int64, messageID *uint64) error {
+// UpdateReadState updates the read state for a channel/subchannel/thread
+func (s *MockState) UpdateReadState(channelID uint64, subchannelID *uint64, threadID *uint64, timestamp int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -109,8 +110,7 @@ func (s *MockState) UpdateReadState(channelID uint64, timestamp int64, messageID
 	}
 
 	s.readState[channelID] = ReadStateData{
-		LastReadAt:        timestamp,
-		LastReadMessageID: messageID,
+		LastReadAt: timestamp,
 	}
 	return nil
 }

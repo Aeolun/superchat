@@ -52,8 +52,8 @@ type StateInterface interface {
 	SetUserID(userID *uint64) error
 
 	// Read state tracking
-	GetReadState(channelID uint64) (lastReadAt int64, lastReadMessageID *uint64, err error)
-	UpdateReadState(channelID uint64, timestamp int64, messageID *uint64) error
+	GetReadState(channelID uint64, subchannelID *uint64, threadID *uint64) (int64, error)
+	UpdateReadState(channelID uint64, subchannelID *uint64, threadID *uint64, timestamp int64) error
 
 	// First run tracking
 	GetFirstRun() bool
