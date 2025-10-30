@@ -1522,7 +1522,7 @@ function generateEncoder(
   }
 
   for (const field of fields) {
-    code += generateEncodeField(field, schema, globalEndianness, "    ");
+    code += generateEncodeField(field, schema, globalEndianness, "    ", typeName, fields);
   }
 
   code += `    return this.finish();\n`;
@@ -1551,7 +1551,9 @@ function generateEncodeField(
   field: Field,
   schema: BinarySchema,
   globalEndianness: Endianness,
-  indent: string
+  indent: string,
+  typeName?: string,
+  allFields?: Field[]
 ): string {
   if (!('type' in field)) return "";
 
@@ -1560,7 +1562,7 @@ function generateEncodeField(
 
   // Handle computed fields - generate computation code instead of reading from value
   if (fieldAny.computed) {
-    return generateEncodeComputedField(field, schema, globalEndianness, indent);
+    return generateEncodeComputedField(field, schema, globalEndianness, indent, undefined, typeName, allFields);
   }
 
   const valuePath = `value.${fieldName}`;
@@ -1577,7 +1579,9 @@ function generateEncodeFieldCore(
   schema: BinarySchema,
   globalEndianness: Endianness,
   valuePath: string,
-  indent: string
+  indent: string,
+  typeName?: string,
+  containingFields?: Field[]
 ): string {
   if (!('type' in field)) return "";
 
@@ -1585,7 +1589,10 @@ function generateEncodeFieldCore(
 
   // Handle computed fields - generate computation code instead of reading from value
   if (fieldAny.computed) {
-    return generateEncodeComputedField(field, schema, globalEndianness, indent);
+    // Extract the base object path (remove the field name)
+    const lastDotIndex = valuePath.lastIndexOf('.');
+    const baseObjectPath = lastDotIndex > 0 ? valuePath.substring(0, lastDotIndex) : "value";
+    return generateEncodeComputedField(field, schema, globalEndianness, indent, baseObjectPath, typeName, containingFields);
   }
 
   // Handle conditional fields
@@ -1971,7 +1978,7 @@ function generateEncodeTypeReference(
 
   for (const field of fields) {
     const newValuePath = `${valuePath}.${field.name}`;
-    code += generateEncodeFieldCore(field, schema, globalEndianness, newValuePath, indent);
+    code += generateEncodeFieldCore(field, schema, globalEndianness, newValuePath, indent, typeRef, fields);
   }
 
   return code;

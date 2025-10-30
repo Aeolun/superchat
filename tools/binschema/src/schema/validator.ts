@@ -249,9 +249,49 @@ function validateComputedField(
         message: `Computed field with type 'position_of' must have unsigned integer type (uint8, uint16, uint32, uint64), got '${field.type}'`
       });
     }
+  } else if (computed.type === "sum_of_sizes") {
+    // sum_of_sizes requires unsigned integer type
+    if (!isUnsignedIntType(field.type)) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'sum_of_sizes' must have unsigned integer type (uint8, uint16, uint32, uint64), got '${field.type}'`
+      });
+    }
+    // Validate targets array exists
+    if (!computed.targets || !Array.isArray(computed.targets) || computed.targets.length === 0) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'sum_of_sizes' must have 'targets' array with at least one element`
+      });
+    }
+    // Skip further validation for sum_of_sizes (parent references are validated at runtime)
+    return;
+  } else if (computed.type === "sum_of_type_sizes") {
+    // sum_of_type_sizes requires unsigned integer type
+    if (!isUnsignedIntType(field.type)) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'sum_of_type_sizes' must have unsigned integer type (uint8, uint16, uint32, uint64), got '${field.type}'`
+      });
+    }
+    // Validate target and element_type exist
+    if (!computed.target) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'sum_of_type_sizes' must have 'target' property`
+      });
+    }
+    if (!computed.element_type) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'sum_of_type_sizes' must have 'element_type' property`
+      });
+    }
+    // Skip further validation (parent references are validated at runtime)
+    return;
   }
 
-  // Validate target field exists
+  // Validate target field exists (for length_of, crc32_of, position_of)
   if (!computed.target) {
     errors.push({
       path: `${path} (${field.name})`,

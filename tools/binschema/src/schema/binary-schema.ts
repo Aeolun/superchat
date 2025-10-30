@@ -88,13 +88,21 @@ export type StringEncoding = z.infer<typeof StringEncodingSchema>;
  * Phase 1: length_of - compute byte length of target field
  * Phase 2: crc32_of - compute CRC32 checksum of target field
  * Phase 3: position_of - compute byte position of target type
+ * Phase 4: sum_of_sizes - sum the encoded sizes of multiple fields
+ * Phase 5: sum_of_type_sizes - sum the encoded sizes of array elements of a specific type
  */
 const ComputedFieldSchema = z.object({
-  type: z.enum(["length_of", "crc32_of", "position_of"]).meta({
+  type: z.enum(["length_of", "crc32_of", "position_of", "sum_of_sizes", "sum_of_type_sizes"]).meta({
     description: "Type of computation to perform"
   }),
-  target: z.string().meta({
-    description: "Name of the field or type to compute from (supports dot notation like 'header.data')"
+  target: z.string().optional().meta({
+    description: "Name of the field or type to compute from (supports dot notation like 'header.data'). Used by length_of, crc32_of, position_of, sum_of_type_sizes"
+  }),
+  targets: z.array(z.string()).optional().meta({
+    description: "Array of field paths to sum sizes of. Used by sum_of_sizes"
+  }),
+  element_type: z.string().optional().meta({
+    description: "Type name of array elements to sum sizes of. Used by sum_of_type_sizes"
   }),
   encoding: StringEncodingSchema.optional().meta({
     description: "For length_of with string targets: encoding to use for byte length calculation (defaults to field's encoding)"
