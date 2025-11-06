@@ -274,17 +274,28 @@ func (c *Connection) Connect() error {
 // tryWebSocketFallback attempts to connect via WebSocket on port 8080
 // Returns the connection and the display address (with scheme)
 func (c *Connection) tryWebSocketFallback() (net.Conn, string, error) {
-	// Extract hostname from address (remove scheme and port if present)
-	host := c.addr
+	// Parse the address to extract just the hostname
+	var host string
 
-	// Remove scheme if present (e.g., "wss://hostname" -> "hostname")
-	if idx := strings.Index(host, "://"); idx != -1 {
-		host = host[idx+3:]
-	}
-
-	// Remove port if present
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		host = host[:idx]
+	// If address has a scheme, parse as URL
+	if strings.Contains(c.addr, "://") {
+		u, err := url.Parse(c.addr)
+		if err != nil {
+			// Fallback to using addr directly if parse fails
+			host = c.addr
+		} else {
+			// Use Hostname() to strip port and get clean hostname
+			host = u.Hostname()
+		}
+	} else {
+		// No scheme, parse as host:port
+		parsedHost, _, err := net.SplitHostPort(c.addr)
+		if err != nil {
+			// No port either, use as-is
+			host = c.addr
+		} else {
+			host = parsedHost
+		}
 	}
 
 	// Try WebSocket on port 8080

@@ -44,6 +44,9 @@ USER superchat
 # Set working directory
 WORKDIR /data
 
+# Set SSH host key path to persistent volume (prevents host key mismatch on container restart)
+ENV SUPERCHAT_SERVER_SSH_HOST_KEY=/data/ssh_host_key
+
 # Expose port
 EXPOSE 6465
 
