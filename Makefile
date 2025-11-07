@@ -68,12 +68,14 @@ coverage-summary:
 fuzz:
 	go test ./pkg/protocol -fuzz=FuzzDecodeFrame -fuzztime=5m
 
-# Build server and client
+# Build server, terminal client, and GUI client
 build:
 	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
 	echo "Building with version: $$VERSION"; \
 	go build -ldflags="-X main.Version=$$VERSION" -o superchat-server ./cmd/server; \
-	go build -ldflags="-X main.Version=$$VERSION" -o superchat ./cmd/client
+	go build -ldflags="-X main.Version=$$VERSION" -o superchat ./cmd/client; \
+	go build -ldflags="-X main.Version=$$VERSION" -o superchat-gui ./cmd/client-gui; \
+	echo "✓ Built: superchat-server, superchat, superchat-gui"
 
 # Run server
 run-server:
@@ -141,11 +143,11 @@ docker-stop:
 	docker stop superchat || true
 	docker rm superchat || true
 
-# Clean coverage files
+# Clean coverage files and binaries
 clean:
 	rm -f coverage.out coverage.html
 	rm -f protocol.out protocol.lcov
 	rm -f server.out server.lcov
 	rm -f client.out client.lcov
 	rm -f database.out database.lcov
-	rm -f superchat-server superchat superchat-client
+	rm -f superchat-server superchat superchat-gui

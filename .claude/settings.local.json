@@ -60,7 +60,12 @@
       "Bash(TEST_FILTER=bit_order TEST_REPORT=summary go test:*)",
       "Read(//Users/bart.riepe/Projects/kaitai_struct_formats/**)",
       "Bash(npx tsc:*)",
-      "Bash(npm run cli:*)"
+      "Bash(npm run cli:*)",
+      "Bash(convert:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go doc:*)",
+      "Bash(./build-macos-app.sh:*)",
+      "Bash(go list:*)"
     ],
     "deny": [],
     "ask": []

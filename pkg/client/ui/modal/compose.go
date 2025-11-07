@@ -1,6 +1,8 @@
 package modal
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -131,14 +133,68 @@ func (m *ComposeModal) Render(width, height int) string {
 		Height(11).
 		Render(preview + "█")
 
+	// Build content sections
+	var contentSections []string
+	contentSections = append(contentSections, titleRender, inputBox)
+
+	// Show thread title preview only for new threads
+	if m.mode == ComposeModeNewThread && len(m.input) > 0 {
+		// Use a more visible color for the thread title preview
+		titlePreviewStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")). // Bright blue
+			Italic(true)
+
+		// Calculate available width for title preview (input box width - prefix "  → " - ellipsis "...")
+		const inputWidth = 52
+		const prefixLen = 4  // "  → "
+		const ellipsisLen = 3 // "..."
+		maxTitleLen := inputWidth - prefixLen - ellipsisLen
+
+		// Get the full title (before truncation) to check if it needs ellipsis
+		fullTitle := ""
+		if doubleNewlineIdx := strings.Index(m.input, "\n\n"); doubleNewlineIdx >= 0 {
+			// User set explicit title
+			fullTitle = m.input[:doubleNewlineIdx]
+		} else {
+			// No explicit title, use entire content
+			fullTitle = m.input
+		}
+		// Replace newlines for length check
+		fullTitleDisplay := strings.ReplaceAll(fullTitle, "\n", " ")
+
+		// Check if truncation is needed
+		titleTruncated := len(fullTitleDisplay) > maxTitleLen
+
+		// Extract and truncate for display
+		threadTitle := extractThreadTitle(m.input, maxTitleLen)
+		threadTitle = strings.ReplaceAll(threadTitle, "\n", " ")
+		if len(threadTitle) > maxTitleLen {
+			threadTitle = threadTitle[:maxTitleLen]
+		}
+
+		estimateNote := mutedTextStyle.Render("Preview (depends on window width):")
+		titlePreview := mutedTextStyle.Render("  → ") +
+			titlePreviewStyle.Render(threadTitle)
+
+		// Add ellipsis only if the title itself was truncated
+		if titleTruncated {
+			titlePreview += mutedTextStyle.Render("...")
+		}
+
+		// Wrap the entire preview line to input width
+		titlePreview = lipgloss.NewStyle().Width(inputWidth).Render(titlePreview)
+
+		titleHint := mutedTextStyle.Render("Tip: Use double newline to set title manually")
+
+		contentSections = append(contentSections, "", estimateNote, titlePreview, titleHint)
+	}
+
 	instructions := mutedTextStyle.Render("[Ctrl+D or Ctrl+Enter] Send  [Esc] Cancel")
+	contentSections = append(contentSections, "", instructions)
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleRender,
-		inputBox,
-		"",
-		instructions,
+		contentSections...,
 	)
 
 	modal := modalStyle.Render(content)
@@ -150,4 +206,30 @@ func (m *ComposeModal) Render(width, height int) string {
 // IsBlockingInput returns true (this modal blocks all input)
 func (m *ComposeModal) IsBlockingInput() bool {
 	return true
+}
+
+// extractThreadTitle extracts the thread title from message content.
+// Title is either:
+// - Everything before the first "\n\n" (double newline), or
+// - First maxChars characters
+// whichever comes first.
+func extractThreadTitle(content string, maxChars int) string {
+	// Find first double newline
+	doubleNewlineIdx := strings.Index(content, "\n\n")
+
+	if doubleNewlineIdx >= 0 {
+		// User explicitly ended the title with double newline
+		title := content[:doubleNewlineIdx]
+		// Still respect maxChars
+		if len(title) > maxChars {
+			return title[:maxChars]
+		}
+		return title
+	}
+
+	// No double newline, use first maxChars (or entire content if shorter)
+	if len(content) > maxChars {
+		return content[:maxChars]
+	}
+	return content
 }

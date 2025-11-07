@@ -3,9 +3,9 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/76creates/stickers/flexbox"
+	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/charmbracelet/lipgloss"
@@ -456,50 +456,6 @@ func (m Model) renderHelp() string {
 	)
 }
 
-// formatBytes formats bytes into human-readable form
-func formatBytes(bytes uint64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%dB", bytes)
-	}
-	div, exp := uint64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f%cB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
-
-// formatBandwidth converts bytes/sec to modem-equivalent display
-func formatBandwidth(bytesPerSec int) string {
-	// Convert bytes/sec to bits/sec (multiply by 8)
-	bitsPerSec := bytesPerSec * 8
-
-	// Common modem speeds in bits/sec
-	switch {
-	case bitsPerSec <= 14400:
-		return "14.4k"
-	case bitsPerSec <= 28800:
-		return "28.8k"
-	case bitsPerSec <= 33600:
-		return "33.6k"
-	case bitsPerSec <= 56000:
-		return "56k"
-	case bitsPerSec <= 128000:
-		return "128k"
-	case bitsPerSec <= 256000:
-		return "256k"
-	case bitsPerSec <= 512000:
-		return "512k"
-	case bitsPerSec <= 1024000:
-		return "1Mbps"
-	case bitsPerSec <= 10240000:
-		return fmt.Sprintf("%.1fMbps", float64(bitsPerSec)/1000000)
-	default:
-		return fmt.Sprintf("%.1fMbps", float64(bitsPerSec)/1000000)
-	}
-}
-
 // renderHeader renders the header
 func (m Model) renderHeader() string {
 	left := HeaderStyle.Render(fmt.Sprintf("SuperChat %s", m.currentVersion))
@@ -521,14 +477,14 @@ func (m Model) renderHeader() string {
 		}
 
 		// Add traffic counter
-		sent := formatBytes(m.conn.GetBytesSent())
-		recv := formatBytes(m.conn.GetBytesReceived())
+		sent := client.FormatBytes(m.conn.GetBytesSent())
+		recv := client.FormatBytes(m.conn.GetBytesReceived())
 		traffic := MutedTextStyle.Render(fmt.Sprintf("  ↑%s ↓%s", sent, recv))
 		status += traffic
 
 		// Add bandwidth throttle indicator if throttling is enabled
 		if m.throttle > 0 {
-			bandwidth := formatBandwidth(m.throttle)
+			bandwidth := client.FormatBandwidth(m.throttle)
 			throttle := MutedTextStyle.Render(fmt.Sprintf("  ⏱ %s", bandwidth))
 			status += throttle
 		}
@@ -618,6 +574,12 @@ func truncateString(s string, maxLen int) string {
 
 	return result.String()
 }
+
+// extractThreadTitle extracts the thread title from message content.
+// Title is either:
+// - Everything before the first "\n\n" (double newline), or
+// - First maxChars characters
+// whichever comes first.
 
 // renderFooter renders the footer
 func (m Model) renderFooter(shortcuts string) string {
@@ -898,27 +860,21 @@ func (m Model) isOwnMessage(msg protocol.Message) bool {
 }
 
 func (m Model) formatThreadItem(thread protocol.Message) string {
-	// Server already prefixes anonymous users with ~
-	author := thread.AuthorNickname
-
 	// Wrap content to available width
 	availableWidth := m.threadListViewport.Width - 4 // Account for padding and selection indicator
 	if availableWidth < 20 {
 		availableWidth = 20
 	}
 
-	// Build the line with author, preview, time, and reply count
-	preview := thread.Content
-	preview = strings.ReplaceAll(preview, "\n", " ")
-
-	timeStr := formatTime(thread.CreatedAt)
+	// Get base formatting from shared function
+	timeStr := client.FormatRelativeTime(thread.CreatedAt)
 	replyCount := ""
 	if thread.ReplyCount > 0 {
 		replyCount = fmt.Sprintf(" (%d)", thread.ReplyCount)
 	}
 
-	// Calculate space for preview
-	// Format: "author preview  time(replies)"
+	// Apply terminal-specific styling
+	author := thread.AuthorNickname
 	authorStyle := MessageAuthorStyle
 	if m.isOwnMessage(thread) {
 		authorStyle = MessageOwnAuthorStyle
@@ -936,7 +892,12 @@ func (m Model) formatThreadItem(thread protocol.Message) string {
 		previewWidth = 10
 	}
 
-	// Truncate preview to fit
+	// Extract thread title using shared function
+	preview := client.ExtractThreadTitle(thread.Content, previewWidth)
+	// Replace single newlines with spaces for display
+	preview = strings.ReplaceAll(preview, "\n", " ")
+
+	// Truncate preview to fit and add ellipsis if needed
 	if len(preview) > previewWidth {
 		preview = preview[:previewWidth-3] + "..."
 	}
@@ -972,7 +933,7 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 	}
 	author = authorStyle.Render(author)
 
-	timeStr := formatTime(msg.CreatedAt)
+	timeStr := client.FormatRelativeTime(msg.CreatedAt)
 	timestamp := MessageTimeStyle.Render(timeStr)
 
 	// Add edited indicator if message was edited
@@ -1024,26 +985,6 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 	}
 
 	return UnselectedItemStyle.Render("" + indent + full)
-}
-
-// formatTime formats a timestamp as relative time
-func formatTime(t time.Time) string {
-	now := time.Now()
-	diff := now.Sub(t)
-
-	if diff < time.Minute {
-		return "just now"
-	}
-	if diff < time.Hour {
-		mins := int(diff.Minutes())
-		return fmt.Sprintf("%dm ago", mins)
-	}
-	if diff < 24*time.Hour {
-		hours := int(diff.Hours())
-		return fmt.Sprintf("%dh ago", hours)
-	}
-	days := int(diff.Hours() / 24)
-	return fmt.Sprintf("%dd ago", days)
 }
 
 func max(a, b int) int {
@@ -1117,7 +1058,7 @@ func (m Model) buildThreadContent() string {
 	}
 
 	// Calculate depths once for all messages
-	depths := m.calculateThreadDepths()
+	depths := client.CalculateThreadDepths(m.currentThread.ID, m.threadReplies)
 
 	// Render root message
 	rootMsg := m.formatMessage(*m.currentThread, 0, m.replyCursor == 0)
@@ -1194,7 +1135,30 @@ func (m Model) buildChatMessages() string {
 	}
 
 	var lines []string
+	var prevDate string
+
 	for _, msg := range m.chatMessages {
+		// Format current message's date (YYYY-MM-DD for comparison)
+		currentDate := msg.CreatedAt.Format("2006-01-02")
+
+		// Insert a date separator if:
+		// 1. This is the first message (prevDate is empty), OR
+		// 2. The date changed from the previous message
+		if prevDate == "" || currentDate != prevDate {
+			// Format the date nicely for display
+			dateLabel := msg.CreatedAt.Format("Monday, January 2, 2006")
+
+			// Build left-aligned separator
+			separator := "─── " + dateLabel + " ───"
+
+			separatorStyled := lipgloss.NewStyle().
+				Foreground(MutedColor).
+				Render(separator)
+			lines = append(lines, separatorStyled)
+		}
+
+		prevDate = currentDate
+
 		chatLine := m.formatChatMessage(msg)
 		lines = append(lines, chatLine)
 	}
@@ -1316,41 +1280,6 @@ func (m Model) buildChatInputField() string {
 	return m.chatTextarea.View()
 }
 
-// calculateThreadDepths builds a depth map for all messages in the thread (single pass)
-func (m Model) calculateThreadDepths() map[uint64]int {
-	depths := make(map[uint64]int)
-
-	if m.currentThread == nil {
-		return depths
-	}
-
-	// Root is always depth 0
-	depths[m.currentThread.ID] = 0
-
-	// Build parent->children map
-	childrenMap := make(map[uint64][]protocol.Message)
-	for _, reply := range m.threadReplies {
-		if reply.ParentID != nil {
-			childrenMap[*reply.ParentID] = append(childrenMap[*reply.ParentID], reply)
-		}
-	}
-
-	// BFS traversal to assign depths
-	queue := []uint64{m.currentThread.ID}
-	for len(queue) > 0 {
-		parentID := queue[0]
-		queue = queue[1:]
-		parentDepth := depths[parentID]
-
-		for _, child := range childrenMap[parentID] {
-			depths[child.ID] = parentDepth + 1
-			queue = append(queue, child.ID)
-		}
-	}
-
-	return depths
-}
-
 // calculateCursorLinePosition returns the line number where the cursor is positioned
 func (m Model) calculateCursorLinePosition() int {
 	if m.currentThread == nil {
@@ -1365,7 +1294,7 @@ func (m Model) calculateCursorLinePosition() int {
 	}
 
 	// Calculate depths once
-	depths := m.calculateThreadDepths()
+	depths := client.CalculateThreadDepths(m.currentThread.ID, m.threadReplies)
 
 	// Add root message lines + 2 newlines (one for content, one blank separator)
 	rootMsg := m.formatMessage(*m.currentThread, 0, false)
@@ -1400,7 +1329,7 @@ func (m Model) checkNewMessagesOutsideViewport() (hasNewAbove bool, hasNewBelow 
 	}
 
 	// Calculate depths once
-	depths := m.calculateThreadDepths()
+	depths := client.CalculateThreadDepths(m.currentThread.ID, m.threadReplies)
 
 	// Check each reply
 	linePos := 0

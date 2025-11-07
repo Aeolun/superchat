@@ -145,13 +145,17 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 	// Decode message
 	msg := &protocol.AuthRequestMessage{}
 	if err := msg.Decode(frame.Payload); err != nil {
+		log.Printf("Session %d: AUTH_REQUEST decode failed: %v", sess.ID, err)
 		return s.sendError(sess, 1000, "Invalid message format")
 	}
+
+	log.Printf("Session %d: AUTH_REQUEST for nickname %s", sess.ID, msg.Nickname)
 
 	// Get user from database
 	user, err := s.db.GetUserByNickname(msg.Nickname)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Printf("Session %d: AUTH_REQUEST failed - nickname %s not registered", sess.ID, msg.Nickname)
 			resp := &protocol.AuthResponseMessage{
 				Success: false,
 				Message: "Invalid credentials",
@@ -163,6 +167,7 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 
 	// Check if user has removed password (SSH-only authentication)
 	if user.PasswordHash == "" {
+		log.Printf("Session %d: AUTH_REQUEST failed - user %s requires SSH authentication", sess.ID, msg.Nickname)
 		resp := &protocol.AuthResponseMessage{
 			Success: false,
 			Message: "This account requires SSH authentication. Please connect via SSH.",
@@ -176,6 +181,7 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 	// So we compare: bcrypt(stored_hash, client_hash)
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(msg.Password))
 	if err != nil {
+		log.Printf("Session %d: AUTH_REQUEST failed - password verification failed for user %s (client_hash_len=%d)", sess.ID, msg.Nickname, len(msg.Password))
 		resp := &protocol.AuthResponseMessage{
 			Success: false,
 			Message: "Invalid credentials",
@@ -229,6 +235,7 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 	}
 
 	// Send success response
+	log.Printf("Session %d: AUTH_REQUEST succeeded for user %s (id=%d)", sess.ID, user.Nickname, user.ID)
 	flags := protocol.UserFlags(user.UserFlags)
 	resp := &protocol.AuthResponseMessage{
 		Success:   true,

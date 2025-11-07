@@ -10,10 +10,12 @@ import (
 
 	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/client/auth"
+	"github.com/aeolun/superchat/pkg/client/commands"
 	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gen2brain/beeep"
 )
 
 // Update handles messages and updates the model
@@ -343,6 +345,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// Update last interaction time (for notification idle detection)
+	m.lastInteractionTime = time.Now()
+
 	// Debug: log ctrl+k and ctrl+l specifically
 	if key == "ctrl+k" {
 		if m.logger != nil {
@@ -402,11 +407,19 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Modifier combo - fall through to command registry
 	}
 
-	// Route through command registry based on main view and active modal
+	// Check shared commands first (new system)
+	if sharedCmd := commands.FindCommandForKey(key, &m); sharedCmd != nil {
+		if m.logger != nil {
+			m.logger.Printf("[DEBUG] Executing shared command: %s (action: %s)", sharedCmd.Name, sharedCmd.ActionID)
+		}
+		return m.ExecuteActionWithReturn(sharedCmd.ActionID)
+	}
+
+	// Route through legacy command registry (old system - will be phased out)
 	activeModalType := m.modalStack.TopType()
 	if cmd := m.commands.GetCommand(key, int(m.currentView), activeModalType, &m); cmd != nil {
 		if key == "ctrl+l" && m.logger != nil {
-			m.logger.Printf("[DEBUG] Found ctrl+l command in registry, executing...")
+			m.logger.Printf("[DEBUG] Found ctrl+l command in legacy registry, executing...")
 		}
 		newModel, teaCmd := cmd.Execute(&m)
 		if model, ok := newModel.(*Model); ok {
@@ -417,7 +430,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Debug: log if ctrl+l command not found
 	if key == "ctrl+l" && m.logger != nil {
-		m.logger.Printf("[DEBUG] ctrl+l command NOT found in registry")
+		m.logger.Printf("[DEBUG] ctrl+l command NOT found in any registry")
 	}
 
 	// Fall back to existing key handlers (during migration period)
@@ -1373,7 +1386,7 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 			if isLoadingMore {
 				// Pagination: append to existing replies
 				m.threadReplies = append(m.threadReplies, newReplies...)
-				m.threadReplies = sortThreadReplies(m.threadReplies, m.currentThread.ID)
+				m.threadReplies = client.SortThreadReplies(m.threadReplies, m.currentThread.ID)
 
 				// Check if we've reached the end
 				if len(newReplies) < 10 {
@@ -1384,11 +1397,11 @@ func (m Model) handleMessageList(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 			} else if cachedReplies, ok := m.threadRepliesCache[m.currentThread.ID]; ok && len(newReplies) > 0 {
 				// Incremental update: merge cached and new replies
 				merged := append(cachedReplies, newReplies...)
-				m.threadReplies = sortThreadReplies(merged, m.currentThread.ID)
+				m.threadReplies = client.SortThreadReplies(merged, m.currentThread.ID)
 				m.statusMessage = fmt.Sprintf("Loaded %d new replies", len(newReplies))
 			} else {
 				// Initial load: replace replies
-				m.threadReplies = sortThreadReplies(msg.Messages, m.currentThread.ID)
+				m.threadReplies = client.SortThreadReplies(msg.Messages, m.currentThread.ID)
 				m.allRepliesLoaded = len(msg.Messages) < 10
 				m.statusMessage = fmt.Sprintf("Loaded %d replies", len(m.threadReplies))
 			}
@@ -1462,6 +1475,11 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 				m.chatViewport.SetContent(m.buildChatMessages())
 				// Auto-scroll to bottom to show new message
 				m.chatViewport.GotoBottom()
+
+			// Send desktop notification if user is idle
+			if m.shouldNotifyForMessage(newMsg) {
+				m.sendDesktopNotification(newMsg)
+			}
 			} else {
 				// Forum thread - add to threads
 				m.threads = append([]protocol.Message{newMsg}, m.threads...)
@@ -1507,7 +1525,7 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 				// Reply to current thread - add it
 				m.threadReplies = append(m.threadReplies, newMsg)
 				// Sort replies in depth-first order based on tree structure
-				m.threadReplies = sortThreadReplies(m.threadReplies, m.currentThread.ID)
+				m.threadReplies = client.SortThreadReplies(m.threadReplies, m.currentThread.ID)
 
 				// Update cache with new message
 				m.threadRepliesCache[m.currentThread.ID] = m.threadReplies
@@ -1541,6 +1559,11 @@ func (m Model) handleNewMessage(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 						// Mark others' messages as new
 						m.newMessageIDs[newMsg.ID] = true
 						m.threadViewport.SetContent(m.buildThreadContent())
+
+						// Send desktop notification if user is idle
+						if m.shouldNotifyForMessage(newMsg) {
+							m.sendDesktopNotification(newMsg)
+						}
 					}
 				} else {
 					m.threadViewport.SetContent(m.buildThreadContent())
@@ -2263,47 +2286,6 @@ func (m *Model) markCurrentMessageAsRead() {
 		reply := m.threadReplies[m.replyCursor-1]
 		delete(m.newMessageIDs, reply.ID)
 	}
-}
-
-// sortThreadReplies sorts messages in depth-first order based on tree structure
-// Messages are grouped by parent and sorted by timestamp within each group
-func sortThreadReplies(replies []protocol.Message, rootID uint64) []protocol.Message {
-	if len(replies) == 0 {
-		return replies
-	}
-
-	// Build a map of parent_id -> children
-	childrenMap := make(map[uint64][]protocol.Message)
-	for _, msg := range replies {
-		if msg.ParentID != nil {
-			parentID := *msg.ParentID
-			childrenMap[parentID] = append(childrenMap[parentID], msg)
-		}
-	}
-
-	// Sort children by creation time within each parent group
-	for _, children := range childrenMap {
-		sort.Slice(children, func(i, j int) bool {
-			return children[i].CreatedAt.Before(children[j].CreatedAt)
-		})
-	}
-
-	// Depth-first traversal to build final ordered list
-	var result []protocol.Message
-	var traverse func(parentID uint64)
-	traverse = func(parentID uint64) {
-		children := childrenMap[parentID]
-		for _, child := range children {
-			result = append(result, child)
-			// Recursively add this child's children
-			traverse(child.ID)
-		}
-	}
-
-	// Start traversal from root
-	traverse(rootID)
-
-	return result
 }
 
 func isDeletedMessageContent(content string) bool {
@@ -3249,4 +3231,43 @@ func (m Model) handleUserDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// shouldNotifyForMessage checks if we should send a desktop notification for this message
+func (m Model) shouldNotifyForMessage(msg protocol.Message) bool {
+	// Don't notify for our own messages
+	if m.isOwnMessage(msg) {
+		return false
+	}
+
+	// Check if user has been idle for 5+ minutes
+	idleTime := time.Since(m.lastInteractionTime)
+	if idleTime < 5*time.Minute {
+		return false
+	}
+
+	return true
+}
+
+// sendDesktopNotification sends a desktop notification for a message
+func (m Model) sendDesktopNotification(msg protocol.Message) {
+	// Build notification title and message
+	title := "SuperChat"
+	if m.currentChannel != nil {
+		title = fmt.Sprintf("SuperChat - %s", m.currentChannel.Name)
+	}
+
+	// Truncate message content to 100 chars for notification
+	content := msg.Content
+	if len(content) > 100 {
+		content = content[:97] + "..."
+	}
+
+	body := fmt.Sprintf("%s: %s", msg.AuthorNickname, content)
+
+	// Send notification (best-effort, don't fail if it doesn't work)
+	err := beeep.Notify(title, body, m.notificationIconPath)
+	if err != nil && m.logger != nil {
+		m.logger.Printf("Failed to send desktop notification: %v", err)
+	}
 }

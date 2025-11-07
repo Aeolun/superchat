@@ -364,7 +364,7 @@ func TestCalculateThreadDepths(t *testing.T) {
 		CreateTestMessage(6, 1, "frank", "Another reply to msg 2", &msg2ID),
 	}
 
-	depths := m.calculateThreadDepths()
+	depths := client.CalculateThreadDepths(m.currentThread.ID, m.threadReplies)
 
 	expectedDepths := map[uint64]int{
 		1: 0, // Root

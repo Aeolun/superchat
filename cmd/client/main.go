@@ -245,8 +245,11 @@ func main() {
 	// Now assign to interface
 	conn = c
 
+	// Extract data directory from state path (parent directory of state.db)
+	dataDir := filepath.Dir(finalStatePath)
+
 	// Create bubbletea program (pass connection error if any)
-	model := ui.NewModel(conn, state, Version, useDirectory, *throttle, logger, initialConnErr)
+	model := ui.NewModel(conn, state, Version, useDirectory, *throttle, logger, dataDir, initialConnErr)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	// Run the program

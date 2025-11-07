@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aeolun/superchat/pkg/client"
+	"github.com/aeolun/superchat/pkg/client/assets"
 	"github.com/aeolun/superchat/pkg/client/ui/commands"
 	"github.com/aeolun/superchat/pkg/client/ui/modal"
 	"github.com/aeolun/superchat/pkg/protocol"
@@ -174,6 +175,10 @@ type Model struct {
 	lastPingSent time.Time
 	pingInterval time.Duration
 
+	// Notifications
+	lastInteractionTime  time.Time
+	notificationIconPath string
+
 	// Command system
 	commands *commands.Registry
 
@@ -183,7 +188,7 @@ type Model struct {
 }
 
 // NewModel creates a new application model
-func NewModel(conn client.ConnectionInterface, state client.StateInterface, currentVersion string, directoryMode bool, throttle int, logger *log.Logger, initialConnErr error) Model {
+func NewModel(conn client.ConnectionInterface, state client.StateInterface, currentVersion string, directoryMode bool, throttle int, logger *log.Logger, dataDir string, initialConnErr error) Model {
 
 	firstRun := state.GetFirstRun()
 	initialView := ViewChannelList
@@ -250,9 +255,18 @@ func NewModel(conn client.ConnectionInterface, state client.StateInterface, curr
 		threadHighestMessageID: make(map[uint64]uint64),
 		pingInterval:           18 * time.Second, // Send ping every 18 seconds (3 pings within 60s timeout)
 		lastPingSent:           time.Now(),
+		lastInteractionTime:    time.Now(), // Initialize to now (active on startup)
 		channelRoster:          make(map[uint64]map[uint64]presenceEntry),
 		serverRoster:           make(map[uint64]presenceEntry),
 		unreadCounts:           make(map[uint64]uint32),
+	}
+
+	// Initialize notification icon (write to data directory if needed)
+	iconPath, err := assets.GetIconPath(dataDir, state)
+	if err != nil && logger != nil {
+		logger.Printf("Failed to write notification icon: %v", err)
+	} else {
+		m.notificationIconPath = iconPath
 	}
 
 	// Initialize state machine - detect SSH connection by address prefix
