@@ -184,12 +184,14 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 	}
 
 	log.Printf("Session %d: AUTH_REQUEST for nickname %s", sess.ID, msg.Nickname)
+	fmt.Printf("[auth] sign-in attempt: %s (session %d, %s)\n", msg.Nickname, sess.ID, sess.RemoteAddr)
 
 	// Get user from database
 	user, err := s.db.GetUserByNickname(msg.Nickname)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			log.Printf("Session %d: AUTH_REQUEST failed - nickname %s not registered", sess.ID, msg.Nickname)
+			fmt.Printf("[auth] sign-in FAILED: %s — not registered\n", msg.Nickname)
 			resp := &protocol.AuthResponseMessage{
 				Success: false,
 				Message: "Invalid credentials",
@@ -202,6 +204,7 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 	// Check if user has removed password (SSH-only authentication)
 	if user.PasswordHash == "" {
 		log.Printf("Session %d: AUTH_REQUEST failed - user %s requires SSH authentication", sess.ID, msg.Nickname)
+		fmt.Printf("[auth] sign-in FAILED: %s — SSH-only account\n", msg.Nickname)
 		resp := &protocol.AuthResponseMessage{
 			Success: false,
 			Message: "This account requires SSH authentication. Please connect via SSH.",
@@ -216,6 +219,7 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(msg.Password))
 	if err != nil {
 		log.Printf("Session %d: AUTH_REQUEST failed - password verification failed for user %s (client_hash_len=%d)", sess.ID, msg.Nickname, len(msg.Password))
+		fmt.Printf("[auth] sign-in FAILED: %s — invalid password\n", msg.Nickname)
 		resp := &protocol.AuthResponseMessage{
 			Success: false,
 			Message: "Invalid credentials",
@@ -246,6 +250,7 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 				Message: fmt.Sprintf("Account banned %s. Reason: %s", bannedUntil, ban.Reason),
 			}
 			log.Printf("Session %d: rejected login for banned user %s (id=%d)", sess.ID, user.Nickname, user.ID)
+			fmt.Printf("[auth] sign-in FAILED: %s — banned\n", user.Nickname)
 			return s.sendMessage(sess, protocol.TypeAuthResponse, resp)
 		}
 	}
@@ -284,6 +289,7 @@ func (s *Server) handleAuthRequest(sess *Session, frame *protocol.Frame) error {
 
 	// Send success response
 	log.Printf("Session %d: AUTH_REQUEST succeeded for user %s (id=%d)", sess.ID, user.Nickname, user.ID)
+	fmt.Printf("[auth] sign-in OK: %s (id=%d)\n", user.Nickname, user.ID)
 	flags := protocol.UserFlags(user.UserFlags)
 	resp := &protocol.AuthResponseMessage{
 		Success:   true,
