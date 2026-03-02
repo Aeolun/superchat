@@ -399,7 +399,8 @@ export class SuperChatClient {
           console.warn(`Unhandled message type: 0x${header.type.toString(16)}`)
       }
     } catch (error) {
-      console.error('Error handling message:', error)
+      const msgType = data.length >= 6 ? `0x${data[5].toString(16).padStart(2, '0')}` : 'unknown'
+      console.error(`Error handling message type ${msgType}:`, String(error))
     }
   }
 
