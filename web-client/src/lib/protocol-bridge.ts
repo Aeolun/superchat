@@ -423,6 +423,7 @@ export class ProtocolBridge {
     console.log('User info:', info.nickname, 'registered:', info.is_registered)
 
     if (info.is_registered && info.nickname === store.nickname) {
+      store.setNicknameIsRegistered(true)
       store.setPendingAuthNickname(info.nickname)
       store.setAuthError('')
       storeActions.openModal(ModalState.Password)

@@ -192,6 +192,7 @@ const [activeDMInvite, setActiveDMInvite] = createSignal<DMInvite | null>(null)
 const [pendingEncryptionChannelId, setPendingEncryptionChannelId] = createSignal<bigint | null>(null)
 const [encryptionSetupReason, setEncryptionSetupReason] = createSignal<string>('')
 const [pendingAuthNickname, setPendingAuthNickname] = createSignal<string>('')
+const [nicknameIsRegistered, setNicknameIsRegistered] = createSignal<boolean>(false)
 const [authError, setAuthError] = createSignal<string>('')
 
 // Export the store as an object with getters and setters
@@ -311,6 +312,9 @@ export const store = {
   get pendingAuthNickname() { return pendingAuthNickname() },
   setPendingAuthNickname,
 
+  get nicknameIsRegistered() { return nicknameIsRegistered() },
+  setNicknameIsRegistered,
+
   get authError() { return authError() },
   setAuthError,
 }
@@ -386,6 +390,7 @@ export const storeActions = {
   resetConnection() {
     setConnectionState('disconnected')
     setIsRegistered(false)
+    setNicknameIsRegistered(false)
     setErrorMessage('')
     setActiveChannelId(null)
     setCurrentView(ViewState.ThreadList)

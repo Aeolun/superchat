@@ -644,7 +644,7 @@ const App: Component = () => {
                     {store.isRegistered ? '' : '~'}{store.nickname}
                     <Show when={!store.isRegistered}>
                       {' '}<Show
-                        when={store.pendingAuthNickname}
+                        when={store.nicknameIsRegistered}
                         fallback={
                           <button
                             class="link link-primary text-xs"
