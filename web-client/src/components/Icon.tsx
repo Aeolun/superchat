@@ -12,6 +12,7 @@ import envelope from '@phosphor-icons/core/bold/envelope-simple-bold.svg?raw'
 import list from '@phosphor-icons/core/bold/list-bold.svg?raw'
 import lock from '@phosphor-icons/core/bold/lock-bold.svg?raw'
 import plus from '@phosphor-icons/core/bold/plus-bold.svg?raw'
+import signOut from '@phosphor-icons/core/bold/sign-out-bold.svg?raw'
 import users from '@phosphor-icons/core/bold/users-bold.svg?raw'
 import x from '@phosphor-icons/core/bold/x-bold.svg?raw'
 
@@ -22,6 +23,7 @@ const registry = {
   'list': list,
   'lock': lock,
   'plus': plus,
+  'sign-out': signOut,
   'users': users,
   'x': x,
 } as const

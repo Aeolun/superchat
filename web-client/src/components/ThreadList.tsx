@@ -33,44 +33,42 @@ const ThreadList: Component<ThreadListProps> = (props) => {
           </div>
         }
       >
-        <div class="space-y-3">
+        {/* Single grid so header and rows share column sizing */}
+        <div class="grid grid-cols-[auto_1fr_auto_auto] text-xs">
+          {/* Column headers */}
+          <span class="px-3 py-2 font-semibold uppercase text-base-content/40 border-b border-base-300">Date</span>
+          <span class="px-3 py-2 font-semibold uppercase text-base-content/40 border-b border-base-300">Title</span>
+          <span class="px-3 py-2 font-semibold uppercase text-base-content/40 border-b border-base-300">Author</span>
+          <span class="px-3 py-2 font-semibold uppercase text-base-content/40 border-b border-base-300 text-right">Replies</span>
+
+          {/* Thread rows — subgrid wrapper gives us a styleable row element */}
           <For each={props.threads}>
             {(thread, index) => {
               const replyCount = selectors.getReplyCount(thread.message_id)
               const isSelected = () => props.isFocused && props.selectedIndex === index()
-              const { title, hasBody } = extractThreadTitle(thread.content)
+              const { title } = extractThreadTitle(thread.content)
 
               return (
                 <div
                   onClick={() => props.onThreadClick(thread.message_id)}
-                  class={`card bg-gradient-to-br from-base-200 to-base-300 shadow-md hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 cursor-pointer border ${
-                    isSelected() ? 'border-primary ring-2 ring-primary' : 'border-base-300'
+                  class={`col-span-4 grid grid-cols-subgrid items-baseline border-b border-base-200 cursor-pointer transition-colors ${
+                    isSelected() ? 'bg-primary/10 ring-2 ring-primary ring-offset-1 rounded' : 'hover:bg-base-200'
                   }`}
                 >
-                  <div class="card-body p-4">
-                    {/* Thread Header */}
-                    <div class="flex items-start justify-between gap-4 mb-2">
-                      <div class="flex items-baseline gap-2">
-                        <Show when={isSelected()}>
-                          <span class="text-primary font-bold">▶</span>
-                        </Show>
-                        <span class="font-semibold text-xs text-secondary">{thread.author_nickname}</span>
-                        <span class="text-xs text-base-content/50">
-                          {formatMessageTime(thread.created_at)}
-                        </span>
-                      </div>
-                      <Show when={replyCount > 0}>
-                        <div class="badge badge-primary badge-sm">
-                          {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
-                        </div>
-                      </Show>
-                    </div>
-
-                    {/* Thread Title (before first double newline) */}
-                    <div class={`text-base whitespace-pre-wrap ${hasBody ? 'font-semibold' : 'line-clamp-3'}`}>
-                      {title}
-                    </div>
-                  </div>
+                  <span class="px-3 py-2 text-base-content/50 whitespace-nowrap">
+                    {formatMessageTime(thread.created_at)}
+                  </span>
+                  <span class="px-3 py-2 font-semibold truncate">
+                    {title}
+                  </span>
+                  <span class="px-3 py-2 text-secondary font-semibold whitespace-nowrap">
+                    {thread.author_nickname}
+                  </span>
+                  <span class="px-3 py-2 text-right">
+                    <span class={`badge badge-xs ${replyCount > 0 ? 'badge-primary' : 'badge-ghost'}`}>
+                      {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+                    </span>
+                  </span>
                 </div>
               )
             }}

@@ -1,39 +1,9 @@
 import { Component, Show, createSignal, createMemo, onMount, onCleanup } from 'solid-js'
 import { store, storeActions, ModalState } from '../store/app-store'
 import { getProtocolBridge } from '../lib/protocol-bridge'
-import { argon2id } from '../lib/argon2'
+import { hashPassword } from '../lib/hash-password'
 
-// Argon2id parameters (must match Go server: pkg/client/auth/password.go)
-const ARGON_TIME = 3
-const ARGON_MEMORY = 64 * 1024  // 64 MB in KB
-const ARGON_PARALLELISM = 4
-const ARGON_KEY_LEN = 32
 const MIN_PASSWORD_LENGTH = 8
-
-/** Base64 URL-safe encoding without padding (matches Go's base64.RawURLEncoding) */
-function base64RawURLEncode(bytes: Uint8Array): string {
-  let binary = ''
-  for (const b of bytes) binary += String.fromCharCode(b)
-  return btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '')
-}
-
-/** Hash password with argon2id using nickname as salt */
-function hashPassword(password: string, nickname: string): string {
-  const passwordBytes = new TextEncoder().encode(password)
-  const saltBytes = new TextEncoder().encode(nickname)
-
-  const hash = argon2id(passwordBytes, saltBytes, {
-    t: ARGON_TIME,
-    m: ARGON_MEMORY,
-    p: ARGON_PARALLELISM,
-    dkLen: ARGON_KEY_LEN,
-  })
-
-  return base64RawURLEncode(hash)
-}
 
 const RegisterModal: Component = () => {
   const [password, setPassword] = createSignal('')
@@ -76,9 +46,7 @@ const RegisterModal: Component = () => {
     store.setAuthError('')
 
     try {
-      const hashedPassword = await new Promise<string>((resolve) => {
-        setTimeout(() => resolve(hashPassword(pw, nick)), 0)
-      })
+      const hashedPassword = await hashPassword(pw, nick)
 
       const client = getProtocolBridge().getClient()
       client.sendRegisterUser(hashedPassword)

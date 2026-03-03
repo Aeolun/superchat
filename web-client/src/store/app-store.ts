@@ -195,6 +195,10 @@ const [pendingAuthNickname, setPendingAuthNickname] = createSignal<string>('')
 const [nicknameIsRegistered, setNicknameIsRegistered] = createSignal<boolean>(false)
 const [authError, setAuthError] = createSignal<string>('')
 
+// Mobile panel toggles (only effective below md breakpoint)
+const [mobileSidebarOpen, setMobileSidebarOpen] = createSignal(false)
+const [mobileUsersOpen, setMobileUsersOpen] = createSignal(false)
+
 // Export the store as an object with getters and setters
 export const store = {
   // Connection state
@@ -317,6 +321,13 @@ export const store = {
 
   get authError() { return authError() },
   setAuthError,
+
+  // Mobile panels
+  get mobileSidebarOpen() { return mobileSidebarOpen() },
+  setMobileSidebarOpen,
+
+  get mobileUsersOpen() { return mobileUsersOpen() },
+  setMobileUsersOpen,
 }
 
 // Helper actions for common operations
@@ -551,6 +562,21 @@ export const storeActions = {
         return next
       })
     }
+  },
+
+  closeMobilePanels() {
+    setMobileSidebarOpen(false)
+    setMobileUsersOpen(false)
+  },
+
+  toggleMobileSidebar() {
+    setMobileUsersOpen(false)
+    setMobileSidebarOpen(prev => !prev)
+  },
+
+  toggleMobileUsers() {
+    setMobileSidebarOpen(false)
+    setMobileUsersOpen(prev => !prev)
   },
 
   clearDMState() {

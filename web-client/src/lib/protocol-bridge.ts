@@ -423,6 +423,13 @@ export class ProtocolBridge {
     console.log('User info:', info.nickname, 'registered:', info.is_registered)
 
     if (info.is_registered && info.nickname === store.nickname) {
+      // Try to auto-authenticate with a cached password hash from this session
+      const cachedHash = sessionStorage.getItem('superchat_auth_hash')
+      if (cachedHash) {
+        this.getClient().sendAuthRequest(info.nickname, cachedHash)
+        return
+      }
+
       store.setNicknameIsRegistered(true)
       store.setPendingAuthNickname(info.nickname)
       store.setAuthError('')
@@ -443,6 +450,15 @@ export class ProtocolBridge {
       storeActions.closeModal()
     } else {
       console.log('Authentication failed:', response.message)
+      // If auto-auth with cached hash failed, clear it and show the password modal
+      if (sessionStorage.getItem('superchat_auth_hash')) {
+        sessionStorage.removeItem('superchat_auth_hash')
+        store.setNicknameIsRegistered(true)
+        store.setPendingAuthNickname(store.nickname)
+        store.setAuthError('')
+        storeActions.openModal(ModalState.Password)
+        return
+      }
       store.setAuthError(response.message)
     }
   }

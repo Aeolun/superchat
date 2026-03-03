@@ -42,9 +42,6 @@ const ThreadDetail: Component<ThreadDetailProps> = (props) => {
                 </button>
 
                 <div class="flex items-baseline gap-2 mb-2">
-                  <Show when={isRootSelected()}>
-                    <span class="text-primary font-bold">▶</span>
-                  </Show>
                   <span class="font-semibold text-xs text-secondary">{thread().author_nickname}</span>
                   <span class="text-xs text-base-content/50">
                     {formatMessageTime(thread().created_at)}
@@ -107,9 +104,6 @@ const MessageWithRepliesComponent: Component<MessageWithRepliesComponentProps> =
           </button>
 
           <div class="flex items-baseline gap-2 mb-1">
-            <Show when={isSelected()}>
-              <span class="text-primary font-bold">▶</span>
-            </Show>
             <span class="font-semibold text-xs text-secondary">{props.message.author_nickname}</span>
             <span class="text-xs text-base-content/50">
               {formatMessageTime(props.message.created_at)}

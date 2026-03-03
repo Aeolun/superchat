@@ -1,10 +1,8 @@
-import { Component, createEffect, onCleanup, onMount, For, Show, createSignal, createMemo } from 'solid-js'
+import { Component, createEffect, onCleanup, onMount, For, Show, createSignal, createMemo, ParentProps } from 'solid-js'
+import { useNavigate } from '@solidjs/router'
 import { getProtocolBridge, destroyProtocolBridge } from './lib/protocol-bridge'
 import { store, storeActions, ViewState, ModalState, FocusArea } from './store/app-store'
 import { selectors } from './store/selectors'
-import ChatView from './components/ChatView'
-import ThreadList from './components/ThreadList'
-import ThreadDetail from './components/ThreadDetail'
 import ServerSelector from './components/ServerSelector'
 import ComposeModal from './components/ComposeModal'
 import StartDMModal from './components/StartDMModal'
@@ -26,35 +24,13 @@ import {
   useFooterShortcuts
 } from './lib/commands'
 
-/** Format retention hours as a human-readable duration */
-function formatRetention(hours: number): string {
-  if (hours % 24 === 0) return `${hours / 24}d`
-  return `${hours}h`
-}
-
-const App: Component = () => {
+const App: Component<ParentProps> = (props) => {
+  const navigate = useNavigate()
   let bridge = getProtocolBridge()
   let client = bridge.getClient()
-  let messageScrollContainer: HTMLDivElement | undefined
-  let chatInputRef: HTMLTextAreaElement | undefined
-
-  // Track if user has manually scrolled up
-  const [userHasScrolledUp, setUserHasScrolledUp] = createSignal(false)
-
-  // Chat input state (inline input for chat channels)
-  const [chatInput, setChatInput] = createSignal('')
 
   // True until onMount has checked localStorage for saved credentials
   const [checkingCredentials, setCheckingCredentials] = createSignal(true)
-
-  // Mobile panel toggles (only effective below md breakpoint)
-  const [mobileSidebarOpen, setMobileSidebarOpen] = createSignal(false)
-  const [mobileUsersOpen, setMobileUsersOpen] = createSignal(false)
-
-  const closeMobilePanels = () => {
-    setMobileSidebarOpen(false)
-    setMobileUsersOpen(false)
-  }
 
   // Initialize with connection screen
   const isConnected = selectors.isConnected
@@ -71,42 +47,26 @@ const App: Component = () => {
   const isCurrentChannelDM = selectors.isCurrentChannelDM
   const currentDMChannel = selectors.currentDMChannel
   const onlineUsers = selectors.onlineUsers
-  // Flatten thread messages for keyboard navigation (root + all nested replies in display order)
+
+  // Flatten thread messages for keyboard navigation (used by command handler)
   const flattenedThreadMessages = createMemo(() => {
     const thread = currentThread()
     if (!thread) return []
 
     const result: Message[] = []
-
-    // Helper to flatten recursively
     const flatten = (msg: typeof thread) => {
       result.push(msg)
       for (const reply of msg.replies) {
         flatten(reply)
       }
     }
-
     flatten(thread)
     return result
-  })
-
-  // Get selected message ID based on current view and selection index
-  const selectedMessageId = createMemo((): bigint | null => {
-    if (store.focusArea !== FocusArea.Content) return null
-
-    if (store.currentView === ViewState.ThreadDetail) {
-      const messages = flattenedThreadMessages()
-      if (store.selectedMessageIndex >= 0 && store.selectedMessageIndex < messages.length) {
-        return messages[store.selectedMessageIndex].message_id
-      }
-    }
-    return null
   })
 
   // Command executor for keyboard shortcuts
   const commandExecutor: CommandExecutor = {
     getCurrentView: () => {
-      // Map store ViewState to command ViewState
       if (!isConnected()) return CmdViewState.ChannelList
       if (!currentChannel()) return CmdViewState.ChannelList
       if (isCurrentChannelChat()) return CmdViewState.ChatView
@@ -114,7 +74,6 @@ const App: Component = () => {
       return CmdViewState.ThreadList
     },
     getActiveModal: () => {
-      // Map store ModalState to command ModalState
       switch (store.activeModal) {
         case ModalState.Help: return CmdModalState.Help
         case ModalState.Compose: return CmdModalState.Compose
@@ -131,11 +90,6 @@ const App: Component = () => {
     hasSelectedThread: () => currentThreadList().length > 0 && store.selectedMessageIndex >= 0,
     hasComposeContent: () => store.compose.content.trim().length > 0,
     canGoBack: () => {
-      // Can go back if:
-      // - A modal is open (close it)
-      // - In thread detail (go to thread list)
-      // - In content focus area (switch to sidebar)
-      // - In sidebar with channel selected (deselect channel)
       return store.activeModal !== ModalState.None ||
              store.currentView === ViewState.ThreadDetail ||
              store.focusArea === FocusArea.Content ||
@@ -168,30 +122,19 @@ const App: Component = () => {
         break
 
       case 'go-back': {
-        // Helper to deselect channel and return to channel list
-        const deselectChannel = () => {
-          if (store.subscribedChannelId !== null) {
-            client.unsubscribeChannel(store.subscribedChannelId)
-            store.setSubscribedChannelId(null)
-          }
-          store.setActiveChannelId(null)
-          store.setCurrentView(ViewState.ChannelList)
-          store.setFocusArea(FocusArea.Sidebar)
-          storeActions.clearMessages()
-        }
-
         if (store.activeModal !== ModalState.None) {
           storeActions.closeModal()
         } else if (store.compose.replyToId !== null) {
           storeActions.clearCompose()
         } else if (store.focusArea === FocusArea.Content) {
-          // Escape from content area
           if (store.currentView === ViewState.ThreadDetail) {
-            // Forum: go back to thread list
-            handleBackToThreadList()
+            // Forum: go back to thread list via router
+            if (store.activeChannelId !== null) {
+              navigate(`/channel/${store.activeChannelId}`)
+            }
           } else if (isCurrentChannelChat()) {
-            // Chat channel: go directly back to channel list (no thread list to navigate)
-            deselectChannel()
+            // Chat channel: go back to channel list
+            navigate('/')
           } else {
             // Forum thread list: switch focus to sidebar first
             store.setFocusArea(FocusArea.Sidebar)
@@ -199,7 +142,7 @@ const App: Component = () => {
         } else {
           // Already in sidebar, deselect channel
           if (store.activeChannelId !== null) {
-            deselectChannel()
+            navigate('/')
           }
         }
         break
@@ -221,14 +164,12 @@ const App: Component = () => {
           const newIndex = Math.min(maxIndex, store.selectedChannelIndex + 1)
           store.setSelectedChannelIndex(newIndex)
         } else {
-          // Determine max based on view
           let maxIndex = 0
           if (isCurrentChannelChat()) {
             maxIndex = currentChannelMessages().length - 1
           } else if (store.currentView === ViewState.ThreadList) {
             maxIndex = currentThreadList().length - 1
           } else if (store.currentView === ViewState.ThreadDetail) {
-            // Use flattened messages for proper navigation through nested structure
             maxIndex = flattenedThreadMessages().length - 1
           }
           const newIndex = Math.min(Math.max(0, maxIndex), store.selectedMessageIndex + 1)
@@ -241,7 +182,7 @@ const App: Component = () => {
           const channelsList = channels()
           if (channelsList.length > 0 && store.selectedChannelIndex < channelsList.length) {
             const channel = channelsList[store.selectedChannelIndex]
-            handleJoinChannel(channel.channel_id)
+            navigate(`/channel/${channel.channel_id}`)
             store.setFocusArea(FocusArea.Content)
             store.setSelectedMessageIndex(0)
           }
@@ -249,8 +190,10 @@ const App: Component = () => {
           const threads = currentThreadList()
           if (threads.length > 0 && store.selectedMessageIndex < threads.length) {
             const thread = threads[store.selectedMessageIndex]
-            handleThreadClick(thread.message_id)
-            store.setSelectedMessageIndex(0)
+            if (store.activeChannelId !== null) {
+              navigate(`/channel/${store.activeChannelId}/thread/${thread.message_id}`)
+              store.setSelectedMessageIndex(0)
+            }
           }
         }
         break
@@ -261,7 +204,6 @@ const App: Component = () => {
 
       case 'compose-new-thread':
         if (currentChannel()) {
-          // Clear any reply context and open compose modal
           storeActions.clearCompose()
           storeActions.openModal(ModalState.Compose)
         }
@@ -269,12 +211,16 @@ const App: Component = () => {
 
       case 'compose-reply':
         if (store.currentView === ViewState.ThreadDetail) {
-          // Get the selected message from flattened list and set up reply
           const messages = flattenedThreadMessages()
           const idx = store.selectedMessageIndex
           if (idx >= 0 && idx < messages.length) {
             const msg = messages[idx]
-            handleReply(msg.message_id, msg)
+            safeLog('Replying to:', msg.message_id)
+            storeActions.updateCompose({
+              replyToId: msg.message_id,
+              replyToMessage: msg
+            })
+            storeActions.openModal(ModalState.Compose)
           }
         }
         break
@@ -298,7 +244,6 @@ const App: Component = () => {
         const idx = store.selectedMessageIndex
         if (idx >= 0 && idx < messages.length) {
           const msg = messages[idx]
-          // Only allow editing own messages
           if (msg.author_nickname === store.nickname) {
             storeActions.updateCompose({
               editMessageId: msg.message_id,
@@ -373,7 +318,6 @@ const App: Component = () => {
     const channelLabel = `${prefix}${channel.name}`
 
     if (view === ViewState.ThreadDetail && thread) {
-      // Show a preview of the thread root message
       const preview = thread.content.length > 40
         ? thread.content.slice(0, 40) + '...'
         : thread.content
@@ -388,61 +332,10 @@ const App: Component = () => {
     const channelId = store.activeChannelId
     if (channelId !== null) {
       safeLog('Active channel changed to:', channelId)
-      // Reset scroll tracking when changing channels
-      setUserHasScrolledUp(false)
-      // Request messages for this channel
       client.listMessages(channelId, 0n, 100)
-      // Subscribe to real-time updates
       client.subscribeChannel(channelId)
     }
   })
-
-  // Auto-focus chat input when entering a chat channel
-  createEffect(() => {
-    const channel = currentChannel()
-    if (channel && channel.type === 0 && chatInputRef) {
-      // Small delay to ensure DOM is ready
-      setTimeout(() => chatInputRef?.focus(), 100)
-    }
-  })
-
-  // Clear chat input when leaving a channel
-  createEffect(() => {
-    if (store.activeChannelId === null) {
-      setChatInput('')
-    }
-  })
-
-  // Auto-scroll to bottom when messages change
-  createEffect(() => {
-    const messages = currentChannelMessages()
-    const container = messageScrollContainer
-
-    if (!container || messages.length === 0) return
-
-    // Check if user is near the bottom (within 100px)
-    const isNearBottom = () => {
-      const threshold = 100
-      return container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-    }
-
-    // Always scroll on initial load or if user is near bottom
-    if (!userHasScrolledUp() || isNearBottom()) {
-      // Use setTimeout to ensure DOM has updated, and a longer delay for initial load
-      setTimeout(() => {
-        container.scrollTop = container.scrollHeight
-      }, 50)
-    }
-  })
-
-  // Track user scroll behavior
-  const handleScroll = (e: Event) => {
-    const container = e.target as HTMLDivElement
-    const threshold = 100
-    const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-
-    setUserHasScrolledUp(!isAtBottom)
-  }
 
   const handleConnect = (url: string, nickname: string, throttleBps: number) => {
     console.log('Connecting:', { url, nickname, throttleBps })
@@ -454,67 +347,17 @@ const App: Component = () => {
   }
 
   const handleDisconnect = () => {
-    // Unsubscribe from current channel if any
     if (store.subscribedChannelId !== null) {
       client.unsubscribeChannel(store.subscribedChannelId)
     }
 
-    // Clear saved URL so next page load shows ServerSelector instead of auto-connecting
     localStorage.removeItem('superchat_last_url')
 
     client.disconnect()
     store.setNickname('')
     store.setServerUrl('')
     storeActions.resetConnection()
-  }
-
-  const handleJoinChannel = (channelId: bigint) => {
-    // Unsubscribe from previous channel
-    if (store.subscribedChannelId !== null && store.subscribedChannelId !== channelId) {
-      client.unsubscribeChannel(store.subscribedChannelId)
-    }
-
-    // Reset view state
-    store.setCurrentView(ViewState.ThreadList)
-    store.setActiveThreadId(null)
-    storeActions.clearCompose()
-    closeMobilePanels()
-
-    client.joinChannel(channelId)
-  }
-
-  const handleThreadClick = (threadId: bigint) => {
-    safeLog('Opening thread:', threadId)
-    store.setActiveThreadId(threadId)
-    store.setCurrentView(ViewState.ThreadDetail)
-
-    // Subscribe to thread updates
-    client.subscribeThread(threadId)
-
-    // Load replies for this thread
-    if (store.activeChannelId !== null) {
-      client.listMessagesForThread(store.activeChannelId, threadId, 100)
-    }
-  }
-
-  const handleBackToThreadList = () => {
-    // Unsubscribe from thread
-    if (store.subscribedThreadId !== null) {
-      client.unsubscribeThread(store.subscribedThreadId)
-    }
-
-    store.setActiveThreadId(null)
-    store.setCurrentView(ViewState.ThreadList)
-    storeActions.clearCompose()
-  }
-
-  const handleReply = (messageId: bigint, message: Message) => {
-    safeLog('Replying to:', messageId)
-    storeActions.updateCompose({
-      replyToId: messageId,
-      replyToMessage: message
-    })
-    storeActions.openModal(ModalState.Compose)
+    navigate('/')
   }
 
   const handleComposeSend = async (content: string) => {
@@ -532,7 +375,6 @@ const App: Component = () => {
     const key = store.dmChannelKeys.get(channelId)
 
     if (key) {
-      // Encrypted DM: encrypt and send raw bytes
       const plaintext = new TextEncoder().encode(content)
       const encrypted = await encryptMessage(key, plaintext)
       client.postMessageRaw(channelId, encrypted, store.compose.replyToId)
@@ -549,60 +391,13 @@ const App: Component = () => {
     storeActions.closeModal()
   }
 
-  // Send chat message (inline input, not modal)
-  const handleChatSend = async () => {
-    const content = chatInput().trim()
-    if (!content || !currentChannel()) return
-
-    const channelId = currentChannel()!.channel_id
-    const key = store.dmChannelKeys.get(channelId)
-
-    if (key) {
-      const plaintext = new TextEncoder().encode(content)
-      const encrypted = await encryptMessage(key, plaintext)
-      client.postMessageRaw(channelId, encrypted, null)
-    } else {
-      client.postMessage(channelId, content, null)
-    }
-
-    setChatInput('')
-  }
-
-  // Handle keydown in chat input
-  const handleChatInputKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleChatSend()
-    }
-    // Escape is handled by the global keyboard handler (go-back)
-  }
-
-  const handleJoinDMChannel = (channelId: bigint) => {
-    // Clear unread count
-    const dm = store.dmChannels.get(channelId)
-    if (dm) {
-      storeActions.addDMChannel({ ...dm, unreadCount: 0 })
-    }
-
-    // Join the DM channel (treated as a regular channel join)
-    store.setCurrentView(ViewState.ChatView)
-    store.setActiveThreadId(null)
-    storeActions.clearCompose()
-    closeMobilePanels()
-    client.joinChannel(channelId)
-  }
-
   const handleLeaveDMPermanent = (channelId: bigint) => {
     client.leaveChannel(channelId, true)
     storeActions.removeDMChannel(channelId)
     storeActions.removeDMChannelKey(channelId)
 
-    // If we were viewing this DM, go back to channel list
     if (store.activeChannelId === channelId) {
-      store.setActiveChannelId(null)
-      store.setCurrentView(ViewState.ChannelList)
-      store.setFocusArea(FocusArea.Sidebar)
-      storeActions.clearMessages()
+      navigate('/')
     }
   }
 
@@ -627,15 +422,15 @@ const App: Component = () => {
       <Show when={isConnected()}>
         <div class="flex h-screen overflow-hidden">
           {/* Mobile backdrop */}
-          <Show when={mobileSidebarOpen() || mobileUsersOpen()}>
+          <Show when={store.mobileSidebarOpen || store.mobileUsersOpen}>
             <div
               class="fixed inset-0 bg-black/50 z-30 md:hidden"
-              onClick={closeMobilePanels}
+              onClick={() => storeActions.closeMobilePanels()}
             />
           </Show>
 
           {/* Sidebar - Channel List */}
-          <div class={`${mobileSidebarOpen() ? 'flex' : 'hidden'} md:flex w-64 bg-base-200 border-r border-base-300 flex-col fixed md:relative inset-y-0 left-0 z-40`}>
+          <div class={`${store.mobileSidebarOpen ? 'flex' : 'hidden'} md:flex w-64 bg-base-200 border-r border-base-300 flex-col fixed md:relative inset-y-0 left-0 z-40`}>
             <div class="p-4 border-b border-base-300 flex-shrink-0">
               <div class="flex items-center justify-between mb-2">
                 <div>
@@ -667,7 +462,7 @@ const App: Component = () => {
                   class="btn btn-ghost btn-sm btn-circle"
                   title="Disconnect"
                 >
-                  <Icon name="x" size={16} />
+                  <Icon name="sign-out" size={16} />
                 </button>
               </div>
               {/* Traffic Stats */}
@@ -690,7 +485,10 @@ const App: Component = () => {
                       return (
                         <div class="flex items-center gap-1">
                           <button
-                            onClick={() => handleJoinDMChannel(dm.channelId)}
+                            onClick={() => {
+                              storeActions.closeMobilePanels()
+                              navigate(`/channel/${dm.channelId}`)
+                            }}
                             class={`btn btn-ghost btn-sm flex-1 justify-start text-left gap-1 ${
                               isSelected() ? 'btn-active' : ''
                             }`}
@@ -763,7 +561,8 @@ const App: Component = () => {
                       <button
                         onClick={() => {
                           store.setSelectedChannelIndex(index())
-                          handleJoinChannel(channel.channel_id)
+                          storeActions.closeMobilePanels()
+                          navigate(`/channel/${channel.channel_id}`)
                         }}
                         class={`btn btn-ghost w-full justify-start text-left ${
                           isSelected() ? 'btn-active' : ''
@@ -781,180 +580,9 @@ const App: Component = () => {
             </div>
           </div>
 
-          {/* Main Content Area */}
+          {/* Main Content Area - Route children render here */}
           <div class="flex-1 flex flex-col overflow-hidden">
-            <Show
-              when={currentChannel()}
-              fallback={
-                <div class="flex-1 flex flex-col items-center justify-center p-8">
-                  {/* Mobile: show toggle buttons when no channel selected */}
-                  <div class="flex w-full justify-between mb-4 md:hidden">
-                    <button
-                      onClick={() => { setMobileUsersOpen(false); setMobileSidebarOpen(v => !v) }}
-                      class="btn btn-ghost btn-sm btn-circle"
-                      title="Channels"
-                    >
-                      <Icon name="list" size={20} />
-                    </button>
-                    <button
-                      onClick={() => { setMobileSidebarOpen(false); setMobileUsersOpen(v => !v) }}
-                      class="btn btn-ghost btn-sm btn-circle"
-                      title="Online users"
-                    >
-                      <Icon name="users" size={20} />
-                    </button>
-                  </div>
-                  <div class="text-center text-base-content/50">
-                    <h3 class="text-xl font-semibold mb-2">Select a channel to start chatting</h3>
-                    <p class="hidden md:block">Choose a channel from the sidebar</p>
-                    <p class="md:hidden">Tap the menu to see channels</p>
-                  </div>
-                </div>
-              }
-            >
-              {/* Channel Header */}
-              <div class="border-b border-base-300 p-4 flex items-center justify-between flex-shrink-0">
-                <div class="flex items-center gap-2">
-                  {/* Mobile: sidebar toggle */}
-                  <button
-                    onClick={() => { setMobileUsersOpen(false); setMobileSidebarOpen(v => !v) }}
-                    class="btn btn-ghost btn-sm btn-circle md:hidden"
-                    title="Channels"
-                  >
-                    <Icon name="list" size={20} />
-                  </button>
-
-                  {/* Back button for thread detail view */}
-                  <Show when={isCurrentChannelForum() && store.currentView === ViewState.ThreadDetail}>
-                    <button
-                      onClick={handleBackToThreadList}
-                      class="btn btn-ghost btn-sm btn-circle"
-                      title="Back to thread list"
-                    >
-                      <Icon name="arrow-left" size={18} />
-                    </button>
-                  </Show>
-
-                  <span class="font-mono text-primary text-lg">
-                    {currentChannel()!.type === 0 ? '>' : '#'}
-                  </span>
-                  <h3 class="font-bold text-lg">{currentChannel()!.name}</h3>
-                  <Show when={store.subscribedChannelId === currentChannel()!.channel_id}>
-                    <span class="badge badge-success badge-sm">Live</span>
-                  </Show>
-                  <Show when={isCurrentChannelDM()}>
-                    <Show when={currentDMChannel()?.isEncrypted}>
-                      <span class="badge badge-info badge-sm gap-1" title="Ephemeral encryption - keys lost on page close"><Icon name="lock" size={12} /> Encrypted (session only)</span>
-                    </Show>
-                    <Show when={currentDMChannel()?.participantLeft}>
-                      <span class="badge badge-warning badge-sm">Partner left</span>
-                    </Show>
-                  </Show>
-                </div>
-                <div class="flex items-center gap-2">
-                  {/* New Thread button for forum channels in thread list view */}
-                  <Show when={isCurrentChannelForum() && store.currentView !== ViewState.ThreadDetail}>
-                    <button
-                      onClick={() => handleCommand('compose-new-thread')}
-                      class="btn btn-primary btn-sm gap-1"
-                    >
-                      <Icon name="plus" size={16} />
-                      <span class="hidden sm:inline">New Thread</span>
-                    </button>
-                  </Show>
-                  <div class="text-sm text-base-content/70 hidden sm:block">
-                    <Show
-                      when={isCurrentChannelChat()}
-                      fallback={
-                        <span>{currentThreadList().length} threads</span>
-                      }
-                    >
-                      <span>{currentChannelMessages().length} messages</span>
-                    </Show>
-                    <Show when={currentChannel()!.retention_hours > 0}>
-                      <span class="text-base-content/50"> · {formatRetention(currentChannel()!.retention_hours)} retention</span>
-                    </Show>
-                  </div>
-                  {/* Mobile: users panel toggle */}
-                  <button
-                    onClick={() => { setMobileSidebarOpen(false); setMobileUsersOpen(v => !v) }}
-                    class="btn btn-ghost btn-sm btn-circle md:hidden"
-                    title="Online users"
-                  >
-                    <Icon name="users" size={20} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Message Display Area - Conditional rendering based on channel type and view */}
-              <Show when={isCurrentChannelChat()}>
-                {/* Chat Channel: Flat message list + inline input */}
-                <div class="relative flex-1 flex flex-col overflow-hidden">
-                  <div
-                    ref={messageScrollContainer}
-                    onScroll={handleScroll}
-                    class="flex-1 overflow-auto"
-                  >
-                    <ChatView
-                      messages={currentChannelMessages()}
-                    />
-                  </div>
-                  {/* Scroll indicator */}
-                  <Show when={userHasScrolledUp()}>
-                    <div class="absolute bottom-16 right-4 badge badge-primary gap-2 pointer-events-none">
-                      <span>↓</span>
-                      <span>Scrolled up</span>
-                    </div>
-                  </Show>
-                </div>
-                {/* Inline chat input */}
-                <div class="border-t border-base-300 p-3 bg-base-100">
-                  <div class="flex gap-2">
-                    <textarea
-                      ref={chatInputRef}
-                      value={chatInput()}
-                      onInput={(e) => setChatInput(e.currentTarget.value)}
-                      onKeyDown={handleChatInputKeyDown}
-                      placeholder="Type a message..."
-                      rows={2}
-                      class="textarea textarea-bordered flex-1 resize-none focus:textarea-primary"
-                    />
-                    <button
-                      onClick={handleChatSend}
-                      disabled={!chatInput().trim()}
-                      class="btn btn-primary self-end"
-                    >
-                      Send
-                    </button>
-                  </div>
-                </div>
-              </Show>
-
-              <Show when={isCurrentChannelForum()}>
-                <Show
-                  when={store.currentView === ViewState.ThreadDetail}
-                  fallback={
-                    /* Thread List View */
-                    <ThreadList
-                      threads={currentThreadList()}
-                      onThreadClick={handleThreadClick}
-                      selectedIndex={store.selectedMessageIndex}
-                      isFocused={store.focusArea === FocusArea.Content}
-                    />
-                  }
-                >
-                  {/* Thread Detail View */}
-                  <ThreadDetail
-                    thread={currentThread()}
-                    onReply={handleReply}
-                    onBack={handleBackToThreadList}
-                    selectedMessageId={selectedMessageId()}
-                    isFocused={store.focusArea === FocusArea.Content}
-                  />
-                </Show>
-              </Show>
-
-            </Show>
+            {props.children}
 
             {/* Keyboard shortcuts footer (hidden on mobile - no keyboard) */}
             <div class="border-t border-base-300 px-4 py-2 flex-shrink-0 bg-base-200 hidden md:block">
@@ -975,7 +603,7 @@ const App: Component = () => {
           </div>
 
           {/* Right Panel - Online Users */}
-          <div class={`${mobileUsersOpen() ? 'flex' : 'hidden'} md:flex w-48 bg-base-200 border-l border-base-300 flex-col fixed md:relative inset-y-0 right-0 z-40`}>
+          <div class={`${store.mobileUsersOpen ? 'flex' : 'hidden'} md:flex w-48 bg-base-200 border-l border-base-300 flex-col fixed md:relative inset-y-0 right-0 z-40`}>
             <div class="p-3 border-b border-base-300 flex-shrink-0">
               <h3 class="font-semibold text-sm uppercase text-base-content/70">
                 Online ({onlineUsers().length})
@@ -1004,7 +632,6 @@ const App: Component = () => {
                           }`}
                           onClick={() => {
                             if (!isSelf()) {
-                              // Start DM with this user
                               const client = bridge.getClient()
                               if (user.isRegistered && user.userId !== null) {
                                 client.startDM(DM_TARGET_BY_USER_ID, user.userId, null, false)
@@ -1058,7 +685,7 @@ const App: Component = () => {
                   <h3 class="font-semibold text-sm text-base-content/70 mb-2">Navigation</h3>
                   <div class="space-y-1">
                     <div class="flex justify-between text-sm">
-                      <span class="font-mono text-primary">↑/↓ or K/J</span>
+                      <span class="font-mono text-primary">Up/Down or K/J</span>
                       <span class="text-base-content/70">Move selection</span>
                     </div>
                     <div class="flex justify-between text-sm">

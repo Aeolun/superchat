@@ -381,8 +381,8 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
   })
 
   return (
-    <div class="fixed inset-0 bg-black/95 flex items-center justify-center p-8 z-50">
-      <div class="card bg-base-200 shadow-xl w-full max-w-lg">
+    <div class="fixed inset-0 bg-black/95 flex items-center justify-center p-0 sm:p-8 z-50 overflow-y-auto">
+      <div class="card bg-base-200 shadow-xl w-full min-h-full sm:min-h-0 sm:max-w-lg sm:rounded-2xl rounded-none">
         <div class="card-body">
           <h2 class="card-title text-2xl mb-4">Connect to SuperChat</h2>
 
@@ -541,8 +541,8 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
             </button>
           </form>
 
-          {/* Keyboard hints footer */}
-          <div class="mt-4 pt-3 border-t border-base-300 text-center">
+          {/* Keyboard hints footer (hidden on mobile) */}
+          <div class="mt-4 pt-3 border-t border-base-300 text-center hidden sm:block">
             <span class="text-xs text-base-content/50 font-mono">
               [↑↓/JK] Navigate  [Enter] Select  [Tab] Form fields
             </span>
