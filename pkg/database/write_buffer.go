@@ -514,19 +514,19 @@ func (wb *WriteBuffer) flush() {
 					chunk := validMessages[chunkStart:chunkEnd]
 
 					// Build batch INSERT for this chunk
-					placeholders := make([]byte, 0, len(chunk)*30)
-					args := make([]interface{}, 0, len(chunk)*9)
+					placeholders := make([]byte, 0, len(chunk)*34)
+					args := make([]interface{}, 0, len(chunk)*10)
 
 					for i, m := range chunk {
 						if i > 0 {
 							placeholders = append(placeholders, ',')
 						}
-						placeholders = append(placeholders, '(', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ')')
+						placeholders = append(placeholders, '(', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ',', '?', ')')
 
-						args = append(args, m.messageID, m.msg.channelID, m.subchannelIDVal, m.parentIDVal, m.threadRootIDVal, m.authorUserIDVal, m.msg.authorNickname, m.msg.content, m.msg.timestamp)
+						args = append(args, m.messageID, m.msg.channelID, m.subchannelIDVal, m.parentIDVal, m.threadRootIDVal, m.authorUserIDVal, m.msg.authorNickname, m.msg.content, m.msg.timestamp, m.msg.timestamp)
 					}
 
-					query := "INSERT INTO Message (id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname, content, created_at) VALUES " + string(placeholders)
+					query := "INSERT INTO Message (id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname, content, created_at, last_activity_at) VALUES " + string(placeholders)
 					_, err := tx.Exec(query, args...)
 					if err != nil {
 						log.Printf("WriteBuffer: failed to batch insert messages (chunk %d-%d): %v", chunkStart, chunkEnd, err)
@@ -551,6 +551,7 @@ func (wb *WriteBuffer) flush() {
 								AuthorNickname: m.msg.authorNickname,
 								Content:        m.msg.content,
 								CreatedAt:      m.msg.timestamp,
+								LastActivityAt: m.msg.timestamp,
 								EditedAt:       nil,
 								DeletedAt:      nil,
 							}

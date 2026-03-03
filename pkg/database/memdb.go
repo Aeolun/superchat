@@ -88,7 +88,7 @@ func (m *MemDB) loadFromSQLite() error {
 	// Query all messages directly from SQLite
 	rows, err := m.sqliteDB.conn.Query(`
 		SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id,
-		       author_nickname, content, created_at, edited_at, deleted_at
+		       author_nickname, content, created_at, last_activity_at, edited_at, deleted_at
 		FROM Message
 		WHERE deleted_at IS NULL
 		ORDER BY created_at ASC
@@ -103,11 +103,11 @@ func (m *MemDB) loadFromSQLite() error {
 
 	for rows.Next() {
 		var msg Message
-		var subchannelID, parentID, threadRootID, authorUserID, editedAt, deletedAt sql.NullInt64
+		var subchannelID, parentID, threadRootID, authorUserID, lastActivityAt, editedAt, deletedAt sql.NullInt64
 
 		err := rows.Scan(
 			&msg.ID, &msg.ChannelID, &subchannelID, &parentID, &threadRootID, &authorUserID,
-			&msg.AuthorNickname, &msg.Content, &msg.CreatedAt, &editedAt, &deletedAt,
+			&msg.AuthorNickname, &msg.Content, &msg.CreatedAt, &lastActivityAt, &editedAt, &deletedAt,
 		)
 		if err != nil {
 			log.Printf("MemDB: failed to scan message: %v", err)
@@ -129,6 +129,11 @@ func (m *MemDB) loadFromSQLite() error {
 		}
 		if authorUserID.Valid {
 			msg.AuthorUserID = &authorUserID.Int64
+		}
+		if lastActivityAt.Valid {
+			msg.LastActivityAt = lastActivityAt.Int64
+		} else {
+			msg.LastActivityAt = msg.CreatedAt
 		}
 		if editedAt.Valid {
 			msg.EditedAt = &editedAt.Int64
@@ -304,7 +309,7 @@ func (m *MemDB) snapshot() error {
 // SQLite 3.32.0+ has a parameter limit of 32766, but optimal batch size is smaller
 // due to query building and parsing overhead (string concatenation + SQL parse)
 func (m *MemDB) batchInsertMessages(messages []*Message) error {
-	const fieldsPerMessage = 11
+	const fieldsPerMessage = 12
 	// Optimal batch size balances:
 	// - Fewer SQL statements (larger batches)
 	// - Less string building overhead (smaller batches)
@@ -330,7 +335,7 @@ func (m *MemDB) batchInsertMessages(messages []*Message) error {
 		var queryBuilder strings.Builder
 		queryBuilder.WriteString(`INSERT OR REPLACE INTO Message
 			(id, channel_id, subchannel_id, parent_id, thread_root_id,
-			 author_user_id, author_nickname, content, created_at, edited_at, deleted_at)
+			 author_user_id, author_nickname, content, created_at, last_activity_at, edited_at, deleted_at)
 			VALUES `)
 
 		args := make([]interface{}, 0, len(batch)*fieldsPerMessage)
@@ -338,11 +343,11 @@ func (m *MemDB) batchInsertMessages(messages []*Message) error {
 			if j > 0 {
 				queryBuilder.WriteString(", ")
 			}
-			queryBuilder.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			queryBuilder.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 			args = append(args,
 				msg.ID, msg.ChannelID, msg.SubchannelID, msg.ParentID, msg.ThreadRootID,
-				msg.AuthorUserID, msg.AuthorNickname, msg.Content, msg.CreatedAt,
+				msg.AuthorUserID, msg.AuthorNickname, msg.Content, msg.CreatedAt, msg.LastActivityAt,
 				msg.EditedAt, msg.DeletedAt,
 			)
 		}
@@ -644,6 +649,7 @@ func (m *MemDB) PostMessage(channelID int64, subchannelID, parentID, authorUserI
 		AuthorNickname: authorNickname,
 		Content:        content,
 		CreatedAt:      now,
+		LastActivityAt: now,
 		EditedAt:       nil,
 		DeletedAt:      nil,
 	}
@@ -661,8 +667,13 @@ func (m *MemDB) PostMessage(channelID int64, subchannelID, parentID, authorUserI
 			parent.ReplyCount.Add(1)
 		}
 	}
+	// Bump thread root's LastActivityAt
 	if threadRootID != nil {
 		m.messagesByThread[*threadRootID] = append(m.messagesByThread[*threadRootID], messageID)
+		if root := m.messages[*threadRootID]; root != nil && *threadRootID != messageID {
+			root.LastActivityAt = now
+			m.dirtyMessages[*threadRootID] = true
+		}
 	}
 	m.mu.Unlock()
 
@@ -685,6 +696,7 @@ func (m *MemDB) CreateSystemMessage(channelID int64, content string) (int64, *Me
 		AuthorNickname: "", // Empty author = system message
 		Content:        content,
 		CreatedAt:      now,
+		LastActivityAt: now,
 		EditedAt:       nil,
 		DeletedAt:      nil,
 	}
@@ -795,7 +807,7 @@ func (m *MemDB) MessageExists(messageID int64) (bool, error) {
 	return exists && msg.DeletedAt == nil, nil
 }
 
-// ListRootMessages retrieves top-level messages (compatible with SQLite DB interface)
+// ListRootMessages retrieves top-level messages sorted by last activity (compatible with SQLite DB interface)
 func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64, afterID *uint64) ([]*Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -805,7 +817,8 @@ func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uin
 		return []*Message{}, nil
 	}
 
-	messages := make([]*Message, 0, limit)
+	// Collect all matching root messages first (need full set for activity sort)
+	var candidates []*Message
 	for _, msgID := range allMessageIDs {
 		// beforeID takes precedence over afterID
 		if beforeID != nil && uint64(msgID) >= *beforeID {
@@ -827,13 +840,20 @@ func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uin
 			}
 		}
 
-		messages = append(messages, msg)
-		if len(messages) >= int(limit) {
-			break
-		}
+		candidates = append(candidates, msg)
 	}
 
-	return messages, nil
+	// Sort by LastActivityAt descending (most recent activity first)
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].LastActivityAt > candidates[j].LastActivityAt
+	})
+
+	// Apply limit
+	if len(candidates) > int(limit) {
+		candidates = candidates[:limit]
+	}
+
+	return candidates, nil
 }
 
 // ListThreadReplies retrieves all replies to a message recursively (compatible with SQLite DB interface)

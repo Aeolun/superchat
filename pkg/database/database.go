@@ -300,7 +300,8 @@ type Message struct {
 	AuthorUserID   *int64
 	AuthorNickname string // Only populated for anonymous users (when AuthorUserID IS NULL)
 	Content        string
-	CreatedAt      int64 // Unix timestamp in milliseconds
+	CreatedAt      int64  // Unix timestamp in milliseconds
+	LastActivityAt int64  // Unix timestamp in milliseconds - last reply or creation time (root messages only)
 	EditedAt       *int64
 	DeletedAt      *int64
 	ReplyCount     atomic.Uint32 // Cached reply count (in-memory only, not persisted to SQLite)
@@ -679,9 +680,9 @@ func (db *DB) PostMessage(channelID int64, subchannelID, parentID, authorUserID 
 
 	now := nowMillis()
 	_, err = tx.Exec(`
-		INSERT INTO Message (id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname, content, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, messageID, channelID, subchannelIDVal, parentIDVal, authorUserIDVal, authorNickname, content, now)
+		INSERT INTO Message (id, channel_id, subchannel_id, parent_id, author_user_id, author_nickname, content, created_at, last_activity_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, messageID, channelID, subchannelIDVal, parentIDVal, authorUserIDVal, authorNickname, content, now, now)
 
 	if err != nil {
 		return 0, err
@@ -718,9 +719,9 @@ func (db *DB) CreateSystemMessage(channelID int64, content string) (int64, error
 	now := nowMillis()
 
 	_, err = tx.Exec(`
-		INSERT INTO Message (id, channel_id, author_user_id, author_nickname, content, created_at)
-		VALUES (?, ?, NULL, '', ?, ?)
-	`, messageID, channelID, content, now)
+		INSERT INTO Message (id, channel_id, author_user_id, author_nickname, content, created_at, last_activity_at)
+		VALUES (?, ?, NULL, '', ?, ?, ?)
+	`, messageID, channelID, content, now, now)
 
 	if err != nil {
 		return 0, err
@@ -754,7 +755,7 @@ func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint1
 
 	query := `
 		SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname,
-		       content, created_at, edited_at, deleted_at
+		       content, created_at, last_activity_at, edited_at, deleted_at
 		FROM Message
 		WHERE channel_id = ?
 		  AND (subchannel_id IS ? OR (subchannel_id IS NULL AND ? IS NULL))
@@ -766,13 +767,13 @@ func (db *DB) ListRootMessages(channelID int64, subchannelID *int64, limit uint1
 	if beforeID != nil {
 		query += ` AND id < ?`
 		args = append(args, *beforeID)
-		query += ` ORDER BY created_at DESC LIMIT ?`
+		query += ` ORDER BY COALESCE(last_activity_at, created_at) DESC LIMIT ?`
 	} else if afterID != nil {
 		query += ` AND id > ?`
 		args = append(args, *afterID)
-		query += ` ORDER BY created_at ASC LIMIT ?`
+		query += ` ORDER BY COALESCE(last_activity_at, created_at) ASC LIMIT ?`
 	} else {
-		query += ` ORDER BY created_at DESC LIMIT ?`
+		query += ` ORDER BY COALESCE(last_activity_at, created_at) DESC LIMIT ?`
 	}
 	args = append(args, limit)
 
@@ -793,7 +794,7 @@ func (db *DB) ListThreadReplies(parentID uint64, limit uint16, beforeID *uint64,
 		WITH RECURSIVE thread_tree AS (
 			-- Base case: direct replies to parent
 			SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname,
-			       content, created_at, edited_at, deleted_at,
+			       content, created_at, last_activity_at, edited_at, deleted_at,
 			       printf('%010d', created_at) AS path
 			FROM Message
 			WHERE parent_id = ?
@@ -803,13 +804,13 @@ func (db *DB) ListThreadReplies(parentID uint64, limit uint16, beforeID *uint64,
 			-- Recursive case: replies to replies
 			-- Build path by concatenating parent path with current message's timestamp
 			SELECT m.id, m.channel_id, m.subchannel_id, m.parent_id, m.thread_root_id, m.author_user_id, m.author_nickname,
-			       m.content, m.created_at, m.edited_at, m.deleted_at,
+			       m.content, m.created_at, m.last_activity_at, m.edited_at, m.deleted_at,
 			       tt.path || '.' || printf('%010d', m.created_at)
 			FROM Message m
 			INNER JOIN thread_tree tt ON m.parent_id = tt.id
 		)
 		SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id, author_nickname,
-		       content, created_at, edited_at, deleted_at
+		       content, created_at, last_activity_at, edited_at, deleted_at
 		FROM thread_tree
 	`
 
@@ -1335,7 +1336,7 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 
 	for rows.Next() {
 		msg := &Message{}
-		var subchannelID, parentID, threadRootID, authorUserID, editedAt, deletedAt sql.NullInt64
+		var subchannelID, parentID, threadRootID, authorUserID, lastActivityAt, editedAt, deletedAt sql.NullInt64
 
 		err := rows.Scan(
 			&msg.ID,
@@ -1347,6 +1348,7 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 			&msg.AuthorNickname,
 			&msg.Content,
 			&msg.CreatedAt,
+			&lastActivityAt,
 			&editedAt,
 			&deletedAt,
 		)
@@ -1366,6 +1368,11 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 		}
 		if authorUserID.Valid {
 			msg.AuthorUserID = &authorUserID.Int64
+		}
+		if lastActivityAt.Valid {
+			msg.LastActivityAt = lastActivityAt.Int64
+		} else {
+			msg.LastActivityAt = msg.CreatedAt
 		}
 		if editedAt.Valid {
 			msg.EditedAt = &editedAt.Int64
