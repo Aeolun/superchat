@@ -40,7 +40,7 @@ const PasswordModal: Component = () => {
   let passwordInputRef: HTMLInputElement | undefined
 
   const isOpen = () => store.activeModal === ModalState.Password
-  const nickname = () => store.pendingAuthNickname
+  const nickname = () => store.nickname
 
   const handleSubmit = async () => {
     const pw = password()
@@ -71,7 +71,6 @@ const PasswordModal: Component = () => {
     setPassword('')
     setHashing(false)
     store.setAuthError('')
-    store.setPendingAuthNickname('')
     storeActions.closeModal()
   }
 

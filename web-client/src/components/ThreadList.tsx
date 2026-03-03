@@ -6,6 +6,15 @@ import type { Message } from '../SuperChatCodec'
 import { formatMessageTime } from '../lib/utils/date-formatting'
 import { selectors } from '../store/selectors'
 
+/** Extract thread title: everything before the first double newline, or the full content */
+function extractThreadTitle(content: string): { title: string; hasBody: boolean } {
+  const idx = content.indexOf('\n\n')
+  if (idx >= 0) {
+    return { title: content.slice(0, idx), hasBody: true }
+  }
+  return { title: content, hasBody: false }
+}
+
 interface ThreadListProps {
   threads: Message[]
   onThreadClick: (threadId: bigint) => void
@@ -29,6 +38,7 @@ const ThreadList: Component<ThreadListProps> = (props) => {
             {(thread, index) => {
               const replyCount = selectors.getReplyCount(thread.message_id)
               const isSelected = () => props.isFocused && props.selectedIndex === index()
+              const { title, hasBody } = extractThreadTitle(thread.content)
 
               return (
                 <div
@@ -56,9 +66,9 @@ const ThreadList: Component<ThreadListProps> = (props) => {
                       </Show>
                     </div>
 
-                    {/* Thread Preview */}
-                    <div class="text-base line-clamp-3">
-                      {thread.content}
+                    {/* Thread Title (before first double newline) */}
+                    <div class={`text-base whitespace-pre-wrap ${hasBody ? 'font-semibold' : 'line-clamp-3'}`}>
+                      {title}
                     </div>
                   </div>
                 </div>
