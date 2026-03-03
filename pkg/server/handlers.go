@@ -2355,6 +2355,7 @@ func (s *Server) handleListChannelUsers(sess *Session, frame *protocol.Frame) er
 
 	allSessions := s.sessions.GetAllSessions()
 	users := make([]protocol.ChannelUserEntry, 0)
+	seenNicknames := make(map[string]bool)
 	for _, other := range allSessions {
 		other.mu.RLock()
 		joined := other.JoinedChannel
@@ -2366,6 +2367,12 @@ func (s *Server) handleListChannelUsers(sess *Session, frame *protocol.Frame) er
 		if joined == nil || *joined != channelID {
 			continue
 		}
+
+		// Deduplicate: same user connected from multiple sessions
+		if seenNicknames[nickname] {
+			continue
+		}
+		seenNicknames[nickname] = true
 
 		entry := protocol.ChannelUserEntry{
 			SessionID:    other.ID,
@@ -3463,7 +3470,7 @@ func (s *Server) handleStartDM(sess *Session, frame *protocol.Frame) error {
 			return s.sendError(sess, protocol.ErrCodeDatabaseError, "Failed to create DM channel")
 		}
 
-		// Send DM_READY to initiator
+		// Send DM_READY to all initiator sessions
 		var targetPubKeyArr [32]byte
 		copy(targetPubKeyArr[:], targetPubKey)
 		initiatorReady := &protocol.DMReadyMessage{
@@ -3473,8 +3480,23 @@ func (s *Server) handleStartDM(sess *Session, frame *protocol.Frame) error {
 			IsEncrypted:    true,
 			OtherPublicKey: targetPubKeyArr,
 		}
+		// Send to the initiating session directly
 		if err := s.sendMessage(sess, protocol.TypeDMReady, initiatorReady); err != nil {
 			return err
+		}
+		// Also notify other sessions of the initiator
+		if initiatorUserID != nil {
+			for _, other := range s.sessions.GetAllSessions() {
+				if other.ID == sess.ID {
+					continue
+				}
+				other.mu.RLock()
+				match := other.UserID != nil && *other.UserID == *initiatorUserID
+				other.mu.RUnlock()
+				if match {
+					s.sendMessage(other, protocol.TypeDMReady, initiatorReady)
+				}
+			}
 		}
 
 		// Send DM_READY to target if online
@@ -3591,7 +3613,7 @@ func (s *Server) handleProvidePublicKey(sess *Session, frame *protocol.Frame) er
 
 	// Process any pending invites that were waiting for this user's key
 	for _, invite := range invites {
-		s.processPendingInviteAfterKey(sess, invite)
+		s.processPendingInviteAfterKey(invite)
 	}
 
 	return nil
@@ -3675,7 +3697,7 @@ func (s *Server) handleAllowUnencrypted(sess *Session, frame *protocol.Frame) er
 	// Delete the invite
 	s.db.DeleteDMInvite(invite.ID)
 
-	// Send DM_READY to target (this user)
+	// Send DM_READY to target (all sessions of this user)
 	var initiatorUserIDPtr *uint64
 	if invite.InitiatorUserID != nil {
 		initiatorUserIDPtr = toUint64Ptr(invite.InitiatorUserID)
@@ -3686,8 +3708,23 @@ func (s *Server) handleAllowUnencrypted(sess *Session, frame *protocol.Frame) er
 		OtherNickname: initiatorNickname,
 		IsEncrypted:   false,
 	}
+	// Send to the accepting session directly
 	if err := s.sendMessage(sess, protocol.TypeDMReady, targetReady); err != nil {
 		return err
+	}
+	// Also notify other sessions of the same user (so they dismiss the request)
+	if userID != nil {
+		for _, other := range s.sessions.GetAllSessions() {
+			if other.ID == sess.ID {
+				continue
+			}
+			other.mu.RLock()
+			match := other.UserID != nil && *other.UserID == *userID
+			other.mu.RUnlock()
+			if match {
+				s.sendMessage(other, protocol.TypeDMReady, targetReady)
+			}
+		}
 	}
 
 	// Send DM_READY to initiator
@@ -3763,6 +3800,21 @@ func (s *Server) handleDeclineDM(sess *Session, frame *protocol.Frame) error {
 		}
 	}
 
+	// Notify other sessions of the declining user (so they dismiss the request)
+	if userID != nil {
+		for _, other := range s.sessions.GetAllSessions() {
+			if other.ID == sess.ID {
+				continue
+			}
+			other.mu.RLock()
+			match := other.UserID != nil && *other.UserID == *userID
+			other.mu.RUnlock()
+			if match {
+				s.sendMessage(other, protocol.TypeDMDeclined, declinedMsg)
+			}
+		}
+	}
+
 	log.Printf("[DM] User %s declined DM invite %d", nickname, invite.ID)
 	return nil
 }
@@ -3817,12 +3869,11 @@ func (s *Server) sendKeyRequired(sess *Session, reason string, channelID *uint64
 func (s *Server) sendToUser(userID int64, msgType byte, msg protocol.ProtocolMessage) {
 	for _, session := range s.sessions.GetAllSessions() {
 		session.mu.RLock()
-		if session.UserID != nil && *session.UserID == userID {
-			session.mu.RUnlock()
-			s.sendMessage(session, msgType, msg)
-			return
-		}
+		match := session.UserID != nil && *session.UserID == userID
 		session.mu.RUnlock()
+		if match {
+			s.sendMessage(session, msgType, msg)
+		}
 	}
 }
 
@@ -3847,7 +3898,7 @@ func toUint64Ptr(i *int64) *uint64 {
 }
 
 // Helper: process pending invite after user provides key
-func (s *Server) processPendingInviteAfterKey(sess *Session, invite *database.DMInvite) {
+func (s *Server) processPendingInviteAfterKey(invite *database.DMInvite) {
 	// Encrypted DMs only apply to registered users
 	if invite.InitiatorUserID == nil || invite.TargetUserID == nil {
 		return
@@ -3885,7 +3936,8 @@ func (s *Server) processPendingInviteAfterKey(sess *Session, invite *database.DM
 				IsEncrypted:    true,
 				OtherPublicKey: initiatorPubKey,
 			}
-			s.sendMessage(sess, protocol.TypeDMReady, targetReady)
+			// Send to all sessions of the target user
+			s.sendToUser(*invite.TargetUserID, protocol.TypeDMReady, targetReady)
 		}
 
 		if initiatorUser != nil {
