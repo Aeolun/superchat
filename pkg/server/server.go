@@ -887,9 +887,11 @@ func (s *Server) cleanupExpiredMessages() {
 	count, err := s.db.CleanupExpiredMessages()
 	if err != nil {
 		log.Printf("Error cleaning up expired messages: %v", err)
+		fmt.Printf("[retention] cleanup error: %v\n", err)
 		return
 	}
 
+	fmt.Printf("[retention] cleanup: removed %d expired messages\n", count)
 	if count > 0 {
 		log.Printf("Cleaned up %d expired messages", count)
 	}

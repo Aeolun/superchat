@@ -360,6 +360,43 @@ func (m *MemDB) batchInsertMessages(messages []*Message) error {
 	return nil
 }
 
+// removeMessageFromIndexes removes a message from all index maps (channel, parent, thread).
+// Caller must hold m.mu write lock. Does NOT remove from m.messages itself.
+func (m *MemDB) removeMessageFromIndexes(msg *Message) {
+	msgID := msg.ID
+
+	// Remove from channel index
+	channelMsgs := m.messagesByChannel[msg.ChannelID]
+	for i, id := range channelMsgs {
+		if id == msgID {
+			m.messagesByChannel[msg.ChannelID] = append(channelMsgs[:i], channelMsgs[i+1:]...)
+			break
+		}
+	}
+
+	// Remove from parent index (if reply)
+	if msg.ParentID != nil {
+		parentReplies := m.messagesByParent[*msg.ParentID]
+		for i, id := range parentReplies {
+			if id == msgID {
+				m.messagesByParent[*msg.ParentID] = append(parentReplies[:i], parentReplies[i+1:]...)
+				break
+			}
+		}
+	}
+
+	// Remove from thread index
+	if msg.ThreadRootID != nil {
+		threadMsgs := m.messagesByThread[*msg.ThreadRootID]
+		for i, id := range threadMsgs {
+			if id == msgID {
+				m.messagesByThread[*msg.ThreadRootID] = append(threadMsgs[:i], threadMsgs[i+1:]...)
+				break
+			}
+		}
+	}
+}
+
 // hardDeleteOldMessages removes messages from memory that have been soft-deleted for >7 days
 // Must be called after snapshot() to ensure deleted messages are persisted first
 func (m *MemDB) hardDeleteOldMessages() int {
@@ -384,40 +421,8 @@ func (m *MemDB) hardDeleteOldMessages() int {
 			continue
 		}
 
-		// Remove from main map
 		delete(m.messages, msgID)
-
-		// Remove from channel index
-		channelMsgs := m.messagesByChannel[msg.ChannelID]
-		for i, id := range channelMsgs {
-			if id == msgID {
-				m.messagesByChannel[msg.ChannelID] = append(channelMsgs[:i], channelMsgs[i+1:]...)
-				break
-			}
-		}
-
-		// Remove from parent index (if reply)
-		if msg.ParentID != nil {
-			parentReplies := m.messagesByParent[*msg.ParentID]
-			for i, id := range parentReplies {
-				if id == msgID {
-					m.messagesByParent[*msg.ParentID] = append(parentReplies[:i], parentReplies[i+1:]...)
-					break
-				}
-			}
-		}
-
-		// Remove from thread index
-		if msg.ThreadRootID != nil {
-			threadMsgs := m.messagesByThread[*msg.ThreadRootID]
-			for i, id := range threadMsgs {
-				if id == msgID {
-					m.messagesByThread[*msg.ThreadRootID] = append(threadMsgs[:i], threadMsgs[i+1:]...)
-					break
-				}
-			}
-		}
-
+		m.removeMessageFromIndexes(msg)
 		deletedCount++
 	}
 
@@ -1036,12 +1041,75 @@ func (m *MemDB) AdminUpdateMessage(messageID uint64, userID uint64, newContent s
 	return msg, nil
 }
 
-// CleanupExpiredMessages removes messages older than retention period (no-op for V1 - handled by snapshot)
+// CleanupExpiredMessages removes messages older than their channel's retention policy.
+// Phase A: deletes from SQLite via the underlying DB. Phase B: evicts from in-memory maps.
 func (m *MemDB) CleanupExpiredMessages() (int64, error) {
-	// In MemDB, we don't need to actively clean up - the snapshot process
-	// only writes recent messages, and we reload from SQLite on startup
-	// SQLite's cleanup will handle the actual deletion
-	return 0, nil
+	// Phase A: SQLite cleanup (handles CASCADE for replies)
+	sqlCount, err := m.sqliteDB.CleanupExpiredMessages()
+	if err != nil {
+		return 0, fmt.Errorf("sqlite cleanup: %w", err)
+	}
+
+	// Phase B: In-memory cleanup
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now().UnixMilli()
+
+	// Build per-channel retention cutoffs
+	cutoffs := make(map[int64]int64) // channelID -> cutoff timestamp in millis
+	for chID, ch := range m.channels {
+		if ch.MessageRetentionHours > 0 {
+			cutoffs[chID] = now - int64(ch.MessageRetentionHours)*3600*1000
+		}
+	}
+
+	// Collect expired message IDs (can't modify map while iterating)
+	toDelete := make([]int64, 0)
+	for msgID, msg := range m.messages {
+		cutoff, ok := cutoffs[msg.ChannelID]
+		if !ok {
+			continue // channel has no retention policy (0 = keep forever)
+		}
+		// Only evict root messages and their descendants — same as SQL CASCADE.
+		// A root message is one with no parent.
+		if msg.ParentID == nil && msg.CreatedAt < cutoff {
+			toDelete = append(toDelete, msgID)
+		}
+	}
+
+	// Also collect all descendants of expired roots so memory stays consistent
+	rootSet := make(map[int64]bool, len(toDelete))
+	for _, id := range toDelete {
+		rootSet[id] = true
+	}
+	for msgID, msg := range m.messages {
+		if rootSet[msgID] {
+			continue // already in toDelete
+		}
+		if msg.ThreadRootID != nil && rootSet[*msg.ThreadRootID] {
+			toDelete = append(toDelete, msgID)
+		}
+	}
+
+	// Delete from memory
+	memCount := int64(0)
+	for _, msgID := range toDelete {
+		msg := m.messages[msgID]
+		if msg == nil {
+			continue
+		}
+		delete(m.messages, msgID)
+		delete(m.dirtyMessages, msgID)
+		m.removeMessageFromIndexes(msg)
+		memCount++
+	}
+
+	if memCount > 0 {
+		log.Printf("MemDB: evicted %d expired messages from memory", memCount)
+	}
+
+	return sqlCount + memCount, nil
 }
 
 // CleanupIdleSessions removes sessions inactive for longer than timeout (no-op for V1 - handled by session manager)
