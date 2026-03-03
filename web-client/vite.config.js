@@ -8,6 +8,10 @@ export default defineConfig({
     tailwindcss(),
   ],
   base: process.env.VITE_BASE_PATH || '/',
+  server: {
+    host: '0.0.0.0',
+    allowedHosts: ['home.serial-experiments.com'],
+  },
   build: {
     target: 'esnext',
   },
