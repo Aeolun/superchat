@@ -17,6 +17,7 @@ import CreateChannelModal from './components/CreateChannelModal'
 import { DM_TARGET_BY_USER_ID, DM_TARGET_BY_SESSION_ID, type Message } from './SuperChatCodec'
 import Icon from './components/Icon'
 import { encryptMessage } from './lib/crypto'
+import { safeLog } from './lib/utils/safe-log'
 import {
   CommandExecutor,
   ViewState as CmdViewState,
@@ -386,7 +387,7 @@ const App: Component = () => {
   createEffect(() => {
     const channelId = store.activeChannelId
     if (channelId !== null) {
-      console.log('Active channel changed to:', channelId)
+      safeLog('Active channel changed to:', channelId)
       // Reset scroll tracking when changing channels
       setUserHasScrolledUp(false)
       // Request messages for this channel
@@ -483,7 +484,7 @@ const App: Component = () => {
   }
 
   const handleThreadClick = (threadId: bigint) => {
-    console.log('Opening thread:', threadId)
+    safeLog('Opening thread:', threadId)
     store.setActiveThreadId(threadId)
     store.setCurrentView(ViewState.ThreadDetail)
 
@@ -508,7 +509,7 @@ const App: Component = () => {
   }
 
   const handleReply = (messageId: bigint, message: Message) => {
-    console.log('Replying to:', messageId)
+    safeLog('Replying to:', messageId)
     storeActions.updateCompose({
       replyToId: messageId,
       replyToMessage: message
@@ -642,11 +643,22 @@ const App: Component = () => {
                   <p class="text-sm text-base-content/70">
                     {store.isRegistered ? '' : '~'}{store.nickname}
                     <Show when={!store.isRegistered}>
-                      {' '}<button
-                        class="link link-primary text-xs"
-                        onClick={() => storeActions.openModal(ModalState.Register)}
-                        title="Register your nickname (Ctrl+R)"
-                      >Register</button>
+                      {' '}<Show
+                        when={store.pendingAuthNickname}
+                        fallback={
+                          <button
+                            class="link link-primary text-xs"
+                            onClick={() => storeActions.openModal(ModalState.Register)}
+                            title="Register your nickname (Ctrl+R)"
+                          >Register</button>
+                        }
+                      >
+                        <button
+                          class="link link-primary text-xs"
+                          onClick={() => storeActions.openModal(ModalState.Password)}
+                          title="Login to your registered nickname"
+                        >Login</button>
+                      </Show>
                     </Show>
                   </p>
                 </div>

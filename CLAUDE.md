@@ -50,7 +50,9 @@ When user asks to update the "splash" or "welcome" screen, confirm which one the
 
 ## Web Client UI Guidelines
 
-**No emoji in the web client.** Use [Phosphor Icons](https://phosphoricons.com/) (`@phosphor-icons/core`) for all icons. Import bold SVGs and render via `<img>` tags. See `ThreadDetail.tsx` for the pattern.
+**No emoji in the web client.** Use [Phosphor Icons](https://phosphoricons.com/) (`@phosphor-icons/core`) for all icons. Import as inline SVGs via the `Icon` component (`src/components/Icon.tsx`) which renders them with `fill="currentColor"` so they adapt to any theme. Add new icons to the registry in that file.
+
+**Always use `safeLog` instead of `console.log` in the web client** when logging values that may contain BigInts. Mobile browsers (especially Safari) crash on `JSON.stringify(BigInt)` which `console.log` triggers internally. Import from `lib/utils/safe-log.ts`. Template literal interpolation (`` `value: ${bigint}` ``) is safe since it calls `toString()` implicitly.
 
 ## UI Layout Guidelines
 

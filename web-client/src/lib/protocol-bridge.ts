@@ -6,6 +6,7 @@ import { SuperChatEventClient, type SuperChatEvent } from './superchat-events'
 import { store, storeActions, ModalState } from '../store/app-store'
 import { rebuildIndexes, addMessageToIndexes } from './message-indexer'
 import { computeSharedSecret, deriveChannelKey, decryptMessage, KEY_TYPE_GENERATED } from './crypto'
+import { safeLog } from './utils/safe-log'
 import type { ChannelCreated, MessageEdited, MessageDeleted, ChannelDeleted, ServerPresence, ChannelPresence, AuthResponse, RegisterResponse, UserInfo, KeyRequired, DMReady, DMPending, DMRequest, DMParticipantLeft, DMDeclined, NewMessage, Message } from '../SuperChatCodec'
 
 /**
@@ -170,7 +171,7 @@ export class ProtocolBridge {
         break
 
       case 'server-config':
-        console.log('Received server config:', event.config)
+        safeLog('Received server config:', event.config)
         break
 
       case 'pong':
@@ -226,7 +227,7 @@ export class ProtocolBridge {
    */
   private handleJoinResponse(response: any): void {
     if (response.success === 1) {
-      console.log('Successfully joined channel:', response.channel_id)
+      safeLog('Successfully joined channel:', response.channel_id)
       store.setActiveChannelId(response.channel_id)
     } else {
       this.handleError(response.message)
@@ -261,7 +262,7 @@ export class ProtocolBridge {
    */
   private handleMessagePosted(response: any): void {
     if (response.success === 1) {
-      console.log('Message posted successfully:', response.message_id)
+      safeLog('Message posted successfully:', response.message_id)
 
       // Clear compose state
       storeActions.clearCompose()
@@ -276,7 +277,7 @@ export class ProtocolBridge {
    * Handle NEW_MESSAGE broadcast - with decryption for encrypted DM channels
    */
   private async handleNewMessage(message: NewMessage): Promise<void> {
-    console.log('Received new message:', message.message_id)
+    safeLog('Received new message:', message.message_id)
 
     // Decrypt if this is from an encrypted DM channel
     const decrypted = await tryDecryptMessage(message)
@@ -307,7 +308,7 @@ export class ProtocolBridge {
    * Handle SUBSCRIBE_OK response
    */
   private handleSubscribeOk(response: any): void {
-    console.log('Subscription confirmed:', response)
+    safeLog('Subscription confirmed:', response)
 
     // Update subscription tracking based on type
     if (response.type === 2) {
@@ -464,7 +465,7 @@ export class ProtocolBridge {
    * Handle KEY_REQUIRED - server needs encryption key to proceed with DM
    */
   private handleKeyRequired(data: KeyRequired): void {
-    console.log(`Key required: ${data.reason}`, data.dm_channel_id)
+    safeLog('Key required:', data.reason, data.dm_channel_id)
 
     const channelId = data.dm_channel_id.present === 1 ? data.dm_channel_id.value! : null
     store.setPendingEncryptionChannelId(channelId)

@@ -1,14 +1,7 @@
 // SuperChat WebSocket client
 // Handles binary protocol communication with SuperChat server
 
-/** JSON.stringify replacer that converts BigInt to string (mobile browsers crash on BigInt in console.log) */
-function safeLog(label: string, obj: unknown) {
-  try {
-    console.log(label, JSON.stringify(obj, (_k, v) => typeof v === 'bigint' ? v.toString() : v))
-  } catch {
-    console.log(label, String(obj))
-  }
-}
+import { safeLog } from './utils/safe-log'
 
 import {
   FrameHeaderEncoder, FrameHeaderDecoder,
