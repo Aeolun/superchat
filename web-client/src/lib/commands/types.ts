@@ -24,7 +24,9 @@ export enum ModalState {
   ConfirmDelete = 'confirm-delete',
   StartDM = 'start-dm',
   DMRequest = 'dm-request',
-  EncryptionSetup = 'encryption-setup'
+  EncryptionSetup = 'encryption-setup',
+  Register = 'register',
+  CreateChannel = 'create-channel'
 }
 
 // Interface for querying application state
@@ -39,6 +41,7 @@ export interface CommandExecutor {
   canGoBack(): boolean
   isAdmin(): boolean
   isConnected(): boolean
+  isRegistered(): boolean
 }
 
 // Command definition - single source of truth for keyboard shortcuts

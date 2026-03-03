@@ -190,6 +190,19 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     priority: 200
   },
 
+  // === Registration Commands ===
+
+  {
+    keys: ['Control+r', 'Meta+r'],
+    name: 'Register',
+    helpText: 'Register your nickname',
+    scope: CommandScope.Global,
+    modalStates: [ModalState.None],
+    actionId: 'register-nickname',
+    isAvailable: (executor) => executor.isConnected() && !executor.isRegistered(),
+    priority: 201
+  },
+
   // === Admin Commands ===
 
   {

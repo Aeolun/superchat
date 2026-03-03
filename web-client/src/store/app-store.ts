@@ -25,7 +25,9 @@ export enum ModalState {
   StartDM = 'start-dm',
   DMRequest = 'dm-request',
   EncryptionSetup = 'encryption-setup',
-  Password = 'password'
+  Password = 'password',
+  Register = 'register',
+  CreateChannel = 'create-channel'
 }
 
 // Focus area for keyboard navigation
@@ -39,6 +41,8 @@ export interface ComposeState {
   content: string
   replyToId: bigint | null
   replyToMessage: Message | null
+  editMessageId: bigint | null
+  editMessageContent: string
 }
 
 // DM channel info
@@ -146,8 +150,11 @@ const [activeThreadId, setActiveThreadId] = createSignal<bigint | null>(null)
 const [compose, setCompose] = createSignal<ComposeState>({
   content: '',
   replyToId: null,
-  replyToMessage: null
+  replyToMessage: null,
+  editMessageId: null,
+  editMessageContent: ''
 })
+const [confirmDeleteMessageId, setConfirmDeleteMessageId] = createSignal<bigint | null>(null)
 
 // Modal and focus state for keyboard navigation
 const [activeModal, setActiveModal] = createSignal<ModalState>(ModalState.None)
@@ -231,6 +238,9 @@ export const store = {
 
   get compose() { return compose() },
   setCompose,
+
+  get confirmDeleteMessageId() { return confirmDeleteMessageId() },
+  setConfirmDeleteMessageId,
 
   // Modal and focus state
   get activeModal() { return activeModal() },
@@ -352,7 +362,9 @@ export const storeActions = {
     setCompose({
       content: '',
       replyToId: null,
-      replyToMessage: null
+      replyToMessage: null,
+      editMessageId: null,
+      editMessageContent: ''
     })
   },
 

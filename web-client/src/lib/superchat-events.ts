@@ -20,6 +20,7 @@ import type {
   ServerPresence,
   ChannelPresence,
   AuthResponse,
+  RegisterResponse,
   UserInfo,
   KeyRequired,
   DMReady,
@@ -50,6 +51,7 @@ export type SuperChatEvent =
   | { type: 'channel-presence', data: ChannelPresence }
   | { type: 'user-info', info: UserInfo }
   | { type: 'auth-response', response: AuthResponse }
+  | { type: 'register-response', response: RegisterResponse }
   | { type: 'key-required', data: KeyRequired }
   | { type: 'dm-ready', data: DMReady }
   | { type: 'dm-pending', data: DMPending }
@@ -122,6 +124,9 @@ export class SuperChatEventClient {
       },
       onAuthResponse: (response) => {
         this.emit({ type: 'auth-response', response })
+      },
+      onRegisterResponse: (response) => {
+        this.emit({ type: 'register-response', response })
       },
       onKeyRequired: (data) => {
         this.emit({ type: 'key-required', data })
@@ -305,6 +310,34 @@ export class SuperChatEventClient {
   sendAuthRequest(nickname: string, hashedPassword: string): void {
     this.client.sendAuthRequest(nickname, hashedPassword)
   }
+
+  /**
+   * Send registration request with pre-hashed password
+   */
+  sendRegisterUser(hashedPassword: string): void {
+    this.client.sendRegisterUser(hashedPassword)
+  }
+
+  /**
+   * Edit a message
+   */
+  editMessage(messageId: bigint, newContent: string): void {
+    this.client.editMessage(messageId, newContent)
+  }
+
+  /**
+   * Delete a message
+   */
+  deleteMessage(messageId: bigint): void {
+    this.client.deleteMessage(messageId)
+  }
+
+  /**
+   * Create a new channel
+   */
+  createChannel(name: string, displayName: string, description: string | null, channelType: number, retentionHours: number): void {
+    this.client.createChannel(name, displayName, description, channelType, retentionHours)
+  }
 }
 
 /**
@@ -342,6 +375,7 @@ export const onServerPresence = createEventFilter('server-presence')
 export const onChannelPresence = createEventFilter('channel-presence')
 export const onUserInfo = createEventFilter('user-info')
 export const onAuthResponse = createEventFilter('auth-response')
+export const onRegisterResponse = createEventFilter('register-response')
 export const onKeyRequired = createEventFilter('key-required')
 export const onDMReady = createEventFilter('dm-ready')
 export const onDMPending = createEventFilter('dm-pending')

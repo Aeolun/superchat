@@ -6,7 +6,7 @@ import { SuperChatEventClient, type SuperChatEvent } from './superchat-events'
 import { store, storeActions, ModalState } from '../store/app-store'
 import { rebuildIndexes, addMessageToIndexes } from './message-indexer'
 import { computeSharedSecret, deriveChannelKey, decryptMessage, KEY_TYPE_GENERATED } from './crypto'
-import type { ChannelCreated, MessageEdited, MessageDeleted, ChannelDeleted, ServerPresence, ChannelPresence, AuthResponse, UserInfo, KeyRequired, DMReady, DMPending, DMRequest, DMParticipantLeft, DMDeclined, NewMessage, Message } from '../SuperChatCodec'
+import type { ChannelCreated, MessageEdited, MessageDeleted, ChannelDeleted, ServerPresence, ChannelPresence, AuthResponse, RegisterResponse, UserInfo, KeyRequired, DMReady, DMPending, DMRequest, DMParticipantLeft, DMDeclined, NewMessage, Message } from '../SuperChatCodec'
 
 /**
  * Try to decrypt a message's content_raw using the channel's encryption key.
@@ -139,6 +139,10 @@ export class ProtocolBridge {
 
       case 'auth-response':
         this.handleAuthResponse(event.response)
+        break
+
+      case 'register-response':
+        this.handleRegisterResponse(event.response)
         break
 
       case 'key-required':
@@ -327,7 +331,10 @@ export class ProtocolBridge {
    * Handle CHANNEL_CREATED broadcast
    */
   private handleChannelCreated(data: ChannelCreated): void {
-    if (data.success !== 1 || !data.channel_id || !data.name) return
+    if (data.success !== 1 || !data.channel_id || !data.name) {
+      if (data.message) console.error('Create channel failed:', data.message)
+      return
+    }
 
     storeActions.addChannel({
       channel_id: data.channel_id,
@@ -346,7 +353,10 @@ export class ProtocolBridge {
    * Handle MESSAGE_EDITED broadcast
    */
   private handleMessageEdited(data: MessageEdited): void {
-    if (data.success !== 1 || !data.new_content || !data.edited_at) return
+    if (data.success !== 1 || !data.new_content || !data.edited_at) {
+      if (data.message) console.error('Edit message failed:', data.message)
+      return
+    }
 
     storeActions.updateMessageContent(data.message_id, data.new_content, data.edited_at)
   }
@@ -355,7 +365,10 @@ export class ProtocolBridge {
    * Handle MESSAGE_DELETED broadcast
    */
   private handleMessageDeleted(data: MessageDeleted): void {
-    if (data.success !== 1) return
+    if (data.success !== 1) {
+      if (data.message) console.error('Delete message failed:', data.message)
+      return
+    }
 
     storeActions.removeMessage(data.message_id)
 
@@ -429,6 +442,21 @@ export class ProtocolBridge {
     } else {
       console.log('Authentication failed:', response.message)
       store.setAuthError(response.message)
+    }
+  }
+
+  /**
+   * Handle REGISTER_RESPONSE - result of registration attempt
+   */
+  private handleRegisterResponse(response: RegisterResponse): void {
+    if (response.success === 1) {
+      console.log('Registration successful')
+      store.setIsRegistered(true)
+      store.setAuthError('')
+      storeActions.closeModal()
+    } else {
+      console.log('Registration failed')
+      store.setAuthError('Registration failed. Please try again.')
     }
   }
 

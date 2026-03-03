@@ -1,20 +1,30 @@
 // Server Selector Component
-// Full-featured server selection screen with status probing and throttling
+// Fetches live server list from directory, with status probing and throttling
 
 import { Component, createSignal, For, Show, onMount, onCleanup, createEffect } from 'solid-js'
 import { createStore } from 'solid-js/store'
+import { fetchDirectoryServersWithFallback } from '../lib/directory'
+import type { ServerInfo } from '../SuperChatCodec'
 
 export interface Server {
   name: string
+  description: string
   wsUrl: string
   wssUrl: string
   status: 'checking' | 'online' | 'offline'
   isSecure: boolean
+  userCount: number
+  channelCount: number
+  uptimeSeconds: bigint
+  isCustom: boolean
 }
 
 interface ServerSelectorProps {
   onConnect: (url: string, nickname: string, throttleBps: number) => void
 }
+
+const DIRECTORY_HOST = 'superchat.win'
+const DIRECTORY_PORT = 8080
 
 const THROTTLE_OPTIONS = [
   { value: 0, label: 'No limit' },
@@ -28,6 +38,59 @@ const THROTTLE_OPTIONS = [
   { value: 128000, label: '1Mbps' },
 ]
 
+function formatUptime(seconds: bigint): string {
+  const s = Number(seconds)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 86400) return `${Math.floor(s / 3600)}h`
+  return `${Math.floor(s / 86400)}d`
+}
+
+function serverInfoToServer(info: ServerInfo): Server {
+  return {
+    name: info.name,
+    description: info.description,
+    wsUrl: `ws://${info.hostname}:${DIRECTORY_PORT}/ws`,
+    wssUrl: `wss://${info.hostname}:${DIRECTORY_PORT}/ws`,
+    status: 'checking',
+    isSecure: false,
+    userCount: info.user_count,
+    channelCount: info.channel_count,
+    uptimeSeconds: info.uptime_seconds,
+    isCustom: false,
+  }
+}
+
+function makeCustomServer(): Server {
+  return {
+    name: 'Custom Server',
+    description: 'Enter a custom server URL',
+    wsUrl: '',
+    wssUrl: '',
+    status: 'offline',
+    isSecure: false,
+    userCount: 0,
+    channelCount: 0,
+    uptimeSeconds: 0n,
+    isCustom: true,
+  }
+}
+
+function makeCurrentHostServer(hostname: string): Server {
+  return {
+    name: 'Current Server',
+    description: hostname,
+    wsUrl: `ws://${hostname}:${DIRECTORY_PORT}/ws`,
+    wssUrl: `wss://${hostname}:${DIRECTORY_PORT}/ws`,
+    status: 'checking',
+    isSecure: window.location.protocol === 'https:',
+    userCount: 0,
+    channelCount: 0,
+    uptimeSeconds: 0n,
+    isCustom: false,
+  }
+}
+
 const ServerSelector: Component<ServerSelectorProps> = (props) => {
   const [servers, setServers] = createStore<Server[]>([])
   const [selectedIndex, setSelectedIndex] = createSignal(-1)
@@ -35,7 +98,8 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
   const [customUrl, setCustomUrl] = createSignal('')
   const [throttleSpeed, setThrottleSpeed] = createSignal(0)
   const [errorMessage, setErrorMessage] = createSignal('')
-  const [serverListFocused, setServerListFocused] = createSignal(true) // Start focused on server list
+  const [serverListFocused, setServerListFocused] = createSignal(true)
+  const [loading, setLoading] = createSignal(true)
 
   onMount(() => {
     initializeServers()
@@ -79,17 +143,14 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
       case 'Enter':
         e.preventDefault()
         if (selectedIndex() >= 0) {
-          // Server already selected, try to connect
           handleConnect(e as unknown as Event)
         } else {
-          // No server selected, select first one
           handleServerClick(0)
         }
         break
     }
   }
 
-  // Navigate through server list
   const navigateServers = (delta: number) => {
     const serverList = servers
     if (serverList.length === 0) return
@@ -98,10 +159,8 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
     let newIndex: number
 
     if (current === -1) {
-      // Nothing selected, start at first or last depending on direction
       newIndex = delta > 0 ? 0 : serverList.length - 1
     } else {
-      // Wrap around navigation
       newIndex = current + delta
       if (newIndex < 0) newIndex = serverList.length - 1
       if (newIndex >= serverList.length) newIndex = 0
@@ -110,59 +169,93 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
     handleServerClick(newIndex)
   }
 
-  const initializeServers = () => {
+  const initializeServers = async () => {
     const hostname = window.location.hostname || 'localhost'
-    const initialServers: Server[] = []
+    loadFromLocalStorage()
 
-    // Skip "Current Server" when there's no real hosting server
-    // (Wails desktop app, localhost dev, or empty hostname)
-    const skipHostnames = ['wails', 'wails.localhost', 'localhost', '']
-    if (!skipHostnames.includes(hostname)) {
-      initialServers.push({
-        name: 'Current Server',
-        wsUrl: `ws://${hostname}:8080/ws`,
-        wssUrl: `wss://${hostname}:8080/ws`,
-        status: 'checking',
-        isSecure: window.location.protocol === 'https:'
-      })
-    }
+    // Fetch live directory
+    setLoading(true)
+    const directoryServers = await fetchDirectoryServersWithFallback(DIRECTORY_HOST, DIRECTORY_PORT)
+    setLoading(false)
 
-    // Only add superchat.win if we're not already on it
-    if (hostname !== 'superchat.win') {
-      initialServers.push({
-        name: 'superchat.win',
-        wsUrl: 'ws://superchat.win:8080/ws',
-        wssUrl: 'wss://superchat.win:8080/ws',
-        status: 'checking',
-        isSecure: false
-      })
+    const finalServers: Server[] = []
+
+    if (directoryServers.length > 0) {
+      // Got live directory — use it
+      const directoryHostnames = new Set(directoryServers.map(s => s.hostname))
+
+      // Add "Current Server" if we're hosting and it's not already in the directory
+      const skipHostnames = ['wails', 'wails.localhost', 'localhost', '']
+      if (!skipHostnames.includes(hostname) && !directoryHostnames.has(hostname)) {
+        finalServers.push(makeCurrentHostServer(hostname))
+      }
+
+      // Add all directory servers
+      for (const info of directoryServers) {
+        finalServers.push(serverInfoToServer(info))
+      }
+    } else {
+      // Directory unreachable — fall back to static list
+      const skipHostnames = ['wails', 'wails.localhost', 'localhost', '']
+      if (!skipHostnames.includes(hostname)) {
+        finalServers.push(makeCurrentHostServer(hostname))
+      }
+
+      if (hostname !== DIRECTORY_HOST) {
+        finalServers.push({
+          name: DIRECTORY_HOST,
+          description: 'SuperChat public server',
+          wsUrl: `ws://${DIRECTORY_HOST}:${DIRECTORY_PORT}/ws`,
+          wssUrl: `wss://${DIRECTORY_HOST}:${DIRECTORY_PORT}/ws`,
+          status: 'checking',
+          isSecure: false,
+          userCount: 0,
+          channelCount: 0,
+          uptimeSeconds: 0n,
+          isCustom: false,
+        })
+      }
     }
 
     // Always add Custom Server last
-    initialServers.push({
-      name: 'Custom Server',
-      wsUrl: '',
-      wssUrl: '',
-      status: 'offline',
-      isSecure: false
-    })
+    finalServers.push(makeCustomServer())
 
-    setServers(initialServers)
-    loadFromLocalStorage()
-    checkServerStatus()
+    setServers(finalServers)
 
-    // Auto-select first server if none selected (and no saved selection)
-    if (selectedIndex() === -1 && initialServers.length > 0) {
+    // Restore saved server selection if valid
+    const savedServerIndex = localStorage.getItem('superchat_server_index')
+    if (savedServerIndex !== null) {
+      const index = parseInt(savedServerIndex, 10)
+      if (index >= 0 && index < finalServers.length) {
+        setSelectedIndex(index)
+
+        const savedServerSecure = localStorage.getItem('superchat_server_secure')
+        if (savedServerSecure !== null) {
+          setServers(index, 'isSecure', savedServerSecure === 'true')
+        }
+
+        if (index === finalServers.length - 1) {
+          const savedCustomUrl = localStorage.getItem('superchat_custom_url')
+          if (savedCustomUrl) setCustomUrl(savedCustomUrl)
+        }
+      }
+    }
+
+    // Auto-select first server if none selected
+    if (selectedIndex() === -1 && finalServers.length > 0) {
       handleServerClick(0)
     }
+
+    // Probe online status for non-custom servers
+    checkServerStatus()
   }
 
   const checkServerStatus = async () => {
     const serverList = servers
-    for (let i = 0; i < serverList.length - 1; i++) { // Skip custom server
+    for (let i = 0; i < serverList.length; i++) {
       const server = serverList[i]
+      if (server.isCustom) continue
 
-      // Try secure first, then insecure (matching web-client behavior)
       const urlsToTry = [server.wssUrl, server.wsUrl]
       let isOnline = false
       let secureWorks = false
@@ -189,17 +282,14 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
             }
           })
 
-          // Connection succeeded
           isOnline = true
           secureWorks = url === server.wssUrl
           break
-        } catch (error) {
-          // Try next URL
+        } catch {
           continue
         }
       }
 
-      // Update server status based on probe results
       setServers(i, {
         status: isOnline ? 'online' : 'offline',
         isSecure: secureWorks
@@ -209,59 +299,30 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
 
   const loadFromLocalStorage = () => {
     const savedNickname = localStorage.getItem('superchat_nickname')
-    if (savedNickname) {
-      setNickname(savedNickname)
-    }
-
-    const savedServerIndex = localStorage.getItem('superchat_server_index')
-    if (savedServerIndex !== null) {
-      const index = parseInt(savedServerIndex, 10)
-      if (index >= 0 && index < servers.length) {
-        setSelectedIndex(index)
-
-        // Restore isSecure flag
-        const savedServerSecure = localStorage.getItem('superchat_server_secure')
-        if (savedServerSecure !== null) {
-          setServers(index, 'isSecure', savedServerSecure === 'true')
-        }
-
-        // Restore custom URL if it was custom server
-        if (index === servers.length - 1) {
-          const savedCustomUrl = localStorage.getItem('superchat_custom_url')
-          if (savedCustomUrl) {
-            setCustomUrl(savedCustomUrl)
-          }
-        }
-      }
-    }
+    if (savedNickname) setNickname(savedNickname)
 
     const savedThrottle = localStorage.getItem('superchat_throttle_speed')
-    if (savedThrottle !== null) {
-      setThrottleSpeed(parseInt(savedThrottle, 10))
-    }
+    if (savedThrottle !== null) setThrottleSpeed(parseInt(savedThrottle, 10))
   }
 
   const handleServerClick = (index: number) => {
     setSelectedIndex(index)
     const server = servers[index]
 
-    // For non-custom servers, populate the URL
-    if (index < servers.length - 1) {
+    if (!server.isCustom) {
       const url = server.isSecure ? server.wssUrl : server.wsUrl
       setCustomUrl(url)
     } else {
-      // Custom server - clear URL or use saved one
       const savedCustomUrl = localStorage.getItem('superchat_custom_url')
       setCustomUrl(savedCustomUrl || '')
     }
   }
 
   const toggleSecure = (index: number) => {
-    setServers(index, 'isSecure', (prev) => !prev)
+    setServers(index, 'isSecure', (prev: boolean) => !prev)
 
-    // Update URL display
     const server = servers[index]
-    if (index < servers.length - 1) {
+    if (!server.isCustom) {
       const url = server.isSecure ? server.wssUrl : server.wsUrl
       setCustomUrl(url)
     }
@@ -283,15 +344,13 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
     const server = servers[selectedIndex()]
     let finalUrl = ''
 
-    if (selectedIndex() === servers.length - 1) {
-      // Custom server
+    if (server.isCustom) {
       finalUrl = customUrl().trim()
       if (!finalUrl) {
         setErrorMessage('Please enter a server URL')
         return
       }
     } else {
-      // Predefined server
       finalUrl = server.isSecure ? server.wssUrl : server.wsUrl
     }
 
@@ -302,7 +361,7 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
     localStorage.setItem('superchat_server_secure', server.isSecure.toString())
     localStorage.setItem('superchat_throttle_speed', throttleSpeed().toString())
 
-    if (selectedIndex() === servers.length - 1) {
+    if (server.isCustom) {
       localStorage.setItem('superchat_custom_url', customUrl())
     }
 
@@ -312,10 +371,12 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
   // Update URL display when server or secure toggle changes
   createEffect(() => {
     const index = selectedIndex()
-    if (index >= 0 && index < servers.length - 1) {
+    if (index >= 0 && index < servers.length) {
       const server = servers[index]
-      const url = server.isSecure ? server.wssUrl : server.wsUrl
-      setCustomUrl(url)
+      if (!server.isCustom) {
+        const url = server.isSecure ? server.wssUrl : server.wsUrl
+        setCustomUrl(url)
+      }
     }
   })
 
@@ -336,56 +397,85 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
           <fieldset class="fieldset mb-4">
             <legend class="fieldset-legend">Available Servers</legend>
             <div class="space-y-2">
-              <For each={servers}>
-                {(server, index) => (
-                  <div
-                    onClick={() => handleServerClick(index())}
-                    class={`flex items-center p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                      selectedIndex() === index()
-                        ? serverListFocused()
-                          ? 'border-primary bg-primary/10 ring-2 ring-primary ring-offset-2 ring-offset-base-200'
-                          : 'border-primary bg-primary/10'
-                        : 'border-base-300 hover:border-primary/50 hover:bg-base-300'
-                    }`}
-                  >
-                    {/* Status Indicator */}
+              <Show when={loading()}>
+                <div class="flex items-center justify-center p-4 text-base-content/60">
+                  <span class="loading loading-spinner loading-sm mr-2"></span>
+                  Loading servers...
+                </div>
+              </Show>
+              <Show when={!loading()}>
+                <For each={servers}>
+                  {(server, index) => (
                     <div
-                      class={`w-3 h-3 rounded-full mr-3 ${
-                        server.status === 'online'
-                          ? 'bg-success shadow-lg shadow-success/50'
-                          : server.status === 'offline'
-                          ? 'bg-error'
-                          : 'bg-base-content/30 animate-pulse'
+                      onClick={() => handleServerClick(index())}
+                      class={`p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                        selectedIndex() === index()
+                          ? serverListFocused()
+                            ? 'border-primary bg-primary/10 ring-2 ring-primary ring-offset-2 ring-offset-base-200'
+                            : 'border-primary bg-primary/10'
+                          : 'border-base-300 hover:border-primary/50 hover:bg-base-300'
                       }`}
-                    />
+                    >
+                      <div class="flex items-center">
+                        {/* Status Indicator */}
+                        <Show when={!server.isCustom}>
+                          <div
+                            class={`w-3 h-3 rounded-full mr-3 flex-shrink-0 ${
+                              server.status === 'online'
+                                ? 'bg-success shadow-lg shadow-success/50'
+                                : server.status === 'offline'
+                                ? 'bg-error'
+                                : 'bg-base-content/30 animate-pulse'
+                            }`}
+                          />
+                        </Show>
+                        <Show when={server.isCustom}>
+                          <div class="w-3 h-3 mr-3 flex-shrink-0" />
+                        </Show>
 
-                    {/* Server Info */}
-                    <div class="flex-1">
-                      <div class="font-semibold">{server.name}</div>
-                      <div class="text-xs text-base-content/60 font-mono">
-                        {server.name === 'Custom Server'
-                          ? 'Enter custom URL below'
-                          : server.isSecure ? server.wssUrl : server.wsUrl}
+                        {/* Server Info */}
+                        <div class="flex-1 min-w-0">
+                          <div class="font-semibold">{server.name}</div>
+                          <Show when={server.description && !server.isCustom}>
+                            <div class="text-xs text-base-content/60">{server.description}</div>
+                          </Show>
+                          <Show when={!server.isCustom && (server.userCount > 0 || server.channelCount > 0 || server.uptimeSeconds > 0n)}>
+                            <div class="text-xs text-base-content/50 mt-0.5">
+                              {server.userCount} users
+                              {' · '}
+                              {server.channelCount} channels
+                              <Show when={server.uptimeSeconds > 0n}>
+                                {' · '}
+                                up {formatUptime(server.uptimeSeconds)}
+                              </Show>
+                            </div>
+                          </Show>
+                          <div class="text-xs text-base-content/40 font-mono mt-0.5">
+                            {server.isCustom
+                              ? 'Enter custom URL below'
+                              : server.isSecure ? server.wssUrl : server.wsUrl}
+                          </div>
+                        </div>
+
+                        {/* WS/WSS Toggle (for non-custom servers) */}
+                        <Show when={!server.isCustom}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleSecure(index())
+                            }}
+                            class={`badge badge-sm ml-2 flex-shrink-0 ${
+                              server.isSecure ? 'badge-success' : 'badge-warning'
+                            }`}
+                          >
+                            {server.isSecure ? 'WSS' : 'WS'}
+                          </button>
+                        </Show>
                       </div>
                     </div>
-
-                    {/* WS/WSS Toggle (for non-custom servers) */}
-                    <Show when={index() < servers.length - 1}>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleSecure(index())
-                        }}
-                        class={`badge badge-sm ml-2 ${
-                          server.isSecure ? 'badge-success' : 'badge-warning'
-                        }`}
-                      >
-                        {server.isSecure ? 'WSS' : 'WS'}
-                      </button>
-                    </Show>
-                  </div>
-                )}
-              </For>
+                  )}
+                </For>
+              </Show>
             </div>
           </fieldset>
 
@@ -399,8 +489,8 @@ const ServerSelector: Component<ServerSelectorProps> = (props) => {
                 value={customUrl()}
                 onInput={(e) => setCustomUrl(e.currentTarget.value)}
                 placeholder="ws://localhost:8080/ws or wss://..."
-                class={`input w-full ${selectedIndex() !== servers.length - 1 ? 'input-disabled opacity-50' : ''}`}
-                disabled={selectedIndex() !== servers.length - 1}
+                class={`input w-full ${selectedIndex() >= 0 && !servers[selectedIndex()]?.isCustom ? 'input-disabled opacity-50' : ''}`}
+                disabled={selectedIndex() >= 0 && !servers[selectedIndex()]?.isCustom}
               />
             </fieldset>
 

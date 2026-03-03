@@ -14,6 +14,7 @@ import {
   FrameHeaderEncoder, FrameHeaderDecoder,
   SetNicknameEncoder, NicknameResponseDecoder,
   AuthRequestEncoder, AuthResponseDecoder,
+  RegisterUserEncoder, RegisterResponseDecoder,
   UserInfoDecoder,
   ListChannelsEncoder, ChannelListDecoder,
   JoinChannelEncoder, JoinResponseDecoder,
@@ -37,6 +38,9 @@ import {
   DeclineDMEncoder,
   ProvidePublicKeyEncoder,
   LeaveChannelEncoder,
+  EditMessageEncoder,
+  DeleteMessageEncoder,
+  CreateChannelEncoder,
   KeyRequiredDecoder,
   DMReadyDecoder,
   DMPendingDecoder,
@@ -57,6 +61,7 @@ import {
   type ServerPresence,
   type ChannelPresence,
   type AuthResponse,
+  type RegisterResponse,
   type UserInfo,
   type KeyRequired,
   type DMReady,
@@ -69,6 +74,8 @@ import {
 // Protocol message type codes
 const MSG_AUTH_REQUEST = 0x01
 const MSG_AUTH_RESPONSE = 0x81
+const MSG_REGISTER_USER = 0x03
+const MSG_REGISTER_RESPONSE = 0x83
 const MSG_USER_INFO = 0x8F
 const MSG_SET_NICKNAME = 0x02
 const MSG_NICKNAME_RESPONSE = 0x82
@@ -76,10 +83,13 @@ const MSG_LIST_CHANNELS = 0x04
 const MSG_CHANNEL_LIST = 0x84
 const MSG_JOIN_CHANNEL = 0x05
 const MSG_JOIN_RESPONSE = 0x85
+const MSG_CREATE_CHANNEL = 0x07
 const MSG_LIST_MESSAGES = 0x09
 const MSG_MESSAGE_LIST = 0x89
 const MSG_POST_MESSAGE = 0x0A
 const MSG_MESSAGE_POSTED = 0x8A
+const MSG_EDIT_MESSAGE = 0x0B
+const MSG_DELETE_MESSAGE = 0x0C
 const MSG_NEW_MESSAGE = 0x8D
 const MSG_PING = 0x10
 const MSG_PONG = 0x90
@@ -87,6 +97,8 @@ const MSG_SUBSCRIBE_THREAD = 0x51
 const MSG_UNSUBSCRIBE_THREAD = 0x52
 const MSG_SUBSCRIBE_CHANNEL = 0x53
 const MSG_UNSUBSCRIBE_CHANNEL = 0x54
+const MSG_LIST_SERVERS = 0x55
+const MSG_SERVER_LIST = 0x9B
 const MSG_SUBSCRIBE_OK = 0x99
 const MSG_ERROR = 0x91
 const MSG_SERVER_CONFIG = 0x98
@@ -128,6 +140,7 @@ export interface SuperChatClientEvents {
   onChannelPresence?: (data: ChannelPresence) => void
   onUserInfo?: (info: UserInfo) => void
   onAuthResponse?: (response: AuthResponse) => void
+  onRegisterResponse?: (response: RegisterResponse) => void
   onKeyRequired?: (data: KeyRequired) => void
   onDMReady?: (data: DMReady) => void
   onDMPending?: (data: DMPending) => void
@@ -338,6 +351,9 @@ export class SuperChatClient {
         case MSG_AUTH_RESPONSE:
           this.handleAuthResponse(payload)
           break
+        case MSG_REGISTER_RESPONSE:
+          this.handleRegisterResponse(payload)
+          break
         case MSG_USER_INFO:
           this.handleUserInfo(payload)
           break
@@ -436,6 +452,22 @@ export class SuperChatClient {
     const encoder = new AuthRequestEncoder()
     const payload = encoder.encode({ nickname, password: hashedPassword })
     this.sendFrame(MSG_AUTH_REQUEST, payload)
+  }
+
+  sendRegisterUser(hashedPassword: string) {
+    const encoder = new RegisterUserEncoder()
+    const payload = encoder.encode({ password_hash: hashedPassword })
+    this.sendFrame(MSG_REGISTER_USER, payload)
+  }
+
+  private handleRegisterResponse(payload: Uint8Array) {
+    const decoder = new RegisterResponseDecoder(payload)
+    const response = decoder.decode()
+    console.log('Register response: success=%d', response.success)
+
+    if (this.events.onRegisterResponse) {
+      this.events.onRegisterResponse(response)
+    }
   }
 
   private handleAuthResponse(payload: Uint8Array) {
@@ -794,5 +826,29 @@ export class SuperChatClient {
       permanent: permanent ? 1 : 0
     })
     this.sendFrame(MSG_LEAVE_CHANNEL, payload)
+  }
+
+  editMessage(messageId: bigint, newContent: string) {
+    const encoder = new EditMessageEncoder()
+    const payload = encoder.encode({ message_id: messageId, new_content: newContent })
+    this.sendFrame(MSG_EDIT_MESSAGE, payload)
+  }
+
+  deleteMessage(messageId: bigint) {
+    const encoder = new DeleteMessageEncoder()
+    const payload = encoder.encode({ message_id: messageId })
+    this.sendFrame(MSG_DELETE_MESSAGE, payload)
+  }
+
+  createChannel(name: string, displayName: string, description: string | null, channelType: number, retentionHours: number) {
+    const encoder = new CreateChannelEncoder()
+    const payload = encoder.encode({
+      name,
+      display_name: displayName,
+      description,
+      channel_type: channelType,
+      retention_hours: retentionHours
+    })
+    this.sendFrame(MSG_CREATE_CHANNEL, payload)
   }
 }

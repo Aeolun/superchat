@@ -11,6 +11,9 @@ import StartDMModal from './components/StartDMModal'
 import DMRequestModal from './components/DMRequestModal'
 import EncryptionSetupModal from './components/EncryptionSetupModal'
 import PasswordModal from './components/PasswordModal'
+import RegisterModal from './components/RegisterModal'
+import ConfirmDeleteModal from './components/ConfirmDeleteModal'
+import CreateChannelModal from './components/CreateChannelModal'
 import { DM_TARGET_BY_USER_ID, DM_TARGET_BY_SESSION_ID, type Message } from './SuperChatCodec'
 import { encryptMessage } from './lib/crypto'
 import {
@@ -20,6 +23,12 @@ import {
   useKeyboardShortcuts,
   useFooterShortcuts
 } from './lib/commands'
+
+/** Format retention hours as a human-readable duration */
+function formatRetention(hours: number): string {
+  if (hours % 24 === 0) return `${hours / 24}d`
+  return `${hours}h`
+}
 
 const App: Component = () => {
   let bridge = getProtocolBridge()
@@ -118,8 +127,14 @@ const App: Component = () => {
              store.focusArea === FocusArea.Content ||
              store.activeChannelId !== null
     },
-    isAdmin: () => false, // TODO: Track admin status
-    isConnected: () => isConnected()
+    isAdmin: () => {
+      const sid = store.selfSessionId
+      if (!sid) return false
+      const entry = store.serverRoster.get(sid)
+      return entry ? (entry.userFlags & 0x01) !== 0 : false
+    },
+    isConnected: () => isConnected(),
+    isRegistered: () => store.isRegistered
   }
 
   // Get footer shortcuts text
@@ -260,6 +275,44 @@ const App: Component = () => {
         storeActions.openModal(ModalState.StartDM)
         break
 
+      case 'register-nickname':
+        storeActions.openModal(ModalState.Register)
+        break
+
+      case 'edit-message': {
+        const messages = flattenedThreadMessages()
+        const idx = store.selectedMessageIndex
+        if (idx >= 0 && idx < messages.length) {
+          const msg = messages[idx]
+          // Only allow editing own messages
+          if (msg.author_nickname === store.nickname) {
+            storeActions.updateCompose({
+              editMessageId: msg.message_id,
+              editMessageContent: msg.content,
+              replyToId: null,
+              replyToMessage: null
+            })
+            storeActions.openModal(ModalState.Compose)
+          }
+        }
+        break
+      }
+
+      case 'delete-message': {
+        const messages = flattenedThreadMessages()
+        const idx = store.selectedMessageIndex
+        if (idx >= 0 && idx < messages.length) {
+          const msg = messages[idx]
+          store.setConfirmDeleteMessageId(msg.message_id)
+          storeActions.openModal(ModalState.ConfirmDelete)
+        }
+        break
+      }
+
+      case 'create-channel':
+        storeActions.openModal(ModalState.CreateChannel)
+        break
+
       default:
         console.log('[Keyboard] Unhandled command:', actionId)
     }
@@ -287,6 +340,31 @@ const App: Component = () => {
     if (savedUrl && savedNickname) {
       const throttleBps = savedThrottle ? parseInt(savedThrottle, 10) : 0
       handleConnect(savedUrl, savedNickname, throttleBps)
+    }
+  })
+
+  // Update window title based on current view
+  createEffect(() => {
+    const channel = currentChannel()
+    const thread = currentThread()
+    const view = store.currentView
+
+    if (!channel) {
+      document.title = 'SuperChat'
+      return
+    }
+
+    const prefix = channel.type === 0 ? '>' : '#'
+    const channelLabel = `${prefix}${channel.name}`
+
+    if (view === ViewState.ThreadDetail && thread) {
+      // Show a preview of the thread root message
+      const preview = thread.content.length > 40
+        ? thread.content.slice(0, 40) + '...'
+        : thread.content
+      document.title = `${preview} - ${channelLabel} - SuperChat`
+    } else {
+      document.title = `${channelLabel} - SuperChat`
     }
   })
 
@@ -424,6 +502,14 @@ const App: Component = () => {
   }
 
   const handleComposeSend = async (content: string) => {
+    // Edit mode: send edit instead of new message
+    if (store.compose.editMessageId) {
+      client.editMessage(store.compose.editMessageId, content)
+      storeActions.clearCompose()
+      storeActions.closeModal()
+      return
+    }
+
     if (!currentChannel()) return
 
     const channelId = currentChannel()!.channel_id
@@ -529,7 +615,16 @@ const App: Component = () => {
               <div class="flex items-center justify-between mb-2">
                 <div>
                   <h2 class="font-bold text-lg">SuperChat</h2>
-                  <p class="text-sm text-base-content/70">{store.isRegistered ? '' : '~'}{store.nickname}</p>
+                  <p class="text-sm text-base-content/70">
+                    {store.isRegistered ? '' : '~'}{store.nickname}
+                    <Show when={!store.isRegistered}>
+                      {' '}<button
+                        class="link link-primary text-xs"
+                        onClick={() => storeActions.openModal(ModalState.Register)}
+                        title="Register your nickname (Ctrl+R)"
+                      >Register</button>
+                    </Show>
+                  </p>
                 </div>
                 <button
                   onClick={handleDisconnect}
@@ -700,6 +795,9 @@ const App: Component = () => {
                     }
                   >
                     <span>{currentChannelMessages().length} messages</span>
+                  </Show>
+                  <Show when={currentChannel()!.retention_hours > 0}>
+                    <span class="text-base-content/50"> · {formatRetention(currentChannel()!.retention_hours)} retention</span>
                   </Show>
                 </div>
               </div>
@@ -949,6 +1047,8 @@ const App: Component = () => {
         <ComposeModal
           replyTo={store.compose.replyToMessage}
           channelName={currentChannel()?.name || ''}
+          editMessageId={store.compose.editMessageId}
+          editContent={store.compose.editMessageContent}
           onSend={handleComposeSend}
           onCancel={handleComposeCancel}
         />
@@ -959,6 +1059,9 @@ const App: Component = () => {
       <DMRequestModal />
       <EncryptionSetupModal />
       <PasswordModal />
+      <RegisterModal />
+      <ConfirmDeleteModal />
+      <CreateChannelModal />
     </div>
   )
 }

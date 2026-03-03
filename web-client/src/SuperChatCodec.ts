@@ -2287,3 +2287,192 @@ export class LeaveChannelEncoder extends BitStreamEncoder {
   }
 }
 
+/**
+ * Edit message (client→server)
+ */
+export interface EditMessage {
+  message_id: bigint;
+  new_content: string;
+}
+
+export class EditMessageEncoder extends BitStreamEncoder {
+  constructor() {
+    super("msb_first");
+  }
+
+  encode(value: EditMessage): Uint8Array {
+    this.writeUint64(value.message_id, "big_endian");
+    const content_bytes = new TextEncoder().encode(value.new_content);
+    this.writeUint16(content_bytes.length, "big_endian");
+    for (const byte of content_bytes) {
+      this.writeUint8(byte);
+    }
+    return this.finish();
+  }
+}
+
+/**
+ * Delete message (client→server)
+ */
+export interface DeleteMessage {
+  message_id: bigint;
+}
+
+export class DeleteMessageEncoder extends BitStreamEncoder {
+  constructor() {
+    super("msb_first");
+  }
+
+  encode(value: DeleteMessage): Uint8Array {
+    this.writeUint64(value.message_id, "big_endian");
+    return this.finish();
+  }
+}
+
+/**
+ * Create channel (client→server)
+ */
+export interface CreateChannel {
+  name: string;
+  display_name: string;
+  description: string | null;
+  channel_type: number;
+  retention_hours: number;
+}
+
+export class CreateChannelEncoder extends BitStreamEncoder {
+  constructor() {
+    super("msb_first");
+  }
+
+  encode(value: CreateChannel): Uint8Array {
+    const name_bytes = new TextEncoder().encode(value.name);
+    this.writeUint16(name_bytes.length, "big_endian");
+    for (const byte of name_bytes) {
+      this.writeUint8(byte);
+    }
+    const display_name_bytes = new TextEncoder().encode(value.display_name);
+    this.writeUint16(display_name_bytes.length, "big_endian");
+    for (const byte of display_name_bytes) {
+      this.writeUint8(byte);
+    }
+    if (value.description !== null) {
+      this.writeUint8(1);
+      const desc_bytes = new TextEncoder().encode(value.description);
+      this.writeUint16(desc_bytes.length, "big_endian");
+      for (const byte of desc_bytes) {
+        this.writeUint8(byte);
+      }
+    } else {
+      this.writeUint8(0);
+    }
+    this.writeUint8(value.channel_type);
+    this.writeUint32(value.retention_hours, "big_endian");
+    return this.finish();
+  }
+}
+
+/**
+ * Request server list from directory (0x55)
+ */
+export interface ListServers {
+  limit: number;
+}
+
+export class ListServersEncoder extends BitStreamEncoder {
+  constructor() {
+    super("msb_first");
+  }
+
+  encode(value: ListServers): Uint8Array {
+    this.writeUint16(value.limit, "big_endian");
+    return this.finish();
+  }
+}
+
+/**
+ * A single server entry from the directory
+ */
+export interface ServerInfo {
+  hostname: string;
+  port: number;
+  name: string;
+  description: string;
+  user_count: number;
+  max_users: number;
+  uptime_seconds: bigint;
+  is_public: boolean;
+  channel_count: number;
+}
+
+/**
+ * Server list response (0x9B)
+ */
+export interface ServerList {
+  server_count: number;
+  servers: ServerInfo[];
+}
+
+export class ServerListDecoder extends BitStreamDecoder {
+  constructor(bytes: Uint8Array | number[], private context?: any) {
+    super(bytes, "msb_first");
+  }
+
+  decode(): ServerList {
+    const server_count = this.readUint16("big_endian");
+    const servers: ServerInfo[] = [];
+
+    for (let i = 0; i < server_count; i++) {
+      // hostname (String)
+      const hostname_length = this.readUint16("big_endian");
+      const hostname_bytes: number[] = [];
+      for (let j = 0; j < hostname_length; j++) {
+        hostname_bytes.push(this.readUint8());
+      }
+      const hostname = new TextDecoder().decode(new Uint8Array(hostname_bytes));
+
+      // port (u16)
+      const port = this.readUint16("big_endian");
+
+      // name (String)
+      const name_length = this.readUint16("big_endian");
+      const name_bytes: number[] = [];
+      for (let j = 0; j < name_length; j++) {
+        name_bytes.push(this.readUint8());
+      }
+      const name = new TextDecoder().decode(new Uint8Array(name_bytes));
+
+      // description (String)
+      const desc_length = this.readUint16("big_endian");
+      const desc_bytes: number[] = [];
+      for (let j = 0; j < desc_length; j++) {
+        desc_bytes.push(this.readUint8());
+      }
+      const description = new TextDecoder().decode(new Uint8Array(desc_bytes));
+
+      // user_count (u32)
+      const user_count = this.readUint32("big_endian");
+
+      // max_users (u32)
+      const max_users = this.readUint32("big_endian");
+
+      // uptime_seconds (u64)
+      const uptime_seconds = this.readUint64("big_endian");
+
+      // is_public (bool - u8)
+      const is_public = this.readUint8() === 1;
+
+      // channel_count (u32)
+      const channel_count = this.readUint32("big_endian");
+
+      servers.push({
+        hostname, port, name, description,
+        user_count, max_users, uptime_seconds,
+        is_public, channel_count
+      });
+    }
+
+    return { server_count, servers };
+  }
+}
+
