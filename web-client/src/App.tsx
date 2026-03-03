@@ -15,6 +15,7 @@ import RegisterModal from './components/RegisterModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import CreateChannelModal from './components/CreateChannelModal'
 import { DM_TARGET_BY_USER_ID, DM_TARGET_BY_SESSION_ID, type Message } from './SuperChatCodec'
+import Icon from './components/Icon'
 import { encryptMessage } from './lib/crypto'
 import {
   CommandExecutor,
@@ -41,6 +42,18 @@ const App: Component = () => {
 
   // Chat input state (inline input for chat channels)
   const [chatInput, setChatInput] = createSignal('')
+
+  // True until onMount has checked localStorage for saved credentials
+  const [checkingCredentials, setCheckingCredentials] = createSignal(true)
+
+  // Mobile panel toggles (only effective below md breakpoint)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = createSignal(false)
+  const [mobileUsersOpen, setMobileUsersOpen] = createSignal(false)
+
+  const closeMobilePanels = () => {
+    setMobileSidebarOpen(false)
+    setMobileUsersOpen(false)
+  }
 
   // Initialize with connection screen
   const isConnected = selectors.isConnected
@@ -341,6 +354,7 @@ const App: Component = () => {
       const throttleBps = savedThrottle ? parseInt(savedThrottle, 10) : 0
       handleConnect(savedUrl, savedNickname, throttleBps)
     }
+    setCheckingCredentials(false)
   })
 
   // Update window title based on current view
@@ -463,6 +477,7 @@ const App: Component = () => {
     store.setCurrentView(ViewState.ThreadList)
     store.setActiveThreadId(null)
     storeActions.clearCompose()
+    closeMobilePanels()
 
     client.joinChannel(channelId)
   }
@@ -572,6 +587,7 @@ const App: Component = () => {
     store.setCurrentView(ViewState.ChatView)
     store.setActiveThreadId(null)
     storeActions.clearCompose()
+    closeMobilePanels()
     client.joinChannel(channelId)
   }
 
@@ -591,8 +607,8 @@ const App: Component = () => {
 
   return (
     <div class="min-h-screen bg-base-100 flex flex-col overflow-hidden">
-      {/* Server Selector - First Screen */}
-      <Show when={!isConnected() && !isConnecting()}>
+      {/* Server Selector - shown only after credential check confirms no auto-connect */}
+      <Show when={!checkingCredentials() && !isConnected() && !isConnecting()}>
         <ServerSelector onConnect={handleConnect} />
       </Show>
 
@@ -609,8 +625,16 @@ const App: Component = () => {
       {/* Main App UI */}
       <Show when={isConnected()}>
         <div class="flex h-screen overflow-hidden">
+          {/* Mobile backdrop */}
+          <Show when={mobileSidebarOpen() || mobileUsersOpen()}>
+            <div
+              class="fixed inset-0 bg-black/50 z-30 md:hidden"
+              onClick={closeMobilePanels}
+            />
+          </Show>
+
           {/* Sidebar - Channel List */}
-          <div class="w-64 bg-base-200 border-r border-base-300 flex flex-col">
+          <div class={`${mobileSidebarOpen() ? 'flex' : 'hidden'} md:flex w-64 bg-base-200 border-r border-base-300 flex-col fixed md:relative inset-y-0 left-0 z-40`}>
             <div class="p-4 border-b border-base-300 flex-shrink-0">
               <div class="flex items-center justify-between mb-2">
                 <div>
@@ -628,10 +652,10 @@ const App: Component = () => {
                 </div>
                 <button
                   onClick={handleDisconnect}
-                  class="btn btn-ghost btn-sm"
+                  class="btn btn-ghost btn-sm btn-circle"
                   title="Disconnect"
                 >
-                  ✕
+                  <Icon name="x" size={16} />
                 </button>
               </div>
               {/* Traffic Stats */}
@@ -659,9 +683,10 @@ const App: Component = () => {
                               isSelected() ? 'btn-active' : ''
                             }`}
                           >
-                            <span class="text-xs">
-                              {dm.isEncrypted ? '\u{1F512}' : '\u{2709}'}
-                            </span>
+                            {dm.isEncrypted
+                              ? <Icon name="lock" size={14} />
+                              : <Icon name="envelope" size={14} />
+                            }
                             <span class="truncate">{dm.otherNickname}</span>
                             <Show when={dm.participantLeft}>
                               <span class="badge badge-xs badge-warning">left</span>
@@ -749,10 +774,28 @@ const App: Component = () => {
             <Show
               when={currentChannel()}
               fallback={
-                <div class="flex-1 flex items-center justify-center p-8">
+                <div class="flex-1 flex flex-col items-center justify-center p-8">
+                  {/* Mobile: show toggle buttons when no channel selected */}
+                  <div class="flex w-full justify-between mb-4 md:hidden">
+                    <button
+                      onClick={() => { setMobileUsersOpen(false); setMobileSidebarOpen(v => !v) }}
+                      class="btn btn-ghost btn-sm btn-circle"
+                      title="Channels"
+                    >
+                      <Icon name="list" size={20} />
+                    </button>
+                    <button
+                      onClick={() => { setMobileSidebarOpen(false); setMobileUsersOpen(v => !v) }}
+                      class="btn btn-ghost btn-sm btn-circle"
+                      title="Online users"
+                    >
+                      <Icon name="users" size={20} />
+                    </button>
+                  </div>
                   <div class="text-center text-base-content/50">
                     <h3 class="text-xl font-semibold mb-2">Select a channel to start chatting</h3>
-                    <p>Choose a channel from the sidebar</p>
+                    <p class="hidden md:block">Choose a channel from the sidebar</p>
+                    <p class="md:hidden">Tap the menu to see channels</p>
                   </div>
                 </div>
               }
@@ -760,6 +803,15 @@ const App: Component = () => {
               {/* Channel Header */}
               <div class="border-b border-base-300 p-4 flex items-center justify-between flex-shrink-0">
                 <div class="flex items-center gap-2">
+                  {/* Mobile: sidebar toggle */}
+                  <button
+                    onClick={() => { setMobileUsersOpen(false); setMobileSidebarOpen(v => !v) }}
+                    class="btn btn-ghost btn-sm btn-circle md:hidden"
+                    title="Channels"
+                  >
+                    <img src={listIcon} alt="Channels" width="20" height="20" />
+                  </button>
+
                   {/* Back button for thread detail view */}
                   <Show when={isCurrentChannelForum() && store.currentView === ViewState.ThreadDetail}>
                     <button
@@ -767,7 +819,7 @@ const App: Component = () => {
                       class="btn btn-ghost btn-sm btn-circle"
                       title="Back to thread list"
                     >
-                      ←
+                      <Icon name="arrow-left" size={18} />
                     </button>
                   </Show>
 
@@ -780,25 +832,45 @@ const App: Component = () => {
                   </Show>
                   <Show when={isCurrentChannelDM()}>
                     <Show when={currentDMChannel()?.isEncrypted}>
-                      <span class="badge badge-info badge-sm gap-1" title="Ephemeral encryption - keys lost on page close">{'\u{1F512}'} Encrypted (session only)</span>
+                      <span class="badge badge-info badge-sm gap-1" title="Ephemeral encryption - keys lost on page close"><Icon name="lock" size={12} /> Encrypted (session only)</span>
                     </Show>
                     <Show when={currentDMChannel()?.participantLeft}>
                       <span class="badge badge-warning badge-sm">Partner left</span>
                     </Show>
                   </Show>
                 </div>
-                <div class="text-sm text-base-content/70">
-                  <Show
-                    when={isCurrentChannelChat()}
-                    fallback={
-                      <span>{currentThreadList().length} threads</span>
-                    }
+                <div class="flex items-center gap-2">
+                  {/* New Thread button for forum channels in thread list view */}
+                  <Show when={isCurrentChannelForum() && store.currentView !== ViewState.ThreadDetail}>
+                    <button
+                      onClick={() => handleCommand('compose-new-thread')}
+                      class="btn btn-primary btn-sm gap-1"
+                    >
+                      <Icon name="plus" size={16} />
+                      <span class="hidden sm:inline">New Thread</span>
+                    </button>
+                  </Show>
+                  <div class="text-sm text-base-content/70 hidden sm:block">
+                    <Show
+                      when={isCurrentChannelChat()}
+                      fallback={
+                        <span>{currentThreadList().length} threads</span>
+                      }
+                    >
+                      <span>{currentChannelMessages().length} messages</span>
+                    </Show>
+                    <Show when={currentChannel()!.retention_hours > 0}>
+                      <span class="text-base-content/50"> · {formatRetention(currentChannel()!.retention_hours)} retention</span>
+                    </Show>
+                  </div>
+                  {/* Mobile: users panel toggle */}
+                  <button
+                    onClick={() => { setMobileSidebarOpen(false); setMobileUsersOpen(v => !v) }}
+                    class="btn btn-ghost btn-sm btn-circle md:hidden"
+                    title="Online users"
                   >
-                    <span>{currentChannelMessages().length} messages</span>
-                  </Show>
-                  <Show when={currentChannel()!.retention_hours > 0}>
-                    <span class="text-base-content/50"> · {formatRetention(currentChannel()!.retention_hours)} retention</span>
-                  </Show>
+                    <img src={usersIcon} alt="Online users" width="20" height="20" />
+                  </button>
                 </div>
               </div>
 
@@ -872,8 +944,8 @@ const App: Component = () => {
 
             </Show>
 
-            {/* Keyboard shortcuts footer */}
-            <div class="border-t border-base-300 px-4 py-2 flex-shrink-0 bg-base-200">
+            {/* Keyboard shortcuts footer (hidden on mobile - no keyboard) */}
+            <div class="border-t border-base-300 px-4 py-2 flex-shrink-0 bg-base-200 hidden md:block">
               <div class="flex justify-between items-center">
                 <div class="text-xs text-base-content/60 font-mono">
                   {footerShortcuts()}
@@ -891,7 +963,7 @@ const App: Component = () => {
           </div>
 
           {/* Right Panel - Online Users */}
-          <div class="w-48 bg-base-200 border-l border-base-300 flex flex-col">
+          <div class={`${mobileUsersOpen() ? 'flex' : 'hidden'} md:flex w-48 bg-base-200 border-l border-base-300 flex-col fixed md:relative inset-y-0 right-0 z-40`}>
             <div class="p-3 border-b border-base-300 flex-shrink-0">
               <h3 class="font-semibold text-sm uppercase text-base-content/70">
                 Online ({onlineUsers().length})
@@ -965,7 +1037,7 @@ const App: Component = () => {
                 onClick={() => storeActions.closeModal()}
                 class="btn btn-ghost btn-sm btn-circle"
               >
-                ✕
+                <Icon name="x" size={16} />
               </button>
             </div>
             <div class="p-4 overflow-y-auto max-h-[60vh]">

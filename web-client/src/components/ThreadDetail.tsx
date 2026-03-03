@@ -4,7 +4,7 @@
 import { Component, For, Show } from 'solid-js'
 import type { Message } from '../SuperChatCodec'
 import { formatMessageTime } from '../lib/utils/date-formatting'
-import arrowBendUpLeftIcon from '@phosphor-icons/core/bold/arrow-bend-up-left-bold.svg'
+import Icon from './Icon'
 
 // Message with nested replies (from selector)
 interface MessageWithReplies extends Message {
@@ -38,7 +38,7 @@ const ThreadDetail: Component<ThreadDetailProps> = (props) => {
                   class="btn btn-xs btn-ghost absolute top-2 right-2"
                   title="Reply to this message"
                 >
-                  <img src={arrowBendUpLeftIcon} alt="Reply" width="16" height="16" class="inline-block" />
+                  <Icon name="arrow-bend-up-left" size={16} />
                 </button>
 
                 <div class="flex items-baseline gap-2 mb-2">
@@ -103,7 +103,7 @@ const MessageWithRepliesComponent: Component<MessageWithRepliesComponentProps> =
             class="btn btn-xs btn-ghost absolute top-2 right-2"
             title="Reply to this message"
           >
-            <img src={arrowBendUpLeftIcon} alt="Reply" width="16" height="16" class="inline-block" />
+            <Icon name="arrow-bend-up-left" size={16} />
           </button>
 
           <div class="flex items-baseline gap-2 mb-1">

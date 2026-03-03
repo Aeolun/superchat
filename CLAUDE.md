@@ -48,6 +48,10 @@ Before making ANY changes to the protocol (adding fields, changing message types
 
 When user asks to update the "splash" or "welcome" screen, confirm which one they mean!
 
+## Web Client UI Guidelines
+
+**No emoji in the web client.** Use [Phosphor Icons](https://phosphoricons.com/) (`@phosphor-icons/core`) for all icons. Import bold SVGs and render via `<img>` tags. See `ThreadDetail.tsx` for the pattern.
+
 ## UI Layout Guidelines
 
 **ALWAYS use flexbox layouts from `github.com/76creates/stickers/flexbox` for any UI layout work.**
