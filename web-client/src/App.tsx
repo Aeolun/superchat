@@ -821,7 +821,7 @@ const App: Component = () => {
                     class="btn btn-ghost btn-sm btn-circle md:hidden"
                     title="Channels"
                   >
-                    <img src={listIcon} alt="Channels" width="20" height="20" />
+                    <Icon name="list" size={20} />
                   </button>
 
                   {/* Back button for thread detail view */}
@@ -881,7 +881,7 @@ const App: Component = () => {
                     class="btn btn-ghost btn-sm btn-circle md:hidden"
                     title="Online users"
                   >
-                    <img src={usersIcon} alt="Online users" width="20" height="20" />
+                    <Icon name="users" size={20} />
                   </button>
                 </div>
               </div>
