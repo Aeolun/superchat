@@ -945,13 +945,14 @@ const App: Component = () => {
       </Show>
 
       {/* Compose Modal */}
-      <ComposeModal
-        isOpen={store.activeModal === ModalState.Compose}
-        replyTo={store.compose.replyToMessage}
-        channelName={currentChannel()?.name || ''}
-        onSend={handleComposeSend}
-        onCancel={handleComposeCancel}
-      />
+      <Show when={store.activeModal === ModalState.Compose}>
+        <ComposeModal
+          replyTo={store.compose.replyToMessage}
+          channelName={currentChannel()?.name || ''}
+          onSend={handleComposeSend}
+          onCancel={handleComposeCancel}
+        />
+      </Show>
 
       {/* Self-contained modals (read from store) */}
       <StartDMModal />

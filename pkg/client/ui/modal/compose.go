@@ -42,7 +42,7 @@ func (m *ComposeModal) Type() ModalType {
 // HandleKey processes keyboard input
 func (m *ComposeModal) HandleKey(msg tea.KeyMsg) (bool, Modal, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+d", "ctrl+enter":
+	case "ctrl+enter":
 		// Send message
 		if len(m.input) == 0 {
 			// Don't send empty messages, just stay in modal
@@ -189,7 +189,7 @@ func (m *ComposeModal) Render(width, height int) string {
 		contentSections = append(contentSections, "", estimateNote, titlePreview, titleHint)
 	}
 
-	instructions := mutedTextStyle.Render("[Ctrl+D or Ctrl+Enter] Send  [Esc] Cancel")
+	instructions := mutedTextStyle.Render("[Ctrl+Enter] Send  [Esc] Cancel")
 	contentSections = append(contentSections, "", instructions)
 
 	content := lipgloss.JoinVertical(

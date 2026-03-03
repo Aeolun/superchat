@@ -129,7 +129,7 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
   },
 
   {
-    keys: ['Control+d', 'Meta+d'],
+    keys: ['Control+Enter', 'Meta+Enter'],
     name: 'Send',
     helpText: 'Send message',
     scope: CommandScope.Modal,
