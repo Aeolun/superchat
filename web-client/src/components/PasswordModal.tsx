@@ -1,7 +1,7 @@
 import { Component, Show, createSignal, createMemo, onMount, onCleanup } from 'solid-js'
 import { store, storeActions, ModalState } from '../store/app-store'
 import { getProtocolBridge } from '../lib/protocol-bridge'
-import { argon2id } from '@noble/hashes/argon2.js'
+import { argon2id } from '../lib/argon2'
 
 // Argon2id parameters (must match Go server: pkg/client/auth/password.go)
 const ARGON_TIME = 3
