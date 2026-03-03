@@ -1,6 +1,15 @@
 // SuperChat WebSocket client
 // Handles binary protocol communication with SuperChat server
 
+/** JSON.stringify replacer that converts BigInt to string (mobile browsers crash on BigInt in console.log) */
+function safeLog(label: string, obj: unknown) {
+  try {
+    console.log(label, JSON.stringify(obj, (_k, v) => typeof v === 'bigint' ? v.toString() : v))
+  } catch {
+    console.log(label, String(obj))
+  }
+}
+
 import {
   FrameHeaderEncoder, FrameHeaderDecoder,
   SetNicknameEncoder, NicknameResponseDecoder,
@@ -432,7 +441,7 @@ export class SuperChatClient {
   private handleAuthResponse(payload: Uint8Array) {
     const decoder = new AuthResponseDecoder(payload)
     const response = decoder.decode()
-    console.log('Auth response:', response)
+    console.log('Auth response: success=%d nickname=%s', response.success, response.nickname)
 
     if (response.success === 1) {
       // Auth succeeded — server has upgraded our session to authenticated.
@@ -449,7 +458,7 @@ export class SuperChatClient {
   private handleUserInfo(payload: Uint8Array) {
     const decoder = new UserInfoDecoder(payload)
     const info = decoder.decode()
-    console.log('User info:', info)
+    safeLog('User info:', info)
 
     if (this.events.onUserInfo) {
       this.events.onUserInfo(info)
@@ -504,7 +513,7 @@ export class SuperChatClient {
   private handleServerConfig(payload: Uint8Array) {
     const decoder = new ServerConfigDecoder(payload)
     const config = decoder.decode()
-    console.log('Server config:', config)
+    safeLog('Server config:', config)
     if (this.events.onServerConfig) {
       this.events.onServerConfig(config)
     }
@@ -522,7 +531,7 @@ export class SuperChatClient {
   private handleMessagePosted(payload: Uint8Array) {
     const decoder = new MessagePostedDecoder(payload)
     const response = decoder.decode()
-    console.log('Message posted:', response)
+    safeLog('Message posted:', response)
     if (this.events.onMessagePosted) {
       this.events.onMessagePosted(response)
     }
@@ -531,7 +540,7 @@ export class SuperChatClient {
   private handleNewMessage(payload: Uint8Array) {
     const decoder = new NewMessageDecoder(payload)
     const newMessage = decoder.decode()
-    console.log('New message received:', newMessage)
+    safeLog('New message received:', newMessage)
     if (this.events.onNewMessage) {
       this.events.onNewMessage(newMessage)
     }
@@ -540,7 +549,7 @@ export class SuperChatClient {
   private handleSubscribeOk(payload: Uint8Array) {
     const decoder = new SubscribeOkDecoder(payload)
     const response = decoder.decode()
-    console.log('Subscribe OK:', response)
+    safeLog('Subscribe OK:', response)
     if (this.events.onSubscribeOk) {
       this.events.onSubscribeOk(response)
     }
@@ -559,7 +568,7 @@ export class SuperChatClient {
   private handleChannelCreated(payload: Uint8Array) {
     const decoder = new ChannelCreatedDecoder(payload)
     const data = decoder.decode()
-    console.log('Channel created:', data)
+    safeLog('Channel created:', data)
     if (this.events.onChannelCreated) {
       this.events.onChannelCreated(data)
     }
@@ -568,7 +577,7 @@ export class SuperChatClient {
   private handleMessageEdited(payload: Uint8Array) {
     const decoder = new MessageEditedDecoder(payload)
     const data = decoder.decode()
-    console.log('Message edited:', data)
+    safeLog('Message edited:', data)
     if (this.events.onMessageEdited) {
       this.events.onMessageEdited(data)
     }
@@ -577,7 +586,7 @@ export class SuperChatClient {
   private handleMessageDeleted(payload: Uint8Array) {
     const decoder = new MessageDeletedDecoder(payload)
     const data = decoder.decode()
-    console.log('Message deleted:', data)
+    safeLog('Message deleted:', data)
     if (this.events.onMessageDeleted) {
       this.events.onMessageDeleted(data)
     }
@@ -586,7 +595,7 @@ export class SuperChatClient {
   private handleChannelDeleted(payload: Uint8Array) {
     const decoder = new ChannelDeletedDecoder(payload)
     const data = decoder.decode()
-    console.log('Channel deleted:', data)
+    safeLog('Channel deleted:', data)
     if (this.events.onChannelDeleted) {
       this.events.onChannelDeleted(data)
     }
@@ -595,7 +604,7 @@ export class SuperChatClient {
   private handleServerPresence(payload: Uint8Array) {
     const decoder = new ServerPresenceDecoder(payload)
     const data = decoder.decode()
-    console.log('Server presence:', data)
+    safeLog('Server presence:', data)
     if (this.events.onServerPresence) {
       this.events.onServerPresence(data)
     }
@@ -604,7 +613,7 @@ export class SuperChatClient {
   private handleChannelPresence(payload: Uint8Array) {
     const decoder = new ChannelPresenceDecoder(payload)
     const data = decoder.decode()
-    console.log('Channel presence:', data)
+    safeLog('Channel presence:', data)
     if (this.events.onChannelPresence) {
       this.events.onChannelPresence(data)
     }
@@ -613,7 +622,7 @@ export class SuperChatClient {
   private handleKeyRequired(payload: Uint8Array) {
     const decoder = new KeyRequiredDecoder(payload)
     const data = decoder.decode()
-    console.log('Key required:', data)
+    safeLog('Key required:', data)
     if (this.events.onKeyRequired) {
       this.events.onKeyRequired(data)
     }
@@ -622,7 +631,7 @@ export class SuperChatClient {
   private handleDMReady(payload: Uint8Array) {
     const decoder = new DMReadyDecoder(payload)
     const data = decoder.decode()
-    console.log('DM ready:', data)
+    safeLog('DM ready:', data)
     if (this.events.onDMReady) {
       this.events.onDMReady(data)
     }
@@ -631,7 +640,7 @@ export class SuperChatClient {
   private handleDMPending(payload: Uint8Array) {
     const decoder = new DMPendingDecoder(payload)
     const data = decoder.decode()
-    console.log('DM pending:', data)
+    safeLog('DM pending:', data)
     if (this.events.onDMPending) {
       this.events.onDMPending(data)
     }
@@ -640,7 +649,7 @@ export class SuperChatClient {
   private handleDMRequest(payload: Uint8Array) {
     const decoder = new DMRequestDecoder(payload)
     const data = decoder.decode()
-    console.log('DM request:', data)
+    safeLog('DM request:', data)
     if (this.events.onDMRequest) {
       this.events.onDMRequest(data)
     }
@@ -649,7 +658,7 @@ export class SuperChatClient {
   private handleDMParticipantLeft(payload: Uint8Array) {
     const decoder = new DMParticipantLeftDecoder(payload)
     const data = decoder.decode()
-    console.log('DM participant left:', data)
+    safeLog('DM participant left:', data)
     if (this.events.onDMParticipantLeft) {
       this.events.onDMParticipantLeft(data)
     }
@@ -658,7 +667,7 @@ export class SuperChatClient {
   private handleDMDeclined(payload: Uint8Array) {
     const decoder = new DMDeclinedDecoder(payload)
     const data = decoder.decode()
-    console.log('DM declined:', data)
+    safeLog('DM declined:', data)
     if (this.events.onDMDeclined) {
       this.events.onDMDeclined(data)
     }
