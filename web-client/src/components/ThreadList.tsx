@@ -4,7 +4,6 @@
 import { Component, For, Show } from 'solid-js'
 import type { Message } from '../SuperChatCodec'
 import { formatMessageTime } from '../lib/utils/date-formatting'
-import { selectors } from '../store/selectors'
 
 /** Extract thread title: everything before the first double newline, or the full content */
 function extractThreadTitle(content: string): { title: string; hasBody: boolean } {
@@ -47,7 +46,7 @@ const ThreadList: Component<ThreadListProps> = (props) => {
           {/* Thread rows — subgrid wrapper gives us a styleable row element */}
           <For each={props.threads}>
             {(thread, index) => {
-              const replyCount = selectors.getReplyCount(thread.message_id)
+              const replyCount = thread.reply_count
               const isSelected = () => props.isFocused && props.selectedIndex === index()
               const { title } = extractThreadTitle(thread.content)
 

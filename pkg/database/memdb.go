@@ -662,9 +662,15 @@ func (m *MemDB) PostMessage(channelID int64, subchannelID, parentID, authorUserI
 	m.messagesByChannel[channelID] = append(m.messagesByChannel[channelID], messageID)
 	if parentID != nil {
 		m.messagesByParent[*parentID] = append(m.messagesByParent[*parentID], messageID)
-		// Increment parent's reply count (atomic)
-		if parent := m.messages[*parentID]; parent != nil {
-			parent.ReplyCount.Add(1)
+		// Increment reply count for all ancestors up to the root
+		ancestorID := parentID
+		for ancestorID != nil {
+			if ancestor := m.messages[*ancestorID]; ancestor != nil {
+				ancestor.ReplyCount.Add(1)
+				ancestorID = ancestor.ParentID
+			} else {
+				break
+			}
 		}
 	}
 	// Bump thread root's LastActivityAt
@@ -950,21 +956,28 @@ func (m *MemDB) hasNonDeletedDescendants(messageID int64) bool {
 }
 
 // recomputeReplyCount recalculates the reply count for a message (assumes lock held)
+// Counts all non-deleted descendants recursively, not just direct children.
 func (m *MemDB) recomputeReplyCount(messageID int64) {
 	msg := m.messages[messageID]
 	if msg == nil {
 		return
 	}
 
+	msg.ReplyCount.Store(m.countDescendants(messageID))
+}
+
+// countDescendants recursively counts all non-deleted descendants of a message (assumes lock held)
+func (m *MemDB) countDescendants(messageID int64) uint32 {
 	replyIDs := m.messagesByParent[messageID]
 	count := uint32(0)
-	for _, msgID := range replyIDs {
-		reply := m.messages[msgID]
-		if reply != nil && reply.DeletedAt == nil {
+	for _, childID := range replyIDs {
+		child := m.messages[childID]
+		if child != nil && child.DeletedAt == nil {
 			count++
 		}
+		count += m.countDescendants(childID)
 	}
-	msg.ReplyCount.Store(count)
+	return count
 }
 
 // CountReplies returns the cached reply count for a message (O(1) lookup)
@@ -1011,10 +1024,16 @@ func (m *MemDB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, 
 	msg.DeletedAt = &now
 	m.dirtyMessages[int64(messageID)] = true // Mark as dirty for next snapshot
 
-	// Decrement parent's reply count (if this is a reply, atomic)
+	// Decrement reply count for all ancestors (if this is a reply)
 	if msg.ParentID != nil {
-		if parent := m.messages[*msg.ParentID]; parent != nil && parent.ReplyCount.Load() > 0 {
-			parent.ReplyCount.Add(^uint32(0)) // Atomic decrement (two's complement of 0 = -1)
+		ancestorID := msg.ParentID
+		for ancestorID != nil {
+			if ancestor := m.messages[*ancestorID]; ancestor != nil && ancestor.ReplyCount.Load() > 0 {
+				ancestor.ReplyCount.Add(^uint32(0))
+				ancestorID = ancestor.ParentID
+			} else {
+				break
+			}
 		}
 	}
 
@@ -1042,10 +1061,16 @@ func (m *MemDB) AdminSoftDeleteMessage(messageID uint64, adminNickname string) (
 	msg.DeletedAt = &now
 	m.dirtyMessages[int64(messageID)] = true // Mark as dirty for next snapshot
 
-	// Decrement parent's reply count (if this is a reply, atomic)
+	// Decrement reply count for all ancestors (if this is a reply)
 	if msg.ParentID != nil {
-		if parent := m.messages[*msg.ParentID]; parent != nil && parent.ReplyCount.Load() > 0 {
-			parent.ReplyCount.Add(^uint32(0)) // Atomic decrement (two's complement of 0 = -1)
+		ancestorID := msg.ParentID
+		for ancestorID != nil {
+			if ancestor := m.messages[*ancestorID]; ancestor != nil && ancestor.ReplyCount.Load() > 0 {
+				ancestor.ReplyCount.Add(^uint32(0))
+				ancestorID = ancestor.ParentID
+			} else {
+				break
+			}
 		}
 	}
 
