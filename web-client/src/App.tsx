@@ -111,7 +111,7 @@ const App: Component<ParentProps> = (props) => {
 
   // Handle keyboard commands
   const handleCommand = (actionId: string) => {
-    console.log('[Keyboard] Command:', actionId)
+    safeLog('[Keyboard] Command:', actionId)
 
     switch (actionId) {
       case 'help':
@@ -274,7 +274,7 @@ const App: Component<ParentProps> = (props) => {
         break
 
       default:
-        console.log('[Keyboard] Unhandled command:', actionId)
+        safeLog('[Keyboard] Unhandled command:', actionId)
     }
   }
 
@@ -354,7 +354,7 @@ const App: Component<ParentProps> = (props) => {
   })
 
   const handleConnect = (url: string, nickname: string, throttleBps: number) => {
-    console.log('Connecting:', { url, nickname, throttleBps })
+    safeLog('Connecting:', { url, nickname, throttleBps })
     store.setServerUrl(url)
     store.setNickname(nickname)
     storeActions.updateTraffic({ throttleBytesPerSecond: throttleBps })

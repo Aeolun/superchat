@@ -8,6 +8,7 @@ import {
   ServerListDecoder,
   type ServerInfo,
 } from '../SuperChatCodec'
+import { safeError } from './utils/safe-log'
 
 const MSG_LIST_SERVERS = 0x55
 const MSG_SERVER_LIST = 0x9B
@@ -112,7 +113,7 @@ export async function fetchDirectoryServers(wsUrl: string): Promise<ServerInfo[]
                   const result = decoder.decode()
                   finish(result.servers)
                 } catch (e) {
-                  console.error('Failed to decode SERVER_LIST:', e)
+                  safeError('Failed to decode SERVER_LIST:', e)
                   finish([])
                 }
                 return

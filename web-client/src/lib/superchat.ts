@@ -1,7 +1,7 @@
 // SuperChat WebSocket client
 // Handles binary protocol communication with SuperChat server
 
-import { safeLog } from './utils/safe-log'
+import { safeLog, safeWarn, safeError } from './utils/safe-log'
 
 import {
   FrameHeaderEncoder, FrameHeaderDecoder,
@@ -181,7 +181,7 @@ export class SuperChatClient {
       this.ws.binaryType = 'arraybuffer'
 
       this.ws.onopen = () => {
-        console.log('WebSocket connected')
+        safeLog('WebSocket connected')
         this.setState('connected')
         this.sendSetNickname(nickname)
 
@@ -203,13 +203,13 @@ export class SuperChatClient {
       }
 
       this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error)
+        safeError('WebSocket error:', error)
         this.setState('error')
         this.events.onError('Failed to connect')
       }
 
       this.ws.onclose = () => {
-        console.log('WebSocket closed')
+        safeLog('WebSocket closed')
         this.setState('disconnected')
         if (this.pingInterval) {
           clearInterval(this.pingInterval)
@@ -222,15 +222,15 @@ export class SuperChatClient {
 
         // Attempt to reconnect after 2 seconds if shouldReconnect is true
         if (this.shouldReconnect && this.lastUrl) {
-          console.log('Attempting to reconnect in 2 seconds...')
+          safeLog('Attempting to reconnect in 2 seconds...')
           this.reconnectTimeout = window.setTimeout(() => {
-            console.log('Reconnecting to', this.lastUrl)
+            safeLog('Reconnecting to', this.lastUrl)
             this.connect(this.lastUrl, this.lastNickname)
           }, 2000)
         }
       }
     } catch (error) {
-      console.error('Failed to connect:', error)
+      safeError('Failed to connect:', error)
       this.setState('error')
       this.events.onError('Connection failed')
     }
@@ -258,7 +258,7 @@ export class SuperChatClient {
 
   private sendFrame(messageType: number, payloadBytes: Uint8Array) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.error('WebSocket not connected')
+      safeError('WebSocket not connected')
       return
     }
 
@@ -324,7 +324,7 @@ export class SuperChatClient {
     try {
       // Check minimum frame size
       if (data.length < 7) {
-        console.error(`Frame too short: ${data.length} bytes`)
+        safeError(`Frame too short: ${data.length} bytes`)
         return
       }
 
@@ -375,7 +375,7 @@ export class SuperChatClient {
           this.handleProtocolError(payload)
           break
         case MSG_PONG:
-          console.log('Received PONG')
+          safeLog('Received PONG')
           break
         case MSG_CHANNEL_CREATED:
           this.handleChannelCreated(payload)
@@ -414,11 +414,11 @@ export class SuperChatClient {
           this.handleDMDeclined(payload)
           break
         default:
-          console.warn(`Unhandled message type: 0x${header.type.toString(16)}`)
+          safeWarn(`Unhandled message type: 0x${header.type.toString(16)}`)
       }
     } catch (error) {
       const msgType = data.length >= 6 ? `0x${data[5].toString(16).padStart(2, '0')}` : 'unknown'
-      console.error(`Error handling message type ${msgType}:`, String(error))
+      safeError(`Error handling message type ${msgType}:`, String(error))
     }
   }
 
@@ -433,7 +433,7 @@ export class SuperChatClient {
     const response = decoder.decode()
 
     if (response.success === 1) {
-      console.log('Nickname set successfully:', response.message)
+      safeLog('Nickname set successfully:', response.message)
       // Request channel list after successful nickname setup
       this.sendListChannels()
     } else {
@@ -456,7 +456,7 @@ export class SuperChatClient {
   private handleRegisterResponse(payload: Uint8Array) {
     const decoder = new RegisterResponseDecoder(payload)
     const response = decoder.decode()
-    console.log('Register response: success=%d', response.success)
+    safeLog('Register response: success=%d', response.success)
 
     if (this.events.onRegisterResponse) {
       this.events.onRegisterResponse(response)
@@ -466,13 +466,13 @@ export class SuperChatClient {
   private handleAuthResponse(payload: Uint8Array) {
     const decoder = new AuthResponseDecoder(payload)
     const response = decoder.decode()
-    console.log('Auth response: success=%d nickname=%s', response.success, response.nickname)
+    safeLog('Auth response: success=%d nickname=%s', response.success, response.nickname)
 
     if (response.success === 1) {
       // Auth succeeded — server has upgraded our session to authenticated.
       // Channels are already loaded (nickname was set successfully before auth).
       // Server sends a fresh presence snapshot so other clients see us as registered.
-      console.log('Authentication successful for:', response.nickname)
+      safeLog('Authentication successful for:', response.nickname)
     }
 
     if (this.events.onAuthResponse) {
@@ -500,7 +500,7 @@ export class SuperChatClient {
     const decoder = new ChannelListDecoder(payload)
     const channelList = decoder.decode()
 
-    console.log(`Received ${channelList.channel_count} channels`)
+    safeLog(`Received ${channelList.channel_count} channels`)
     this.events.onChannelsReceived(channelList.channels)
   }
 
@@ -518,7 +518,7 @@ export class SuperChatClient {
     const response = decoder.decode()
 
     if (response.success === 1) {
-      console.log('Joined channel:', response.channel_id)
+      safeLog('Joined channel:', response.channel_id)
     } else {
       this.events.onError(response.message)
     }
@@ -547,7 +547,7 @@ export class SuperChatClient {
   private handleMessageList(payload: Uint8Array) {
     const decoder = new MessageListDecoder(payload)
     const messageList = decoder.decode()
-    console.log(`Received ${messageList.message_count} messages`)
+    safeLog(`Received ${messageList.message_count} messages`)
     if (this.events.onMessagesReceived) {
       this.events.onMessagesReceived(messageList.messages)
     }
@@ -583,7 +583,7 @@ export class SuperChatClient {
   private handleProtocolError(payload: Uint8Array) {
     const decoder = new Error_Decoder(payload)
     const error = decoder.decode()
-    console.error('Protocol error:', error)
+    safeError('Protocol error:', error)
     if (this.events.onProtocolError) {
       this.events.onProtocolError(error)
     }

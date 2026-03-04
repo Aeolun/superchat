@@ -5,7 +5,7 @@
 import { SuperChatEventClient, type SuperChatEvent } from './superchat-events'
 import { store, storeActions, ModalState } from '../store/app-store'
 import { computeSharedSecret, deriveChannelKey, decryptMessage, KEY_TYPE_GENERATED } from './crypto'
-import { safeLog } from './utils/safe-log'
+import { safeLog, safeWarn, safeError } from './utils/safe-log'
 import type { ChannelCreated, MessageEdited, MessageDeleted, ChannelDeleted, ServerPresence, ChannelPresence, AuthResponse, RegisterResponse, UserInfo, KeyRequired, DMReady, DMPending, DMRequest, DMParticipantLeft, DMDeclined, NewMessage, Message } from '../SuperChatCodec'
 
 /**
@@ -44,7 +44,7 @@ export class ProtocolBridge {
    */
   start(): void {
     if (this.unsubscribe) {
-      console.warn('ProtocolBridge already started')
+      safeWarn('ProtocolBridge already started')
       return
     }
 
@@ -184,7 +184,7 @@ export class ProtocolBridge {
         break
 
       default:
-        console.warn('Unhandled event type:', (event as any).type)
+        safeWarn('Unhandled event type:', (event as any).type)
     }
   }
 
@@ -210,14 +210,14 @@ export class ProtocolBridge {
    */
   private handleError(message: string): void {
     store.setErrorMessage(message)
-    console.error('Client error:', message)
+    safeError('Client error:', message)
   }
 
   /**
    * Handle CHANNEL_LIST message
    */
   private handleChannelList(channels: any[]): void {
-    console.log(`Received ${channels.length} channels`)
+    safeLog(`Received ${channels.length} channels`)
     storeActions.addChannels(channels)
   }
 
@@ -237,7 +237,7 @@ export class ProtocolBridge {
    * Handle MESSAGE_LIST message - with decryption for encrypted DM channels
    */
   private async handleMessageList(messages: Message[]): Promise<void> {
-    console.log(`Received ${messages.length} messages`)
+    safeLog(`Received ${messages.length} messages`)
 
     // Decrypt messages from encrypted DM channels
     for (const msg of messages) {
@@ -324,7 +324,7 @@ export class ProtocolBridge {
    */
   private handleChannelCreated(data: ChannelCreated): void {
     if (data.success !== 1 || !data.channel_id || !data.name) {
-      if (data.message) console.error('Create channel failed:', data.message)
+      if (data.message) safeError('Create channel failed:', data.message)
       return
     }
 
@@ -346,7 +346,7 @@ export class ProtocolBridge {
    */
   private handleMessageEdited(data: MessageEdited): void {
     if (data.success !== 1 || !data.new_content || !data.edited_at) {
-      if (data.message) console.error('Edit message failed:', data.message)
+      if (data.message) safeError('Edit message failed:', data.message)
       return
     }
 
@@ -358,7 +358,7 @@ export class ProtocolBridge {
    */
   private handleMessageDeleted(data: MessageDeleted): void {
     if (data.success !== 1) {
-      if (data.message) console.error('Delete message failed:', data.message)
+      if (data.message) safeError('Delete message failed:', data.message)
       return
     }
 
@@ -398,7 +398,7 @@ export class ProtocolBridge {
    * Handle CHANNEL_PRESENCE broadcast (user joined/left channel)
    */
   private handleChannelPresence(data: ChannelPresence): void {
-    console.log(`Channel presence: ${data.nickname} ${data.joined ? 'joined' : 'left'} channel ${data.channel_id}`)
+    safeLog(`Channel presence: ${data.nickname} ${data.joined ? 'joined' : 'left'} channel ${data.channel_id}`)
   }
 
   /**
@@ -406,7 +406,7 @@ export class ProtocolBridge {
    * If the nickname is registered and matches ours, offer authentication
    */
   private handleUserInfo(info: UserInfo): void {
-    console.log('User info:', info.nickname, 'registered:', info.is_registered)
+    safeLog('User info:', info.nickname, 'registered:', info.is_registered)
 
     if (info.is_registered && info.nickname === store.nickname) {
       // Try to auto-authenticate with a cached password hash from this session
@@ -428,7 +428,7 @@ export class ProtocolBridge {
    */
   private handleAuthResponse(response: AuthResponse): void {
     if (response.success === 1) {
-      console.log('Authentication successful:', response.nickname, 'userId:', response.user_id)
+      safeLog('Authentication successful:', response.nickname, 'userId:', response.user_id)
       store.setIsRegistered(true)
       store.setNickname(response.nickname)
       store.setUserId(response.user_id)
@@ -436,7 +436,7 @@ export class ProtocolBridge {
       store.setAuthError('')
       storeActions.closeModal()
     } else {
-      console.log('Authentication failed:', response.message)
+      safeLog('Authentication failed:', response.message)
       // If auto-auth with cached hash failed, clear it and show the password modal
       if (sessionStorage.getItem('superchat_auth_hash')) {
         sessionStorage.removeItem('superchat_auth_hash')
@@ -455,12 +455,12 @@ export class ProtocolBridge {
    */
   private handleRegisterResponse(response: RegisterResponse): void {
     if (response.success === 1) {
-      console.log('Registration successful')
+      safeLog('Registration successful')
       store.setIsRegistered(true)
       store.setAuthError('')
       storeActions.closeModal()
     } else {
-      console.log('Registration failed')
+      safeLog('Registration failed')
       store.setAuthError('Registration failed. Please try again.')
     }
   }
@@ -489,7 +489,7 @@ export class ProtocolBridge {
    * Handle DM_READY - DM channel is ready to use
    */
   private handleDMReady(data: DMReady): void {
-    console.log(`DM ready: channel ${data.channel_id} with ${data.other_nickname} (encrypted: ${data.is_encrypted})`)
+    safeLog(`DM ready: channel ${data.channel_id} with ${data.other_nickname} (encrypted: ${data.is_encrypted})`)
 
     const isEncrypted = data.is_encrypted === 1
     const otherUserId = data.other_user_id.present === 1 ? data.other_user_id.value! : null
@@ -512,7 +512,7 @@ export class ProtocolBridge {
         const channelKey = deriveChannelKey(shared, data.channel_id)
         storeActions.setDMChannelKey(data.channel_id, channelKey)
       } catch (err) {
-        console.error('Failed to derive DM encryption key:', err)
+        safeError('Failed to derive DM encryption key:', err)
       }
     }
 
@@ -530,7 +530,7 @@ export class ProtocolBridge {
    * Handle DM_PENDING - waiting for other party to accept
    */
   private handleDMPending(data: DMPending): void {
-    console.log(`DM pending: waiting for ${data.waiting_for_nickname} (${data.reason})`)
+    safeLog(`DM pending: waiting for ${data.waiting_for_nickname} (${data.reason})`)
 
     storeActions.addOutgoingDMInvite({
       channelId: data.dm_channel_id,
@@ -543,7 +543,7 @@ export class ProtocolBridge {
    * Handle DM_REQUEST - incoming DM request from another user
    */
   private handleDMRequest(data: DMRequest): void {
-    console.log(`DM request from ${data.from_nickname} (encryption: ${data.encryption_status})`)
+    safeLog(`DM request from ${data.from_nickname} (encryption: ${data.encryption_status})`)
 
     const invite = {
       channelId: data.dm_channel_id,
@@ -565,7 +565,7 @@ export class ProtocolBridge {
    * Handle DM_PARTICIPANT_LEFT - someone permanently left a DM
    */
   private handleDMParticipantLeft(data: DMParticipantLeft): void {
-    console.log(`DM participant left: ${data.nickname} left DM channel ${data.dm_channel_id}`)
+    safeLog(`DM participant left: ${data.nickname} left DM channel ${data.dm_channel_id}`)
 
     storeActions.markDMParticipantLeft(data.dm_channel_id)
   }
@@ -574,7 +574,7 @@ export class ProtocolBridge {
    * Handle DM_DECLINED - DM request was declined
    */
   private handleDMDeclined(data: DMDeclined): void {
-    console.log(`DM declined by ${data.nickname} for DM channel ${data.dm_channel_id}`)
+    safeLog(`DM declined by ${data.nickname} for DM channel ${data.dm_channel_id}`)
 
     storeActions.removeOutgoingDMInvite(data.dm_channel_id)
     store.setErrorMessage(`${data.nickname} declined your DM request`)

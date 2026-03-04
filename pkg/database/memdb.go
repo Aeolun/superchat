@@ -993,14 +993,19 @@ func (m *MemDB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, 
 
 	msg, exists := m.messages[int64(messageID)]
 	if !exists {
-		return nil, fmt.Errorf("message not found")
+		return nil, ErrMessageNotFound
 	}
 
 	if msg.DeletedAt != nil {
-		return nil, fmt.Errorf("message already deleted")
+		return nil, ErrMessageAlreadyDeleted
 	}
 
-	// Mark as deleted and replace content (matches DB.SoftDeleteMessage behavior)
+	// Check ownership (matches DB.SoftDeleteMessage behavior)
+	if msg.AuthorNickname != nickname {
+		return nil, ErrMessageNotOwned
+	}
+
+	// Mark as deleted and replace content
 	now := nowMillis()
 	msg.Content = fmt.Sprintf("[deleted by ~%s]", nickname)
 	msg.DeletedAt = &now
@@ -1024,11 +1029,11 @@ func (m *MemDB) AdminSoftDeleteMessage(messageID uint64, adminNickname string) (
 
 	msg, exists := m.messages[int64(messageID)]
 	if !exists {
-		return nil, fmt.Errorf("message not found")
+		return nil, ErrMessageNotFound
 	}
 
 	if msg.DeletedAt != nil {
-		return nil, fmt.Errorf("message already deleted")
+		return nil, ErrMessageAlreadyDeleted
 	}
 
 	// Mark as deleted and replace content (matches DB.AdminSoftDeleteMessage behavior)

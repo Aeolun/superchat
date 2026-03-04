@@ -2,6 +2,7 @@
 // Extends the basic SuperChatClient with event emission for all protocol messages
 
 import { SuperChatClient } from './superchat'
+import { safeError } from './utils/safe-log'
 import type { ConnectionState } from './superchat'
 import type {
   Channel,
@@ -187,7 +188,7 @@ export class SuperChatEventClient {
       try {
         listener(event)
       } catch (error) {
-        console.error('Error in event listener:', error)
+        safeError('Error in event listener:', error)
       }
     }
   }

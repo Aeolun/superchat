@@ -2,6 +2,7 @@ import { Component, Show, createSignal, createMemo, onMount, onCleanup } from 's
 import { store, storeActions, ModalState } from '../store/app-store'
 import { getProtocolBridge } from '../lib/protocol-bridge'
 import { hashPassword } from '../lib/hash-password'
+import { safeError } from '../lib/utils/safe-log'
 
 const MIN_PASSWORD_LENGTH = 8
 
@@ -52,7 +53,7 @@ const RegisterModal: Component = () => {
       client.sendRegisterUser(hashedPassword)
     } catch (err) {
       store.setAuthError('Password hashing failed')
-      console.error('argon2id error:', err)
+      safeError('argon2id error:', err)
     } finally {
       setHashing(false)
     }
