@@ -323,6 +323,13 @@ func (m *MemDB) batchInsertMessages(messages []*Message) error {
 	}
 	defer tx.Rollback()
 
+	// Temporarily disable FK checks during snapshot writes.
+	// New messages and their parents may both be dirty in the same cycle,
+	// and multi-row INSERT doesn't guarantee intra-statement FK visibility.
+	if _, err := tx.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("failed to disable foreign keys: %w", err)
+	}
+
 	for i := 0; i < len(messages); i += batchSize {
 		end := i + batchSize
 		if end > len(messages) {
@@ -333,7 +340,7 @@ func (m *MemDB) batchInsertMessages(messages []*Message) error {
 		// Build multi-row INSERT statement
 		// INSERT OR REPLACE INTO Message (...) VALUES (?,?,...), (?,?,...), ...
 		var queryBuilder strings.Builder
-		queryBuilder.WriteString(`INSERT OR REPLACE INTO Message
+		queryBuilder.WriteString(`INSERT INTO Message
 			(id, channel_id, subchannel_id, parent_id, thread_root_id,
 			 author_user_id, author_nickname, content, created_at, last_activity_at, edited_at, deleted_at)
 			VALUES `)
@@ -352,10 +359,25 @@ func (m *MemDB) batchInsertMessages(messages []*Message) error {
 			)
 		}
 
+		// Use ON CONFLICT UPDATE instead of INSERT OR REPLACE to avoid
+		// triggering ON DELETE CASCADE which would wipe out child messages
+		queryBuilder.WriteString(` ON CONFLICT(id) DO UPDATE SET
+			channel_id=excluded.channel_id, subchannel_id=excluded.subchannel_id,
+			parent_id=excluded.parent_id, thread_root_id=excluded.thread_root_id,
+			author_user_id=excluded.author_user_id, author_nickname=excluded.author_nickname,
+			content=excluded.content, created_at=excluded.created_at,
+			last_activity_at=excluded.last_activity_at, edited_at=excluded.edited_at,
+			deleted_at=excluded.deleted_at`)
+
 		// Execute batch
 		if _, err := tx.Exec(queryBuilder.String(), args...); err != nil {
 			return fmt.Errorf("failed to execute batch insert: %w", err)
 		}
+	}
+
+	// Re-enable FK checks before commit
+	if _, err := tx.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return fmt.Errorf("failed to re-enable foreign keys: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
