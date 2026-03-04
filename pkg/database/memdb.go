@@ -818,10 +818,17 @@ func (m *MemDB) GetThreadMessages(threadRootID int64) ([]Message, error) {
 // MessageExists checks if a message exists and is not deleted
 func (m *MemDB) MessageExists(messageID int64) (bool, error) {
 	m.mu.RLock()
-	msg, exists := m.messages[messageID]
-	m.mu.RUnlock()
+	defer m.mu.RUnlock()
 
-	return exists && msg.DeletedAt == nil, nil
+	msg, exists := m.messages[messageID]
+	if !exists {
+		return false, nil
+	}
+	// A message "exists" if it's not deleted, or if it has live descendants
+	if msg.DeletedAt == nil {
+		return true, nil
+	}
+	return m.hasNonDeletedDescendants(messageID), nil
 }
 
 // ListRootMessages retrieves top-level messages sorted by last activity (compatible with SQLite DB interface)
