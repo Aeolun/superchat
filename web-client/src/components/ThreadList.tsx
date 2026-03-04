@@ -17,6 +17,7 @@ function extractThreadTitle(content: string): { title: string; hasBody: boolean 
 
 interface ThreadListProps {
   threads: Message[]
+  loading: boolean
   onThreadClick: (threadId: bigint) => void
   selectedIndex: number
   isFocused: boolean
@@ -29,7 +30,9 @@ const ThreadList: Component<ThreadListProps> = (props) => {
         when={props.threads.length > 0}
         fallback={
           <div class="text-center text-base-content/50 py-8">
-            <p>No threads yet. Start a conversation!</p>
+            <Show when={props.loading} fallback={<p>No threads yet. Start a conversation!</p>}>
+              <span class="loading loading-spinner loading-md my-12"></span>
+            </Show>
           </div>
         }
       >

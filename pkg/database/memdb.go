@@ -85,12 +85,12 @@ func (m *MemDB) loadFromSQLite() error {
 	// Load ALL messages in one query instead of per-channel recursive queries
 	startMessages := time.Now()
 
-	// Query all messages directly from SQLite
+	// Query all messages directly from SQLite (include soft-deleted messages so
+	// their reply trees remain intact — they display as "[deleted by ~user]")
 	rows, err := m.sqliteDB.conn.Query(`
 		SELECT id, channel_id, subchannel_id, parent_id, thread_root_id, author_user_id,
 		       author_nickname, content, created_at, last_activity_at, edited_at, deleted_at
 		FROM Message
-		WHERE deleted_at IS NULL
 		ORDER BY created_at ASC
 	`)
 	if err != nil {
@@ -743,8 +743,11 @@ func (m *MemDB) GetRootMessages(channelID int64, fromMessageID int64, limit int)
 		}
 
 		msg := m.messages[msgID]
-		if msg == nil || msg.DeletedAt != nil || msg.ParentID != nil {
-			continue // Skip deleted or replies
+		if msg == nil || msg.ParentID != nil {
+			continue // Skip replies
+		}
+		if msg.DeletedAt != nil && !m.hasNonDeletedDescendants(msgID) {
+			continue // Skip deleted roots with no live replies
 		}
 
 		messages = append(messages, *msg)
@@ -769,9 +772,13 @@ func (m *MemDB) GetReplies(parentID int64) ([]Message, error) {
 	messages := make([]Message, 0, len(replyIDs))
 	for _, msgID := range replyIDs {
 		msg := m.messages[msgID]
-		if msg != nil && msg.DeletedAt == nil {
-			messages = append(messages, *msg)
+		if msg == nil {
+			continue
 		}
+		if msg.DeletedAt != nil && !m.hasNonDeletedDescendants(msgID) {
+			continue // Skip deleted replies with no live children
+		}
+		messages = append(messages, *msg)
 	}
 
 	return messages, nil
@@ -790,9 +797,13 @@ func (m *MemDB) GetThreadMessages(threadRootID int64) ([]Message, error) {
 	messages := make([]Message, 0, len(messageIDs))
 	for _, msgID := range messageIDs {
 		msg := m.messages[msgID]
-		if msg != nil && msg.DeletedAt == nil {
-			messages = append(messages, *msg)
+		if msg == nil {
+			continue
 		}
+		if msg.DeletedAt != nil && !m.hasNonDeletedDescendants(msgID) {
+			continue // Skip deleted messages with no live children
+		}
+		messages = append(messages, *msg)
 	}
 
 	return messages, nil
@@ -829,8 +840,11 @@ func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uin
 		}
 
 		msg := m.messages[msgID]
-		if msg == nil || msg.DeletedAt != nil || msg.ParentID != nil {
-			continue // Skip deleted or replies
+		if msg == nil || msg.ParentID != nil {
+			continue // Skip replies
+		}
+		if msg.DeletedAt != nil && !m.hasNonDeletedDescendants(msgID) {
+			continue // Skip deleted roots with no live replies
 		}
 
 		// Filter by subchannel if specified
@@ -898,13 +912,41 @@ func (m *MemDB) collectThreadReplies(parentID int64, messages *[]*Message, befor
 		}
 
 		msg := m.messages[msgID]
-		if msg != nil && msg.DeletedAt == nil {
-			*messages = append(*messages, msg)
+		if msg == nil {
+			continue
+		}
 
-			// Recursively collect this message's children
-			m.collectThreadReplies(msgID, messages, beforeID, afterID, limit)
+		// Include deleted messages that still have live descendants
+		if msg.DeletedAt == nil || m.hasNonDeletedDescendants(msgID) {
+			*messages = append(*messages, msg)
+		}
+
+		// Always recurse — deleted messages may have non-deleted children
+		m.collectThreadReplies(msgID, messages, beforeID, afterID, limit)
+	}
+}
+
+// hasNonDeletedDescendants checks if a message has any non-deleted replies (recursive).
+// Caller must hold m.mu read lock.
+func (m *MemDB) hasNonDeletedDescendants(messageID int64) bool {
+	replyIDs, exists := m.messagesByParent[messageID]
+	if !exists {
+		return false
+	}
+	for _, replyID := range replyIDs {
+		reply := m.messages[replyID]
+		if reply == nil {
+			continue
+		}
+		if reply.DeletedAt == nil {
+			return true
+		}
+		// Deleted reply might have non-deleted children
+		if m.hasNonDeletedDescendants(replyID) {
+			return true
 		}
 	}
+	return false
 }
 
 // recomputeReplyCount recalculates the reply count for a message (assumes lock held)
@@ -958,8 +1000,9 @@ func (m *MemDB) SoftDeleteMessage(messageID uint64, nickname string) (*Message, 
 		return nil, fmt.Errorf("message already deleted")
 	}
 
-	// Mark as deleted
+	// Mark as deleted and replace content (matches DB.SoftDeleteMessage behavior)
 	now := nowMillis()
+	msg.Content = fmt.Sprintf("[deleted by ~%s]", nickname)
 	msg.DeletedAt = &now
 	m.dirtyMessages[int64(messageID)] = true // Mark as dirty for next snapshot
 
@@ -988,8 +1031,9 @@ func (m *MemDB) AdminSoftDeleteMessage(messageID uint64, adminNickname string) (
 		return nil, fmt.Errorf("message already deleted")
 	}
 
-	// Mark as deleted
+	// Mark as deleted and replace content (matches DB.AdminSoftDeleteMessage behavior)
 	now := nowMillis()
+	msg.Content = fmt.Sprintf("[deleted by ~%s]", adminNickname)
 	msg.DeletedAt = &now
 	m.dirtyMessages[int64(messageID)] = true // Mark as dirty for next snapshot
 

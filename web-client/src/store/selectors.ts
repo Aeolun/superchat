@@ -2,7 +2,7 @@
 // These compute derived data reactively using SolidJS memos
 
 import { createMemo } from 'solid-js'
-import { store } from './app-store'
+import { store, channelStore, k } from './app-store'
 import type { Channel, Message } from '../SuperChatCodec'
 import type { DMChannel, PresenceEntry } from './app-store'
 
@@ -38,15 +38,22 @@ export const currentChannel = createMemo<Channel | null>(() => {
 })
 
 /**
+ * Get the per-channel data for the active channel (or null)
+ */
+const activeChannelData = createMemo(() => {
+  const channelId = store.activeChannelId
+  if (channelId === null) return null
+  return channelStore.data[k(channelId)] ?? null
+})
+
+/**
  * Get all messages for the current channel (flat list, sorted by timestamp)
  */
 export const currentChannelMessages = createMemo<Message[]>(() => {
-  const channelId = store.activeChannelId
-  if (channelId === null) return []
+  const data = activeChannelData()
+  if (!data) return []
 
-  const allMessages = Array.from(store.messages.values())
-  return allMessages
-    .filter(msg => msg.channel_id === channelId)
+  return Object.values(data.messages)
     .sort((a, b) => Number(a.created_at - b.created_at))
 })
 
@@ -55,16 +62,13 @@ export const currentChannelMessages = createMemo<Message[]>(() => {
  * Only for forum channels (type=1)
  */
 export const currentThreadList = createMemo<Message[]>(() => {
-  const channelId = store.activeChannelId
-  if (channelId === null) return []
+  const data = activeChannelData()
+  if (!data) return []
 
-  const threadIds = store.threadIndex.get(channelId) || []
-  const threads = threadIds
-    .map(id => store.messages.get(id))
+  return data.threadIds
+    .map(id => data.messages[id])
     .filter((msg): msg is Message => msg !== undefined)
     .sort((a, b) => Number(b.created_at - a.created_at)) // Newest first
-
-  return threads
 })
 
 /**
@@ -75,11 +79,15 @@ interface MessageWithReplies extends Message {
   replies: MessageWithReplies[]
 }
 
-function buildReplyTree(messageId: bigint, messages: Map<bigint, Message>, replyIndex: Map<bigint, bigint[]>): MessageWithReplies | null {
-  const message = messages.get(messageId)
+function buildReplyTree(
+  messageId: string,
+  messages: Record<string, Message>,
+  replyIndex: Record<string, string[]>
+): MessageWithReplies | null {
+  const message = messages[messageId]
   if (!message) return null
 
-  const childIds = replyIndex.get(messageId) || []
+  const childIds = replyIndex[messageId] || []
   const replies = childIds
     .map(id => buildReplyTree(id, messages, replyIndex))
     .filter((reply): reply is MessageWithReplies => reply !== null)
@@ -99,19 +107,38 @@ export const currentThread = createMemo<MessageWithReplies | null>(() => {
   const threadId = store.activeThreadId
   if (threadId === null) return null
 
-  return buildReplyTree(threadId, store.messages, store.replyIndex)
+  const data = activeChannelData()
+  if (!data) return null
+
+  return buildReplyTree(k(threadId), data.messages, data.replyIndex)
 })
 
 /**
  * Get reply count for a message (direct + nested)
+ * Uses the active channel's replyIndex
  */
 export function getReplyCount(messageId: bigint): number {
-  const replyIds = store.replyIndex.get(messageId) || []
+  const data = activeChannelData()
+  if (!data) return 0
+
+  const msgKey = k(messageId)
+  const replyIds = data.replyIndex[msgKey] || []
   let count = replyIds.length
 
   // Add nested reply counts recursively
   for (const replyId of replyIds) {
-    count += getReplyCount(replyId)
+    count += getReplyCountFromData(replyId, data.replyIndex)
+  }
+
+  return count
+}
+
+function getReplyCountFromData(messageId: string, replyIndex: Record<string, string[]>): number {
+  const replyIds = replyIndex[messageId] || []
+  let count = replyIds.length
+
+  for (const replyId of replyIds) {
+    count += getReplyCountFromData(replyId, replyIndex)
   }
 
   return count
@@ -231,7 +258,12 @@ export const composePlaceholder = createMemo<string>(() => {
 export const replyTargetMessage = createMemo<Message | null>(() => {
   const { replyToId } = store.compose
   if (replyToId === null) return null
-  return store.messages.get(replyToId) || null
+
+  // Look up in the active channel's messages
+  const data = activeChannelData()
+  if (!data) return null
+
+  return data.messages[k(replyToId)] || null
 })
 
 /**

@@ -1,8 +1,20 @@
-// Global application store using SolidJS signals
+// Global application store using SolidJS signals + createStore
 // Manages all client state: connection, channels, messages, UI state
 
-import { createSignal, createMemo } from 'solid-js'
+import { createSignal } from 'solid-js'
+import { createStore, produce } from 'solid-js/store'
 import type { Channel, Message } from '../SuperChatCodec'
+
+// Stringify bigint for use as object key (BigInt can't be object keys)
+export const k = (id: bigint) => String(id)
+
+// Per-channel message data stored in a SolidJS store for deep fine-grained reactivity
+export interface ChannelData {
+  messages: Record<string, Message>      // msgId (string) -> Message
+  threadIds: string[]                    // root message IDs for this channel
+  replyIndex: Record<string, string[]>   // parentId -> child message IDs
+  latestMessageId: string | null         // highest message ID seen (for after_id on revisit)
+}
 
 // Connection state
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error'
@@ -87,61 +99,23 @@ export interface TrafficStats {
   throttleBytesPerSecond: number
 }
 
-// Store interface
-export interface AppStore {
-  // Connection state
-  connectionState: ConnectionState
-  serverUrl: string
-  nickname: string
-  isRegistered: boolean
-  errorMessage: string
-
-  // Data (normalized)
-  channels: Map<bigint, Channel>
-  messages: Map<bigint, Message>
-
-  // Message indexes (for efficient lookups)
-  threadIndex: Map<bigint, bigint[]> // channelId -> rootMessageIds (parent_id.present === 0)
-  replyIndex: Map<bigint, bigint[]> // parentId -> childMessageIds
-
-  // UI state
-  activeChannelId: bigint | null
-  currentView: ViewState
-  activeThreadId: bigint | null // When viewing a specific thread
-  compose: ComposeState
-
-  // Subscription tracking
-  subscribedChannelId: bigint | null
-  subscribedThreadId: bigint | null
-
-  // Traffic stats
-  traffic: TrafficStats
-
-  // Server selection
-  servers: Array<{
-    name: string
-    wsUrl: string
-    wssUrl: string
-    status: 'checking' | 'online' | 'offline'
-    isSecure: boolean
-  }>
-  selectedServerIndex: number
-}
+// Per-channel message store (SolidJS createStore for deep reactivity)
+export const [channelStore, setChannelStore] = createStore<{
+  data: Record<string, ChannelData>
+}>({
+  data: {}
+})
 
 // Create signals for each store property
 const [connectionState, setConnectionState] = createSignal<ConnectionState>('disconnected')
 const [serverUrl, setServerUrl] = createSignal<string>('')
 const [nickname, setNickname] = createSignal<string>('')
+const [userId, setUserId] = createSignal<bigint | null>(null)
 const [isRegistered, setIsRegistered] = createSignal<boolean>(false)
 const [errorMessage, setErrorMessage] = createSignal<string>('')
 
 // Data stores (using Maps for O(1) lookups)
 const [channels, setChannels] = createSignal<Map<bigint, Channel>>(new Map())
-const [messages, setMessages] = createSignal<Map<bigint, Message>>(new Map())
-
-// Indexes
-const [threadIndex, setThreadIndex] = createSignal<Map<bigint, bigint[]>>(new Map())
-const [replyIndex, setReplyIndex] = createSignal<Map<bigint, bigint[]>>(new Map())
 
 // UI state
 const [activeChannelId, setActiveChannelId] = createSignal<bigint | null>(null)
@@ -175,10 +149,6 @@ const [traffic, setTraffic] = createSignal<TrafficStats>({
   throttleBytesPerSecond: 0
 })
 
-// Server selection
-const [servers, setServers] = createSignal<AppStore['servers']>([])
-const [selectedServerIndex, setSelectedServerIndex] = createSignal<number>(-1)
-
 // DM state
 const [dmChannels, setDmChannels] = createSignal<Map<bigint, DMChannel>>(new Map())
 const [pendingDMInvites, setPendingDMInvites] = createSignal<Map<bigint, DMInvite>>(new Map())
@@ -211,6 +181,9 @@ export const store = {
   get nickname() { return nickname() },
   setNickname,
 
+  get userId() { return userId() },
+  setUserId,
+
   get isRegistered() { return isRegistered() },
   setIsRegistered,
 
@@ -220,16 +193,6 @@ export const store = {
   // Data
   get channels() { return channels() },
   setChannels,
-
-  get messages() { return messages() },
-  setMessages,
-
-  // Indexes
-  get threadIndex() { return threadIndex() },
-  setThreadIndex,
-
-  get replyIndex() { return replyIndex() },
-  setReplyIndex,
 
   // UI state
   get activeChannelId() { return activeChannelId() },
@@ -271,13 +234,6 @@ export const store = {
   // Traffic
   get traffic() { return traffic() },
   setTraffic,
-
-  // Servers
-  get servers() { return servers() },
-  setServers,
-
-  get selectedServerIndex() { return selectedServerIndex() },
-  setSelectedServerIndex,
 
   // DM state
   get dmChannels() { return dmChannels() },
@@ -346,25 +302,125 @@ export const storeActions = {
     })
   },
 
-  // Add or update a message
+  // Ensure a channel's data slot exists
+  ensureChannelData(channelId: bigint) {
+    const key = k(channelId)
+    if (!channelStore.data[key]) {
+      setChannelStore('data', key, {
+        messages: {},
+        threadIds: [],
+        replyIndex: {},
+        latestMessageId: null
+      })
+    }
+  },
+
+  // Add or update a single message in its channel's store
   addMessage(message: Message) {
-    setMessages(prev => new Map(prev).set(message.message_id, message))
+    const chKey = k(message.channel_id)
+    this.ensureChannelData(message.channel_id)
+    const msgKey = k(message.message_id)
+
+    // Add message
+    setChannelStore('data', chKey, 'messages', msgKey, message)
+
+    // Update latestMessageId
+    const current = channelStore.data[chKey].latestMessageId
+    if (!current || BigInt(msgKey) > BigInt(current)) {
+      setChannelStore('data', chKey, 'latestMessageId', msgKey)
+    }
+
+    // Update indexes incrementally
+    if (message.parent_id.present === 0) {
+      // Root message — add to threadIds if not already there
+      const existing = channelStore.data[chKey].threadIds
+      if (!existing.includes(msgKey)) {
+        setChannelStore('data', chKey, 'threadIds', [...existing, msgKey])
+      }
+    } else {
+      // Reply — add to replyIndex
+      const parentKey = k(message.parent_id.value!)
+      const existing = channelStore.data[chKey].replyIndex[parentKey] || []
+      if (!existing.includes(msgKey)) {
+        setChannelStore('data', chKey, 'replyIndex', parentKey, [...existing, msgKey])
+      }
+    }
   },
 
-  // Add or update multiple messages
+  // Add or update multiple messages (batch, grouped by channel)
   addMessages(messageList: Message[]) {
-    setMessages(prev => {
-      const newMap = new Map(prev)
-      messageList.forEach(msg => newMap.set(msg.message_id, msg))
-      return newMap
-    })
+    // Group by channel
+    const byChannel = new Map<string, Message[]>()
+    for (const msg of messageList) {
+      const chKey = k(msg.channel_id)
+      let list = byChannel.get(chKey)
+      if (!list) {
+        list = []
+        byChannel.set(chKey, list)
+      }
+      list.push(msg)
+    }
+
+    for (const [chKey, msgs] of byChannel) {
+      const channelId = BigInt(chKey)
+      this.ensureChannelData(channelId)
+
+      // Build messages dict, threadIds, replyIndex, and latestMessageId for this batch
+      const newMessages: Record<string, Message> = { ...channelStore.data[chKey].messages }
+      const threadIdSet = new Set(channelStore.data[chKey].threadIds)
+      const newReplyIndex: Record<string, string[]> = {}
+      // Copy existing replyIndex
+      for (const [parentKey, children] of Object.entries(channelStore.data[chKey].replyIndex)) {
+        newReplyIndex[parentKey] = [...children]
+      }
+
+      let latestId = channelStore.data[chKey].latestMessageId
+
+      for (const msg of msgs) {
+        const msgKey = k(msg.message_id)
+        newMessages[msgKey] = msg
+
+        if (!latestId || BigInt(msgKey) > BigInt(latestId)) {
+          latestId = msgKey
+        }
+
+        if (msg.parent_id.present === 0) {
+          threadIdSet.add(msgKey)
+        } else {
+          const parentKey = k(msg.parent_id.value!)
+          if (!newReplyIndex[parentKey]) {
+            newReplyIndex[parentKey] = []
+          }
+          if (!newReplyIndex[parentKey].includes(msgKey)) {
+            newReplyIndex[parentKey].push(msgKey)
+          }
+        }
+      }
+
+      setChannelStore('data', chKey, {
+        messages: newMessages,
+        threadIds: Array.from(threadIdSet),
+        replyIndex: newReplyIndex,
+        latestMessageId: latestId
+      })
+    }
   },
 
-  // Clear all messages (e.g., when leaving channel)
+  // Clear all per-channel message data (e.g., on disconnect)
   clearMessages() {
-    setMessages(new Map())
-    setThreadIndex(new Map())
-    setReplyIndex(new Map())
+    setChannelStore('data', {})
+  },
+
+  // Check if a channel has been loaded
+  isChannelLoaded(channelId: bigint): boolean {
+    return !!channelStore.data[k(channelId)]
+  },
+
+  // Get the latest message ID for a channel (for after_id incremental fetch)
+  getChannelLatestMessageId(channelId: bigint): bigint | null {
+    const data = channelStore.data[k(channelId)]
+    if (!data?.latestMessageId) return null
+    return BigInt(data.latestMessageId)
   },
 
   // Update compose state
@@ -400,6 +456,7 @@ export const storeActions = {
   // Reset connection state (preserves nickname/serverUrl — they're user identity, not session state)
   resetConnection() {
     setConnectionState('disconnected')
+    setUserId(null)
     setIsRegistered(false)
     setNicknameIsRegistered(false)
     setErrorMessage('')
@@ -426,29 +483,57 @@ export const storeActions = {
     setActiveModal(ModalState.None)
   },
 
+  // Find which channel a message belongs to (scans all channels)
+  findMessageChannel(messageId: bigint): string | null {
+    const msgKey = k(messageId)
+    for (const chKey of Object.keys(channelStore.data)) {
+      if (channelStore.data[chKey].messages[msgKey]) {
+        return chKey
+      }
+    }
+    return null
+  },
+
   // Update a message's content and edited_at timestamp (for MESSAGE_EDITED broadcast)
   updateMessageContent(messageId: bigint, content: string, editedAt: bigint) {
-    setMessages(prev => {
-      const existing = prev.get(messageId)
-      if (!existing) return prev
-      const newMap = new Map(prev)
-      newMap.set(messageId, {
-        ...existing,
-        content,
-        edited_at: { present: 1, value: editedAt }
-      })
-      return newMap
+    const msgKey = k(messageId)
+    const chKey = this.findMessageChannel(messageId)
+    if (!chKey) return
+
+    setChannelStore('data', chKey, 'messages', msgKey, {
+      ...channelStore.data[chKey].messages[msgKey],
+      content,
+      edited_at: { present: 1, value: editedAt }
     })
   },
 
-  // Remove a message from the store (for MESSAGE_DELETED broadcast)
-  removeMessage(messageId: bigint) {
-    setMessages(prev => {
-      if (!prev.has(messageId)) return prev
-      const newMap = new Map(prev)
-      newMap.delete(messageId)
-      return newMap
+  // Soft-delete a message: replace content with deletion marker, keep the message
+  // and its reply tree intact so children aren't orphaned
+  softDeleteMessage(messageId: bigint, replacementContent: string, deletedAt: bigint) {
+    const msgKey = k(messageId)
+    const chKey = this.findMessageChannel(messageId)
+    if (!chKey) return
+
+    const msg = channelStore.data[chKey]?.messages[msgKey]
+    if (!msg) return
+
+    setChannelStore('data', chKey, 'messages', msgKey, {
+      ...msg,
+      content: replacementContent,
+      edited_at: { present: 1, value: deletedAt }
     })
+
+    // Decrement parent's reply_count if this is a reply
+    if (msg.parent_id.present === 1 && msg.parent_id.value !== undefined) {
+      const parentKey = k(msg.parent_id.value)
+      const parent = channelStore.data[chKey]?.messages[parentKey]
+      if (parent && parent.reply_count > 0) {
+        setChannelStore('data', chKey, 'messages', parentKey, {
+          ...parent,
+          reply_count: parent.reply_count - 1
+        })
+      }
+    }
   },
 
   // Remove a channel from the store (for CHANNEL_DELETED broadcast)
@@ -459,6 +544,14 @@ export const storeActions = {
       newMap.delete(channelId)
       return newMap
     })
+
+    // Clean up per-channel message data
+    const chKey = k(channelId)
+    if (channelStore.data[chKey]) {
+      setChannelStore(produce(state => {
+        delete state.data[chKey]
+      }))
+    }
 
     // If the deleted channel is the active one, reset to channel list
     if (activeChannelId() === channelId) {

@@ -45,7 +45,7 @@ const ThreadDetailPage: Component = () => {
   // Only isConnected() and route params are tracked — subscribedThreadId
   // is read inside untrack() to avoid re-running on subscription confirmation.
   createEffect(() => {
-    if (!isConnected()) return
+    if (!isConnected() || !params.threadId || !params.channelId) return
 
     const threadId = BigInt(params.threadId)
     const channelId = BigInt(params.channelId)
@@ -90,10 +90,27 @@ const ThreadDetailPage: Component = () => {
     storeActions.openModal(ModalState.Compose)
   }
 
+  const handleEdit = (message: Message) => {
+    storeActions.updateCompose({
+      editMessageId: message.message_id,
+      editMessageContent: message.content,
+      replyToId: null,
+      replyToMessage: null
+    })
+    storeActions.openModal(ModalState.Compose)
+  }
+
+  const handleDelete = (messageId: bigint) => {
+    store.setConfirmDeleteMessageId(messageId)
+    storeActions.openModal(ModalState.ConfirmDelete)
+  }
+
   return (
     <ThreadDetail
       thread={currentThread()}
       onReply={handleReply}
+      onEdit={handleEdit}
+      onDelete={handleDelete}
       onBack={handleBack}
       selectedMessageId={selectedMessageId()}
       isFocused={store.focusArea === FocusArea.Content}

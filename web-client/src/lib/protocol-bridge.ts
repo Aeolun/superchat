@@ -4,7 +4,6 @@
 
 import { SuperChatEventClient, type SuperChatEvent } from './superchat-events'
 import { store, storeActions, ModalState } from '../store/app-store'
-import { rebuildIndexes, addMessageToIndexes } from './message-indexer'
 import { computeSharedSecret, deriveChannelKey, decryptMessage, KEY_TYPE_GENERATED } from './crypto'
 import { safeLog } from './utils/safe-log'
 import type { ChannelCreated, MessageEdited, MessageDeleted, ChannelDeleted, ServerPresence, ChannelPresence, AuthResponse, RegisterResponse, UserInfo, KeyRequired, DMReady, DMPending, DMRequest, DMParticipantLeft, DMDeclined, NewMessage, Message } from '../SuperChatCodec'
@@ -248,13 +247,14 @@ export class ProtocolBridge {
       }
     }
 
-    // Add all messages to store
+    // Add all messages to per-channel store (indexing handled by storeActions)
     storeActions.addMessages(messages)
 
-    // Rebuild indexes from scratch
-    const { threadIndex, replyIndex } = rebuildIndexes(store.messages)
-    store.setThreadIndex(threadIndex)
-    store.setReplyIndex(replyIndex)
+    // If the response was empty, still mark the active channel as loaded
+    // so the UI shows "no messages" instead of a loading spinner
+    if (messages.length === 0 && store.activeChannelId !== null) {
+      storeActions.ensureChannelData(store.activeChannelId)
+    }
   }
 
   /**
@@ -291,17 +291,8 @@ export class ProtocolBridge {
       storeActions.addDMChannel({ ...dm, unreadCount: dm.unreadCount + 1 })
     }
 
-    // Add message to store
+    // Add message to per-channel store (indexing handled by storeActions)
     storeActions.addMessage(message)
-
-    // Update indexes incrementally
-    const { threadIndex, replyIndex } = addMessageToIndexes(
-      store.threadIndex,
-      store.replyIndex,
-      message
-    )
-    store.setThreadIndex(threadIndex)
-    store.setReplyIndex(replyIndex)
   }
 
   /**
@@ -371,12 +362,7 @@ export class ProtocolBridge {
       return
     }
 
-    storeActions.removeMessage(data.message_id)
-
-    // Rebuild indexes after removal
-    const { threadIndex, replyIndex } = rebuildIndexes(store.messages)
-    store.setThreadIndex(threadIndex)
-    store.setReplyIndex(replyIndex)
+    storeActions.softDeleteMessage(data.message_id, data.message, data.deleted_at ?? 0n)
   }
 
   /**
@@ -442,9 +428,10 @@ export class ProtocolBridge {
    */
   private handleAuthResponse(response: AuthResponse): void {
     if (response.success === 1) {
-      console.log('Authentication successful:', response.nickname)
+      console.log('Authentication successful:', response.nickname, 'userId:', response.user_id)
       store.setIsRegistered(true)
       store.setNickname(response.nickname)
+      store.setUserId(response.user_id)
       store.setPendingAuthNickname('')
       store.setAuthError('')
       storeActions.closeModal()

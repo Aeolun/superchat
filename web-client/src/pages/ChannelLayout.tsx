@@ -106,7 +106,7 @@ const ChannelLayout: Component<ParentProps> = (props) => {
           </span>
           <h3 class="font-bold text-lg">{currentChannel()!.name}</h3>
           <Show when={store.subscribedChannelId === currentChannel()!.channel_id}>
-            <span class="badge badge-success badge-sm">Live</span>
+            <span class="w-2.5 h-2.5 rounded-full bg-success" title="Connected" />
           </Show>
           <Show when={isCurrentChannelDM()}>
             <Show when={currentDMChannel()?.isEncrypted}>

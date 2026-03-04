@@ -4,9 +4,14 @@
 import { Component, Show, Index } from 'solid-js'
 import type { Message } from '../SuperChatCodec'
 import { formatMessageTime, formatDateSeparator, shouldShowDateSeparator } from '../lib/utils/date-formatting'
+import { isOwnMessage } from '../lib/utils/nickname'
+import Icon from './Icon'
 
 interface ChatViewProps {
   messages: Message[]
+  loading: boolean
+  onEdit: (message: Message) => void
+  onDelete: (messageId: bigint) => void
 }
 
 const ChatView: Component<ChatViewProps> = (props) => {
@@ -18,7 +23,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
         when={props.messages.length > 0}
         fallback={
           <div class="text-center text-base-content/50 py-8">
-            <p>No messages yet. Start a conversation!</p>
+            <Show when={props.loading} fallback={<p>No messages yet. Start a conversation!</p>}>
+              <span class="loading loading-spinner loading-md my-12"></span>
+            </Show>
           </div>
         }
       >
@@ -30,6 +37,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
                 prevMessage?.created_at || null,
                 message().created_at
               )
+              const isOwn = () => isOwnMessage(message())
 
               return (
                 <>
@@ -42,14 +50,36 @@ const ChatView: Component<ChatViewProps> = (props) => {
                       <div class="flex-1 border-t border-base-300"></div>
                     </div>
                   </Show>
-                  <div class="p-3 bg-base-200 rounded-lg hover:bg-base-300 transition-colors">
+                  <div class="p-3 bg-base-200 rounded-lg hover:bg-base-300 transition-colors relative group">
                     <div class="flex items-baseline gap-2 mb-1">
                       <span class="font-semibold text-xs text-secondary">{message().author_nickname}</span>
                       <span class="text-xs text-base-content/50">
                         {formatMessageTime(message().created_at)}
                       </span>
+                      <Show when={message().edited_at?.present === 1}>
+                        <span class="text-xs text-base-content/40 italic">(edited)</span>
+                      </Show>
                     </div>
-                    <div class="text-base whitespace-pre-wrap">{message().content}</div>
+                    <div class="text-base whitespace-pre-wrap pr-16">{message().content}</div>
+
+                    <Show when={isOwn()}>
+                      <div class="flex gap-0.5 absolute top-2 right-2 md:opacity-0 md:group-hover:opacity-100 md:transition-opacity">
+                        <button
+                          onClick={() => props.onEdit(message())}
+                          class="btn btn-xs btn-ghost"
+                          title="Edit"
+                        >
+                          <Icon name="pencil" size={16} />
+                        </button>
+                        <button
+                          onClick={() => props.onDelete(message().message_id)}
+                          class="btn btn-xs btn-ghost text-error/70 hover:text-error"
+                          title="Delete"
+                        >
+                          <Icon name="trash" size={16} />
+                        </button>
+                      </div>
+                    </Show>
                   </div>
                 </>
               )

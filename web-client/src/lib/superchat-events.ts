@@ -216,8 +216,8 @@ export class SuperChatEventClient {
   /**
    * List messages in a channel
    */
-  listMessages(channelId: bigint, fromMessageId: bigint = 0n, limit: number = 100): void {
-    this.client.listMessages(channelId, fromMessageId, limit)
+  listMessages(channelId: bigint, fromMessageId: bigint = 0n, limit: number = 100, afterId?: bigint): void {
+    this.client.listMessages(channelId, fromMessageId, limit, afterId)
   }
 
   /**

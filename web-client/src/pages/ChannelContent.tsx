@@ -1,11 +1,12 @@
-import { Component, Show, createEffect, createSignal, onMount } from 'solid-js'
+import { Component, Show, createEffect, createSignal, createMemo, onMount } from 'solid-js'
 import { useParams, useNavigate } from '@solidjs/router'
-import { store, storeActions, ViewState, FocusArea } from '../store/app-store'
+import { store, storeActions, ViewState, ModalState, FocusArea } from '../store/app-store'
 import { selectors } from '../store/selectors'
 import { getProtocolBridge } from '../lib/protocol-bridge'
 import { encryptMessage } from '../lib/crypto'
 import ChatView from '../components/ChatView'
 import ThreadList from '../components/ThreadList'
+import type { Message } from '../SuperChatCodec'
 
 const ChannelContent: Component = () => {
   const params = useParams()
@@ -22,6 +23,13 @@ const ChannelContent: Component = () => {
   const currentThreadList = selectors.currentThreadList
   const isCurrentChannelChat = selectors.isCurrentChannelChat
   const isCurrentChannelForum = selectors.isCurrentChannelForum
+
+  // True when we haven't received any data for this channel yet
+  const isChannelLoading = createMemo(() => {
+    const channelId = store.activeChannelId
+    if (channelId === null) return false
+    return !storeActions.isChannelLoaded(channelId)
+  })
 
   // Set the right ViewState
   onMount(() => {
@@ -115,6 +123,21 @@ const ChannelContent: Component = () => {
     navigate(`/channel/${params.channelId}/thread/${threadId}`)
   }
 
+  const handleEdit = (message: Message) => {
+    storeActions.updateCompose({
+      editMessageId: message.message_id,
+      editMessageContent: message.content,
+      replyToId: null,
+      replyToMessage: null
+    })
+    storeActions.openModal(ModalState.Compose)
+  }
+
+  const handleDelete = (messageId: bigint) => {
+    store.setConfirmDeleteMessageId(messageId)
+    storeActions.openModal(ModalState.ConfirmDelete)
+  }
+
   return (
     <>
       <Show when={isCurrentChannelChat()}>
@@ -127,6 +150,9 @@ const ChannelContent: Component = () => {
           >
             <ChatView
               messages={currentChannelMessages()}
+              loading={isChannelLoading()}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
             />
           </div>
           {/* Scroll indicator */}
@@ -163,6 +189,7 @@ const ChannelContent: Component = () => {
       <Show when={isCurrentChannelForum()}>
         <ThreadList
           threads={currentThreadList()}
+          loading={isChannelLoading()}
           onThreadClick={handleThreadClick}
           selectedIndex={store.selectedMessageIndex}
           isFocused={store.focusArea === FocusArea.Content}

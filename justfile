@@ -1,0 +1,158 @@
+# Get version from git tags
+version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
+
+# List available recipes
+default:
+    @just --list
+
+# Run all tests (excludes GUI client which requires system dependencies)
+test:
+    go test $(go list ./... | grep -v /cmd/client-gui) -race
+
+# Generate coverage for all packages (combined)
+coverage:
+    go test $(go list ./... | grep -v /cmd/client-gui) -coverprofile=coverage.out -covermode=atomic
+    go tool cover -func=coverage.out
+
+# Generate HTML coverage report (combined)
+coverage-html:
+    go test $(go list ./... | grep -v /cmd/client-gui) -coverprofile=coverage.out -covermode=atomic
+    go tool cover -html=coverage.out -o coverage.html
+    @echo "Coverage report generated: coverage.html"
+
+# Generate separate lcov files per package
+coverage-lcov:
+    @echo "Generating coverage for protocol package..."
+    go test ./pkg/protocol/... -coverprofile=protocol.out -covermode=atomic
+    gcov2lcov -infile=protocol.out -outfile=protocol.lcov
+    @echo "Generating coverage for server package..."
+    go test ./pkg/server/... -coverprofile=server.out -covermode=atomic
+    gcov2lcov -infile=server.out -outfile=server.lcov
+    @echo "Generating coverage for client package..."
+    go test ./pkg/client/... -coverprofile=client.out -covermode=atomic
+    gcov2lcov -infile=client.out -outfile=client.lcov
+    @echo "Generating coverage for database package..."
+    go test ./pkg/database/... -coverprofile=database.out -covermode=atomic
+    gcov2lcov -infile=database.out -outfile=database.lcov
+    @echo ""
+    @echo "LCOV coverage reports generated:"
+    @echo "  - protocol.lcov  (pkg/protocol)"
+    @echo "  - server.lcov    (pkg/server)"
+    @echo "  - client.lcov    (pkg/client)"
+    @echo "  - database.lcov  (pkg/database)"
+
+# Check protocol coverage (must be at least 85%)
+coverage-protocol:
+    #!/usr/bin/env bash
+    go test ./pkg/protocol/... -coverprofile=protocol.out -covermode=atomic
+    COVERAGE=$(go tool cover -func=protocol.out | grep total | awk '{print $3}' | sed 's/%//')
+    echo "Protocol coverage: ${COVERAGE}%"
+    if (( $(echo "$COVERAGE < 85" | bc -l) )); then
+        echo "ERROR: Protocol coverage must be at least 85%"
+        exit 1
+    fi
+
+# Show coverage summary for each package
+coverage-summary:
+    @echo "=== Protocol Coverage ==="
+    @go tool cover -func=protocol.out | grep total || echo "Run 'just coverage-lcov' first"
+    @echo ""
+    @echo "=== Server Coverage ==="
+    @go tool cover -func=server.out | grep total || echo "Run 'just coverage-lcov' first"
+    @echo ""
+    @echo "=== Client Coverage ==="
+    @go tool cover -func=client.out | grep total || echo "Run 'just coverage-lcov' first"
+    @echo ""
+    @echo "=== Database Coverage ==="
+    @go tool cover -func=database.out | grep total || echo "Run 'just coverage-lcov' first"
+
+# Run fuzzing
+fuzz:
+    go test ./pkg/protocol -fuzz=FuzzDecodeFrame -fuzztime=5m
+
+# Build server and terminal client
+build:
+    @echo "Building with version: {{version}}"
+    go build -ldflags="-X main.Version={{version}}" -o superchat-server ./cmd/server
+    go build -ldflags="-X main.Version={{version}}" -o superchat ./cmd/client
+    @echo "Built: superchat-server, superchat"
+
+# Build desktop client (requires wails and bun)
+build-desktop:
+    @echo "Building desktop client..."
+    cd superchat-desktop && bun install && wails build -tags webkit2_41
+    cp superchat-desktop/build/bin/superchat-desktop ./superchat-desktop-bin
+    @echo "Built: superchat-desktop-bin"
+
+# Build legacy GUI client (Gio-based, deprecated)
+build-gui-legacy:
+    go build -ldflags="-X main.Version={{version}}" -o superchat-gui-legacy ./cmd/client-gui
+    @echo "Built: superchat-gui-legacy"
+
+# Run server
+run-server:
+    go run ./cmd/server
+
+# Run terminal client
+run-client:
+    go run ./cmd/client
+
+# Run web client dev server
+dev-web:
+    cd web-client && npx vite
+
+# Build web client and copy to website
+website:
+    @echo "Building web client..."
+    cd web-client && npm run build
+    @echo "Copying to website/public/app/..."
+    cp web-client/index.html website/public/app/
+    cp web-client/dist/main.js website/public/app/dist/
+    cp web-client/dist/main.js.map website/public/app/dist/
+    @echo "Web client built and copied successfully!"
+
+# Run website dev server
+run-website:
+    cd website && npm run dev
+
+# Build all Docker images
+docker-build:
+    @echo "Building Docker images with version: {{version}}"
+    VERSION={{version}} depot bake --load
+
+# Build and push all Docker images
+docker-build-push:
+    @echo "Building and pushing Docker images with version: {{version}}"
+    VERSION={{version}} depot bake --push
+
+# Build only server Docker image
+docker-build-server:
+    @echo "Building server Docker image with version: {{version}}"
+    VERSION={{version}} depot bake --load server
+
+# Build only website Docker image
+docker-build-website:
+    @echo "Building website Docker image with version: {{version}}"
+    VERSION={{version}} depot bake --load website
+
+# Run server in Docker
+docker-run:
+    docker run -d \
+        --name superchat \
+        -p 6465:6465 \
+        -v superchat-data:/data \
+        aeolun/superchat:latest
+
+# Stop and remove Docker container
+docker-stop:
+    docker stop superchat || true
+    docker rm superchat || true
+
+# Clean coverage files and binaries
+clean:
+    rm -f coverage.out coverage.html
+    rm -f protocol.out protocol.lcov
+    rm -f server.out server.lcov
+    rm -f client.out client.lcov
+    rm -f database.out database.lcov
+    rm -f superchat-server superchat superchat-desktop-bin superchat-gui-legacy

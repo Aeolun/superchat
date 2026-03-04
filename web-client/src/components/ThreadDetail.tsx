@@ -4,6 +4,7 @@
 import { Component, For, Show } from 'solid-js'
 import type { Message } from '../SuperChatCodec'
 import { formatMessageTime } from '../lib/utils/date-formatting'
+import { isOwnMessage } from '../lib/utils/nickname'
 import Icon from './Icon'
 
 // Message with nested replies (from selector)
@@ -14,10 +15,57 @@ interface MessageWithReplies extends Message {
 interface ThreadDetailProps {
   thread: MessageWithReplies | null
   onReply: (messageId: bigint, message: Message) => void
+  onEdit: (message: Message) => void
+  onDelete: (messageId: bigint) => void
   onBack: () => void
   selectedMessageId: bigint | null
   isFocused: boolean
 }
+
+/** Action buttons shown on each message (reply, edit, delete) */
+const MessageActions: Component<{
+  message: Message
+  onReply: (messageId: bigint, message: Message) => void
+  onEdit: (message: Message) => void
+  onDelete: (messageId: bigint) => void
+}> = (props) => {
+  const isOwn = () => isOwnMessage(props.message)
+
+  return (
+    <div class="flex gap-0.5 absolute top-2 right-2">
+      <button
+        onClick={() => props.onReply(props.message.message_id, props.message)}
+        class="btn btn-xs btn-ghost"
+        title="Reply"
+      >
+        <Icon name="arrow-bend-up-left" size={16} />
+      </button>
+      <Show when={isOwn()}>
+        <button
+          onClick={() => props.onEdit(props.message)}
+          class="btn btn-xs btn-ghost"
+          title="Edit"
+        >
+          <Icon name="pencil" size={16} />
+        </button>
+        <button
+          onClick={() => props.onDelete(props.message.message_id)}
+          class="btn btn-xs btn-ghost text-error/70 hover:text-error"
+          title="Delete"
+        >
+          <Icon name="trash" size={16} />
+        </button>
+      </Show>
+    </div>
+  )
+}
+
+/** Small "(edited)" indicator */
+const EditedIndicator: Component<{ message: Message }> = (props) => (
+  <Show when={props.message.edited_at?.present === 1}>
+    <span class="text-xs text-base-content/40 italic">(edited)</span>
+  </Show>
+)
 
 const ThreadDetail: Component<ThreadDetailProps> = (props) => {
   const isRootSelected = () => props.isFocused && props.thread && props.selectedMessageId === props.thread.message_id
@@ -32,23 +80,29 @@ const ThreadDetail: Component<ThreadDetailProps> = (props) => {
               isRootSelected() ? 'ring-2 ring-primary ring-offset-2' : ''
             }`}>
               <div class="card-body p-4">
-                {/* Reply button in top-right corner */}
-                <button
-                  onClick={() => props.onReply(thread().message_id, thread())}
-                  class="btn btn-xs btn-ghost absolute top-2 right-2"
-                  title="Reply to this message"
-                >
-                  <Icon name="arrow-bend-up-left" size={16} />
-                </button>
+                <MessageActions
+                  message={thread()}
+                  onReply={props.onReply}
+                  onEdit={props.onEdit}
+                  onDelete={props.onDelete}
+                />
 
                 <div class="flex items-baseline gap-2 mb-2">
                   <span class="font-semibold text-xs text-secondary">{thread().author_nickname}</span>
                   <span class="text-xs text-base-content/50">
                     {formatMessageTime(thread().created_at)}
                   </span>
+                  <EditedIndicator message={thread()} />
                 </div>
-                <div class="text-base whitespace-pre-wrap pr-12">
-                  {thread().content}
+                <div class="text-base whitespace-pre-wrap pr-20">
+                  {(() => {
+                    const idx = thread().content.indexOf('\n\n')
+                    if (idx < 0) return thread().content
+                    return <>
+                      <span class="font-bold">{thread().content.slice(0, idx)}</span>
+                      {thread().content.slice(idx)}
+                    </>
+                  })()}
                 </div>
               </div>
             </div>
@@ -62,6 +116,8 @@ const ThreadDetail: Component<ThreadDetailProps> = (props) => {
                       message={reply}
                       depth={1}
                       onReply={props.onReply}
+                      onEdit={props.onEdit}
+                      onDelete={props.onDelete}
                       selectedMessageId={props.selectedMessageId}
                       isFocused={props.isFocused}
                     />
@@ -81,6 +137,8 @@ interface MessageWithRepliesComponentProps {
   message: MessageWithReplies
   depth: number
   onReply: (messageId: bigint, message: Message) => void
+  onEdit: (message: Message) => void
+  onDelete: (messageId: bigint) => void
   selectedMessageId: bigint | null
   isFocused: boolean
 }
@@ -94,22 +152,21 @@ const MessageWithRepliesComponent: Component<MessageWithRepliesComponentProps> =
         isSelected() ? 'ring-2 ring-primary ring-offset-1' : ''
       }`}>
         <div class="card-body p-3">
-          {/* Reply button in top-right corner */}
-          <button
-            onClick={() => props.onReply(props.message.message_id, props.message)}
-            class="btn btn-xs btn-ghost absolute top-2 right-2"
-            title="Reply to this message"
-          >
-            <Icon name="arrow-bend-up-left" size={16} />
-          </button>
+          <MessageActions
+            message={props.message}
+            onReply={props.onReply}
+            onEdit={props.onEdit}
+            onDelete={props.onDelete}
+          />
 
           <div class="flex items-baseline gap-2 mb-1">
             <span class="font-semibold text-xs text-secondary">{props.message.author_nickname}</span>
             <span class="text-xs text-base-content/50">
               {formatMessageTime(props.message.created_at)}
             </span>
+            <EditedIndicator message={props.message} />
           </div>
-          <div class="text-base whitespace-pre-wrap pr-12">
+          <div class="text-base whitespace-pre-wrap pr-20">
             {props.message.content}
           </div>
         </div>
@@ -124,6 +181,8 @@ const MessageWithRepliesComponent: Component<MessageWithRepliesComponentProps> =
                 message={reply}
                 depth={props.depth + 1}
                 onReply={props.onReply}
+                onEdit={props.onEdit}
+                onDelete={props.onDelete}
                 selectedMessageId={props.selectedMessageId}
                 isFocused={props.isFocused}
               />

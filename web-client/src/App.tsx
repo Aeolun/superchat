@@ -16,6 +16,7 @@ import { DM_TARGET_BY_USER_ID, DM_TARGET_BY_SESSION_ID, type Message } from './S
 import Icon from './components/Icon'
 import { encryptMessage } from './lib/crypto'
 import { safeLog } from './lib/utils/safe-log'
+import { isOwnMessage } from './lib/utils/nickname'
 import {
   CommandExecutor,
   ViewState as CmdViewState,
@@ -244,7 +245,7 @@ const App: Component<ParentProps> = (props) => {
         const idx = store.selectedMessageIndex
         if (idx >= 0 && idx < messages.length) {
           const msg = messages[idx]
-          if (msg.author_nickname === store.nickname) {
+          if (isOwnMessage(msg)) {
             storeActions.updateCompose({
               editMessageId: msg.message_id,
               editMessageContent: msg.content,
@@ -299,8 +300,12 @@ const App: Component<ParentProps> = (props) => {
     if (savedUrl && savedNickname) {
       const throttleBps = savedThrottle ? parseInt(savedThrottle, 10) : 0
       handleConnect(savedUrl, savedNickname, throttleBps)
+      // Keep checkingCredentials true — the connecting/connected state
+      // will hide the ServerSelector. Only clear it once we know we're
+      // NOT auto-connecting (no saved credentials).
+    } else {
+      setCheckingCredentials(false)
     }
-    setCheckingCredentials(false)
   })
 
   // Update window title based on current view
@@ -332,7 +337,18 @@ const App: Component<ParentProps> = (props) => {
     const channelId = store.activeChannelId
     if (channelId !== null) {
       safeLog('Active channel changed to:', channelId)
-      client.listMessages(channelId, 0n, 100)
+
+      if (storeActions.isChannelLoaded(channelId)) {
+        // Already loaded — fetch only messages we missed (after_id)
+        const latestId = storeActions.getChannelLatestMessageId(channelId)
+        if (latestId) {
+          client.listMessages(channelId, 0n, 100, latestId)
+        }
+      } else {
+        // First visit — full fetch
+        client.listMessages(channelId, 0n, 100)
+      }
+
       client.subscribeChannel(channelId)
     }
   })

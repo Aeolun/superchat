@@ -1,95 +1,91 @@
-# Current Task: DM Flow Improvements & Status Message UX
+# Plan: Add Hash-Based Routing with @solidjs/router
 
-## Status: Complete - Ready for Testing
+## Goal
+Persist navigation state in the URL hash so page reloads restore where the user was (channel, thread). Use `@solidjs/router` `HashRouter` properly rather than hand-rolling hash sync.
 
-## Recent Session Summary
+## Route Structure
 
-This session focused on improving the DM flow and fixing status message visibility issues.
-
-### 1. DM Decline Flow (Complete)
-
-When User B declines a DM request, User A (the initiator) now gets notified and the pending invite disappears from their sidebar.
-
-**Protocol additions:**
-- `DECLINE_DM (0x1E)` - Client → Server: Decline a DM request
-- `DM_DECLINED (0xAF)` - Server → Client: Notify initiator their request was declined
-
-**Files changed:**
-- `docs/PROTOCOL.md` - Documented new message types
-- `pkg/protocol/messages.go` - Added `DeclineDMMessage`, `DMDeclinedMessage` structs
-- `pkg/protocol/messages_test.go` - Added tests
-- `pkg/server/server.go` - Added TypeDeclineDM case
-- `pkg/server/handlers.go` - Added `handleDeclineDM` function
-- `pkg/client/ui/update.go` - Added handlers and `sendDeclineDM`
-
-### 2. Status Message Auto-Clear (Complete)
-
-Status messages now display over shortcuts and auto-clear after 3 seconds.
-
-**Implementation:**
-- Status/error messages replace shortcuts entirely (not appended)
-- Version-tracked timeouts prevent stale clears
-- `setStatus(message string) tea.Cmd` helper sets message and returns timeout command
-- `ClearStatusMsg` with version checking
-
-**Files changed:**
-- `pkg/client/ui/view.go` - `renderFooter` shows status/error over shortcuts
-- `pkg/client/ui/update.go` - Added `ClearStatusMsg`, `statusTimeout()`, `setStatus()`
-- `pkg/client/ui/model.go` - Added `statusVersion` field
-
-### 3. Error Priority Over Status (Complete)
-
-Errors now show over status messages (previously "Sending..." would hide errors).
-
-**Changes:**
-- `renderFooter` checks `errorMessage` before `statusMessage`
-- In-progress status cleared in error paths (prevents stale "Sending..." after error)
-- Updated all handlers that had in-progress messages: `handleMessagePosted`, `handleChannelCreated`, `handleChannelDeleted`, `handleUserBanned`, `handleIPBanned`, `handleUserUnbanned`, `handleIPUnbanned`, `handleUserDeleted`
-
-### 4. Unread Counts for Anonymous Users (Complete)
-
-Anonymous users now get unread counts based on when they last quit the app.
-
-**Implementation:**
-- Added `GetLastSeenTimestamp()`, `SetLastSeenTimestamp()`, `UpdateLastSeenTimestamp()` to State
-- `saveAndQuit()` helper saves timestamp before quitting
-- Anonymous users use saved timestamp in `GET_UNREAD_COUNTS` request
-- First-time users (no saved timestamp) skip the request
-
-**Files changed:**
-- `pkg/client/state.go` - Added last seen timestamp methods
-- `pkg/client/interfaces.go` - Updated StateInterface
-- `pkg/client/mock_state.go` - Added mock implementations
-- `pkg/client/connection_helpers_test.go` - Added stub methods
-- `pkg/client/ui/model.go` - Added `saveAndQuit()`, updated quit command
-- `pkg/client/ui/update.go` - Updated quit points, unread counts logic
-- `pkg/client/ui/command_executor.go` - Updated quit action
-
-### 5. Bug Fix: Hidden Error Revealed
-
-The status message improvements revealed a previously hidden error:
 ```
-Error 2000: Anonymous users must provide since_timestamp
+#/                          → Channel list (no channel selected)
+#/channel/:channelId        → Channel view (thread list for forum, chat for chat-type)
+#/channel/:channelId/thread/:threadId  → Thread detail view (forum only)
 ```
 
-This was happening because anonymous users were requesting unread counts without a timestamp. Fixed by implementing the last seen timestamp feature above.
+Channel and thread IDs are database primary keys (autoincrement), so they're stable across connections.
 
-## Previous Work (Still Relevant)
+## Architecture
 
-### Anonymous DM Support
-- Database migration 012: Session support for DMInvite
-- Database migration 013: ChannelParticipant table for DM membership
-- Full anonymous-to-anonymous DM flow working
+### Key Insight
+The app already has a single `App` component that conditionally renders based on store state. Rather than splitting into separate page components, we keep `App` as the `root` layout and use a **single catch-all route** that reads params and drives store state. The router becomes a URL<->state sync layer, not a component-switching mechanism.
 
-### DM Participant Left Notification
-- `DM_PARTICIPANT_LEFT (0xAE)` notifies when someone leaves a DM
-- System messages in chat when participant leaves
+### Approach: Route-aware wrapper component
 
-## Testing Checklist
-- [ ] Status messages appear over shortcuts and auto-clear after 3 seconds
-- [ ] Error messages appear over status messages
-- [ ] "Sending..." clears when an error occurs
-- [ ] Declining a DM request notifies the initiator
-- [ ] Anonymous users see unread counts on second session (after quitting once)
-- [ ] Registered users see unread counts normally
-- [ ] Ctrl+C, Ctrl+Q, Esc (in channel list), and 'q' all save timestamp before quit
+1. **main.tsx** - Wrap render in `HashRouter` with `App` as root and routes
+2. **New file: `src/lib/route-sync.ts`** - A `useRouteSync()` hook that:
+   - **URL → State** (on load/navigation): Reads `useParams()` and triggers `handleJoinChannel`/`handleThreadClick` once connected and channel list is loaded
+   - **State → URL** (on user interaction): Uses `useNavigate()` in a `createEffect` watching `activeChannelId` and `activeThreadId` to push URL updates
+3. **App.tsx** - Call `useRouteSync()`, pass navigation callbacks to it
+
+### Detailed Changes
+
+#### 1. Install dependency
+```bash
+cd web-client && pnpm add @solidjs/router
+```
+
+#### 2. main.tsx
+```tsx
+import { render } from 'solid-js/web'
+import { HashRouter, Route } from '@solidjs/router'
+import './style.css'
+import App from './App'
+
+render(
+  () => (
+    <HashRouter root={App}>
+      <Route path="/channel/:channelId/thread/:threadId" component={() => null} />
+      <Route path="/channel/:channelId" component={() => null} />
+      <Route path="/" component={() => null} />
+    </HashRouter>
+  ),
+  document.getElementById('app')!
+)
+```
+
+The route components are `() => null` because `App` (as `root`) does all rendering. The routes just provide params.
+
+#### 3. src/lib/route-sync.ts (new)
+Two-way sync hook:
+- **URL → State**: On load, once connected + channels populated, read params and join the right channel/thread
+- **State → URL**: Watch store.activeChannelId and store.activeThreadId, update URL accordingly
+- Use `replace: true` for channel switches (don't bloat history), `push` for thread opens so back button works
+
+#### 4. App.tsx changes
+- `App` component signature changes to accept `props` with `children` (required by HashRouter root)
+- Render `{props.children}` somewhere (it'll be null, but the router needs it)
+- Call `useRouteSync()` in the component
+- On disconnect, navigate to `/`
+- The existing `handleJoinChannel`/`handleThreadClick`/`handleBackToThreadList` stay as-is
+
+### Browser Back Button Behavior
+- Thread detail → Thread list: back button works (thread open was a push)
+- Channel switches: replace (back button doesn't cycle through channels)
+- Disconnect: replace to `/`
+
+### Edge Cases
+- **Reload before channels load**: URL→State effect is gated on `isConnected() && channels().size > 0`
+- **Invalid channel/thread ID**: If ID not in channel map after load, just stay at channel list
+- **DM channels**: Same `/channel/:channelId` pattern since they have regular IDs
+- **Disconnect**: Navigate to `/` (replace)
+
+## Files to Modify
+1. `web-client/package.json` - Add `@solidjs/router`
+2. `web-client/src/main.tsx` - Wrap in `HashRouter`
+3. `web-client/src/lib/route-sync.ts` - NEW: URL<->State sync hook
+4. `web-client/src/App.tsx` - Accept `props.children`, call `useRouteSync()`, navigate on disconnect
+
+## What We're NOT Changing
+- Store architecture stays the same
+- Protocol bridge stays the same
+- All child components stay the same
+- No component splitting (App remains monolithic for now)

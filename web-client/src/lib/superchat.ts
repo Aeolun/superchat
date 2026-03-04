@@ -700,7 +700,7 @@ export class SuperChatClient {
 
   // Public API methods
 
-  listMessages(channelId: bigint, fromMessageId: bigint, limit: number) {
+  listMessages(channelId: bigint, fromMessageId: bigint, limit: number, afterId?: bigint) {
     const encoder = new ListMessagesEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
@@ -708,7 +708,7 @@ export class SuperChatClient {
       limit,
       before_id: fromMessageId !== 0n ? { present: 1, value: fromMessageId } : { present: 0 },
       parent_id: { present: 0 },
-      after_id: { present: 0 }
+      after_id: afterId ? { present: 1, value: afterId } : { present: 0 }
     })
     this.sendFrame(MSG_LIST_MESSAGES, payload)
   }

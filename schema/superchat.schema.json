@@ -1,0 +1,1060 @@
+{
+  "meta": {
+    "title": "SuperChat Protocol",
+    "description": "Binary protocol for SuperChat terminal-based threaded chat application. Defines message payloads only - frame layer (length prefix, LZ4 compression) is handled separately.",
+    "version": "3.0"
+  },
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "LPString": {
+      "type": "string",
+      "kind": "length_prefixed",
+      "length_type": "uint16",
+      "encoding": "utf8"
+    },
+
+    "Channel": {
+      "description": "Channel entry in CHANNEL_LIST response",
+      "sequence": [
+        { "name": "id", "type": "uint64" },
+        { "name": "name", "type": "LPString" },
+        { "name": "description", "type": "LPString" },
+        { "name": "user_count", "type": "uint32" },
+        { "name": "is_operator", "type": "uint8" },
+        { "name": "type", "type": "uint8" },
+        { "name": "retention_hours", "type": "uint32" },
+        { "name": "has_subchannels", "type": "uint8" },
+        { "name": "subchannel_count", "type": "uint16" }
+      ]
+    },
+
+    "MessageData": {
+      "description": "Message entry used in MESSAGE_LIST and NEW_MESSAGE",
+      "sequence": [
+        { "name": "id", "type": "uint64" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "parent_id", "type": "optional", "value_type": "uint64" },
+        { "name": "author_user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "author_nickname", "type": "LPString" },
+        { "name": "content", "type": "LPString" },
+        { "name": "created_at", "type": "int64" },
+        { "name": "edited_at", "type": "optional", "value_type": "int64" },
+        { "name": "reply_count", "type": "uint32" }
+      ]
+    },
+
+    "SubchannelInfo": {
+      "description": "Subchannel entry in SUBCHANNEL_LIST response",
+      "sequence": [
+        { "name": "id", "type": "uint64" },
+        { "name": "name", "type": "LPString" },
+        { "name": "description", "type": "LPString" },
+        { "name": "type", "type": "uint8" },
+        { "name": "retention_hours", "type": "uint32" }
+      ]
+    },
+
+    "UnreadTarget": {
+      "description": "Target for unread count request",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "thread_id", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "UnreadCountEntry": {
+      "description": "Unread count for a single channel/subchannel/thread",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "thread_id", "type": "optional", "value_type": "uint64" },
+        { "name": "unread_count", "type": "uint32" }
+      ]
+    },
+
+    "UserListEntry": {
+      "description": "User entry in USER_LIST response",
+      "sequence": [
+        { "name": "nickname", "type": "LPString" },
+        { "name": "is_registered", "type": "uint8" },
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "online", "type": "uint8" }
+      ]
+    },
+
+    "ChannelUserEntry": {
+      "description": "User entry in CHANNEL_USER_LIST response",
+      "sequence": [
+        { "name": "session_id", "type": "uint64" },
+        { "name": "nickname", "type": "LPString" },
+        { "name": "is_registered", "type": "uint8" },
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "user_flags", "type": "uint8" }
+      ]
+    },
+
+    "ServerInfo": {
+      "description": "Server entry in SERVER_LIST response",
+      "sequence": [
+        { "name": "hostname", "type": "LPString" },
+        { "name": "port", "type": "uint16" },
+        { "name": "name", "type": "LPString" },
+        { "name": "description", "type": "LPString" },
+        { "name": "user_count", "type": "uint32" },
+        { "name": "max_users", "type": "uint32" },
+        { "name": "uptime_seconds", "type": "uint64" },
+        { "name": "is_public", "type": "uint8" },
+        { "name": "channel_count", "type": "uint32" }
+      ]
+    },
+
+    "SSHKeyInfo": {
+      "description": "SSH key entry in SSH_KEY_LIST response",
+      "sequence": [
+        { "name": "id", "type": "int64" },
+        { "name": "fingerprint", "type": "LPString" },
+        { "name": "key_type", "type": "LPString" },
+        { "name": "label", "type": "LPString" },
+        { "name": "added_at", "type": "int64" },
+        { "name": "last_used_at", "type": "int64" }
+      ]
+    },
+
+    "BanEntry": {
+      "description": "Ban entry in BAN_LIST response",
+      "sequence": [
+        { "name": "id", "type": "uint64" },
+        { "name": "type", "type": "LPString" },
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "nickname", "type": "optional", "value_type": "LPString" },
+        { "name": "ip_cidr", "type": "optional", "value_type": "LPString" },
+        { "name": "reason", "type": "LPString" },
+        { "name": "shadowban", "type": "uint8" },
+        { "name": "banned_at", "type": "int64" },
+        { "name": "banned_until", "type": "optional", "value_type": "int64" },
+        { "name": "banned_by", "type": "LPString" }
+      ]
+    },
+
+    "AuthRequestMessage": {
+      "description": "0x01 - Authenticate with password",
+      "sequence": [
+        { "name": "nickname", "type": "LPString" },
+        { "name": "password", "type": "LPString" }
+      ]
+    },
+
+    "AuthResponseMessage": {
+      "description": "0x81 - Authentication result",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "user_id", "type": "uint64", "conditional": "success == 1" },
+        { "name": "nickname", "type": "LPString", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" },
+        { "name": "user_flags", "type": "uint8", "conditional": "success == 1" }
+      ]
+    },
+
+    "SetNicknameMessage": {
+      "description": "0x02 - Set/change nickname",
+      "sequence": [
+        { "name": "nickname", "type": "LPString" }
+      ]
+    },
+
+    "NicknameResponseMessage": {
+      "description": "0x82 - Response to SET_NICKNAME",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "RegisterUserMessage": {
+      "description": "0x03 - Register current nickname with password",
+      "sequence": [
+        { "name": "password", "type": "LPString" }
+      ]
+    },
+
+    "RegisterResponseMessage": {
+      "description": "0x83 - Registration result",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "user_id", "type": "uint64", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "LogoutMessage": {
+      "description": "0x1C - Clear authentication and become anonymous",
+      "sequence": []
+    },
+
+    "ListChannelsMessage": {
+      "description": "0x04 - Request channel list",
+      "sequence": [
+        { "name": "from_channel_id", "type": "uint64" },
+        { "name": "limit", "type": "uint16" }
+      ]
+    },
+
+    "ChannelListMessage": {
+      "description": "0x84 - List of channels",
+      "sequence": [
+        { "name": "channels", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "Channel" } }
+      ]
+    },
+
+    "JoinChannelMessage": {
+      "description": "0x05 - Join a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "JoinResponseMessage": {
+      "description": "0x85 - Response to JOIN_CHANNEL",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "LeaveChannelMessage": {
+      "description": "0x06 - Leave a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "permanent", "type": "uint8" }
+      ]
+    },
+
+    "LeaveResponseMessage": {
+      "description": "0x86 - Response to LEAVE_CHANNEL",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "CreateChannelMessage": {
+      "description": "0x07 - Create a new channel",
+      "sequence": [
+        { "name": "name", "type": "LPString" },
+        { "name": "display_name", "type": "LPString" },
+        { "name": "description", "type": "optional", "value_type": "LPString" },
+        { "name": "channel_type", "type": "uint8" },
+        { "name": "retention_hours", "type": "uint32" }
+      ]
+    },
+
+    "ChannelCreatedMessage": {
+      "description": "0x87 - Response to CREATE_CHANNEL + broadcast",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "channel_id", "type": "uint64", "conditional": "success == 1" },
+        { "name": "name", "type": "LPString", "conditional": "success == 1" },
+        { "name": "description", "type": "LPString", "conditional": "success == 1" },
+        { "name": "type", "type": "uint8", "conditional": "success == 1" },
+        { "name": "retention_hours", "type": "uint32", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "CreateSubchannelMessage": {
+      "description": "0x08 - Create a new subchannel within a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "name", "type": "LPString" },
+        { "name": "description", "type": "LPString" },
+        { "name": "type", "type": "uint8" },
+        { "name": "retention_hours", "type": "uint32" }
+      ]
+    },
+
+    "SubchannelCreatedMessage": {
+      "description": "0x88 - Response to CREATE_SUBCHANNEL + broadcast",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "channel_id", "type": "uint64", "conditional": "success == 1" },
+        { "name": "subchannel_id", "type": "uint64", "conditional": "success == 1" },
+        { "name": "name", "type": "LPString", "conditional": "success == 1" },
+        { "name": "description", "type": "LPString", "conditional": "success == 1" },
+        { "name": "type", "type": "uint8", "conditional": "success == 1" },
+        { "name": "retention_hours", "type": "uint32", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "GetSubchannelsMessage": {
+      "description": "0x15 - Request subchannels for a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" }
+      ]
+    },
+
+    "SubchannelListMessage": {
+      "description": "0x96 - List of subchannels for a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannels", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "SubchannelInfo" } }
+      ]
+    },
+
+    "ListMessagesMessage": {
+      "description": "0x09 - Request messages",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "limit", "type": "uint16" },
+        { "name": "before_id", "type": "optional", "value_type": "uint64" },
+        { "name": "parent_id", "type": "optional", "value_type": "uint64" },
+        { "name": "after_id", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "MessageListMessage": {
+      "description": "0x89 - List of messages",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "parent_id", "type": "optional", "value_type": "uint64" },
+        { "name": "messages", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "MessageData" } }
+      ]
+    },
+
+    "PostMessageMessage": {
+      "description": "0x0A - Post a new message",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "parent_id", "type": "optional", "value_type": "uint64" },
+        { "name": "content", "type": "LPString" }
+      ]
+    },
+
+    "MessagePostedMessage": {
+      "description": "0x8A - Confirmation of message post",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "message_id", "type": "uint64" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "EditMessageMessage": {
+      "description": "0x0B - Edit an existing message",
+      "sequence": [
+        { "name": "message_id", "type": "uint64" },
+        { "name": "new_content", "type": "LPString" }
+      ]
+    },
+
+    "MessageEditedMessage": {
+      "description": "0x8B - Edit confirmation + real-time broadcast",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "message_id", "type": "uint64" },
+        { "name": "edited_at", "type": "int64", "conditional": "success == 1" },
+        { "name": "new_content", "type": "LPString", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "DeleteMessageMessage": {
+      "description": "0x0C - Delete a message",
+      "sequence": [
+        { "name": "message_id", "type": "uint64" }
+      ]
+    },
+
+    "MessageDeletedMessage": {
+      "description": "0x8C - Deletion confirmation + broadcast",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "message_id", "type": "uint64" },
+        { "name": "deleted_at", "type": "int64", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "NewMessageMessage": {
+      "description": "0x8D - Real-time new message broadcast (same format as MessageData)",
+      "sequence": [
+        { "name": "id", "type": "uint64" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "parent_id", "type": "optional", "value_type": "uint64" },
+        { "name": "author_user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "author_nickname", "type": "LPString" },
+        { "name": "content", "type": "LPString" },
+        { "name": "created_at", "type": "int64" },
+        { "name": "edited_at", "type": "optional", "value_type": "int64" },
+        { "name": "reply_count", "type": "uint32" }
+      ]
+    },
+
+    "PingMessage": {
+      "description": "0x10 - Keepalive ping",
+      "sequence": [
+        { "name": "timestamp", "type": "int64" }
+      ]
+    },
+
+    "PongMessage": {
+      "description": "0x90 - Ping response",
+      "sequence": [
+        { "name": "client_timestamp", "type": "int64" }
+      ]
+    },
+
+    "ErrorMessage": {
+      "description": "0x91 - Generic error response",
+      "sequence": [
+        { "name": "error_code", "type": "uint16" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "DisconnectMessage": {
+      "description": "0x11 - Graceful disconnect notification",
+      "sequence": [
+        { "name": "reason", "type": "optional", "value_type": "LPString" }
+      ]
+    },
+
+    "ServerConfigMessage": {
+      "description": "0x98 - Server configuration and limits",
+      "sequence": [
+        { "name": "protocol_version", "type": "uint8" },
+        { "name": "max_message_rate", "type": "uint16" },
+        { "name": "max_channel_creates", "type": "uint16" },
+        { "name": "inactive_cleanup_days", "type": "uint16" },
+        { "name": "max_connections_per_ip", "type": "uint8" },
+        { "name": "max_message_length", "type": "uint32" },
+        { "name": "max_thread_subscriptions", "type": "uint16" },
+        { "name": "max_channel_subscriptions", "type": "uint16" },
+        { "name": "directory_enabled", "type": "uint8" }
+      ]
+    },
+
+    "SubscribeThreadMessage": {
+      "description": "0x51 - Subscribe to a thread",
+      "sequence": [
+        { "name": "thread_id", "type": "uint64" }
+      ]
+    },
+
+    "UnsubscribeThreadMessage": {
+      "description": "0x52 - Unsubscribe from a thread",
+      "sequence": [
+        { "name": "thread_id", "type": "uint64" }
+      ]
+    },
+
+    "SubscribeChannelMessage": {
+      "description": "0x53 - Subscribe to a channel/subchannel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "UnsubscribeChannelMessage": {
+      "description": "0x54 - Unsubscribe from a channel/subchannel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "SubscribeOkMessage": {
+      "description": "0x99 - Subscription confirmed",
+      "sequence": [
+        { "name": "type", "type": "uint8" },
+        { "name": "id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "GetUserInfoMessage": {
+      "description": "0x0F - Request user information by nickname",
+      "sequence": [
+        { "name": "nickname", "type": "LPString" }
+      ]
+    },
+
+    "UserInfoMessage": {
+      "description": "0x8F - User information response",
+      "sequence": [
+        { "name": "nickname", "type": "LPString" },
+        { "name": "is_registered", "type": "uint8" },
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "online", "type": "uint8" }
+      ]
+    },
+
+    "ListUsersMessage": {
+      "description": "0x16 - Request list of users",
+      "sequence": [
+        { "name": "limit", "type": "uint16" },
+        { "name": "include_offline", "type": "uint8" }
+      ]
+    },
+
+    "UserListMessage": {
+      "description": "0x9A - List of users response",
+      "sequence": [
+        { "name": "users", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "UserListEntry" } }
+      ]
+    },
+
+    "ListChannelUsersMessage": {
+      "description": "0x17 - Request list of users in a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "ChannelUserListMessage": {
+      "description": "0xAB - Snapshot of users in a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "users", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "ChannelUserEntry" } }
+      ]
+    },
+
+    "ChannelPresenceMessage": {
+      "description": "0xAC - User joined or left a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "session_id", "type": "uint64" },
+        { "name": "nickname", "type": "LPString" },
+        { "name": "is_registered", "type": "uint8" },
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "user_flags", "type": "uint8" },
+        { "name": "joined", "type": "uint8" }
+      ]
+    },
+
+    "ServerPresenceMessage": {
+      "description": "0xAD - User connected or disconnected from the server",
+      "sequence": [
+        { "name": "session_id", "type": "uint64" },
+        { "name": "nickname", "type": "LPString" },
+        { "name": "is_registered", "type": "uint8" },
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "user_flags", "type": "uint8" },
+        { "name": "online", "type": "uint8" }
+      ]
+    },
+
+    "GetUnreadCountsMessage": {
+      "description": "0x18 - Request unread counts for channels",
+      "sequence": [
+        { "name": "since_timestamp", "type": "optional", "value_type": "int64" },
+        { "name": "targets", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "UnreadTarget" } }
+      ]
+    },
+
+    "UnreadCountsMessage": {
+      "description": "0x97 - Response with unread counts",
+      "sequence": [
+        { "name": "counts", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "UnreadCountEntry" } }
+      ]
+    },
+
+    "UpdateReadStateMessage": {
+      "description": "0x1D - Update last read timestamp for a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "subchannel_id", "type": "optional", "value_type": "uint64" },
+        { "name": "timestamp", "type": "int64" }
+      ]
+    },
+
+    "ChangePasswordRequest": {
+      "description": "0x0E - Change password",
+      "sequence": [
+        { "name": "old_password", "type": "LPString" },
+        { "name": "new_password", "type": "LPString" }
+      ]
+    },
+
+    "PasswordChangedResponse": {
+      "description": "0x8E - Password change result",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "error_message", "type": "LPString" }
+      ]
+    },
+
+    "AddSSHKeyRequest": {
+      "description": "0x0D - Add a new SSH public key",
+      "sequence": [
+        { "name": "public_key", "type": "LPString" },
+        { "name": "label", "type": "LPString" }
+      ]
+    },
+
+    "SSHKeyAddedResponse": {
+      "description": "0x95 - SSH key added result",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "key_id", "type": "int64" },
+        { "name": "fingerprint", "type": "LPString" },
+        { "name": "error_message", "type": "LPString" }
+      ]
+    },
+
+    "ListSSHKeysRequest": {
+      "description": "0x14 - Request list of SSH keys",
+      "sequence": []
+    },
+
+    "SSHKeyListResponse": {
+      "description": "0x94 - List of SSH keys",
+      "sequence": [
+        { "name": "keys", "type": "array", "kind": "length_prefixed", "length_type": "uint32", "items": { "type": "SSHKeyInfo" } }
+      ]
+    },
+
+    "UpdateSSHKeyLabelRequest": {
+      "description": "0x12 - Update SSH key label",
+      "sequence": [
+        { "name": "key_id", "type": "int64" },
+        { "name": "new_label", "type": "LPString" }
+      ]
+    },
+
+    "SSHKeyLabelUpdatedResponse": {
+      "description": "0x92 - SSH key label updated result",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "error_message", "type": "LPString" }
+      ]
+    },
+
+    "DeleteSSHKeyRequest": {
+      "description": "0x13 - Delete an SSH key",
+      "sequence": [
+        { "name": "key_id", "type": "int64" }
+      ]
+    },
+
+    "SSHKeyDeletedResponse": {
+      "description": "0x93 - SSH key deleted result",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "error_message", "type": "LPString" }
+      ]
+    },
+
+    "ListServersMessage": {
+      "description": "0x55 - Request server list from directory",
+      "sequence": [
+        { "name": "limit", "type": "uint16" }
+      ]
+    },
+
+    "ServerListMessage": {
+      "description": "0x9B - List of discoverable servers",
+      "sequence": [
+        { "name": "servers", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "ServerInfo" } }
+      ]
+    },
+
+    "RegisterServerMessage": {
+      "description": "0x56 - Register server with directory",
+      "sequence": [
+        { "name": "hostname", "type": "LPString" },
+        { "name": "port", "type": "uint16" },
+        { "name": "name", "type": "LPString" },
+        { "name": "description", "type": "LPString" },
+        { "name": "max_users", "type": "uint32" },
+        { "name": "is_public", "type": "uint8" },
+        { "name": "channel_count", "type": "uint32" }
+      ]
+    },
+
+    "RegisterAckMessage": {
+      "description": "0x9C - Server registration acknowledgment",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "heartbeat_interval", "type": "uint32", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "VerifyRegistrationMessage": {
+      "description": "0x9E - Verification challenge from directory",
+      "sequence": [
+        { "name": "challenge", "type": "uint64" }
+      ]
+    },
+
+    "VerifyResponseMessage": {
+      "description": "0x58 - Response to verification challenge",
+      "sequence": [
+        { "name": "challenge", "type": "uint64" }
+      ]
+    },
+
+    "HeartbeatMessage": {
+      "description": "0x57 - Periodic heartbeat to directory",
+      "sequence": [
+        { "name": "hostname", "type": "LPString" },
+        { "name": "port", "type": "uint16" },
+        { "name": "user_count", "type": "uint32" },
+        { "name": "uptime_seconds", "type": "uint64" },
+        { "name": "channel_count", "type": "uint32" }
+      ]
+    },
+
+    "HeartbeatAckMessage": {
+      "description": "0x9D - Heartbeat acknowledgment",
+      "sequence": [
+        { "name": "heartbeat_interval", "type": "uint32" }
+      ]
+    },
+
+    "BanUserMessage": {
+      "description": "0x59 - Ban a user by user ID or nickname",
+      "sequence": [
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "nickname", "type": "optional", "value_type": "LPString" },
+        { "name": "reason", "type": "LPString" },
+        { "name": "shadowban", "type": "uint8" },
+        { "name": "duration_seconds", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "UserBannedMessage": {
+      "description": "0x9F - Response to BAN_USER",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "ban_id", "type": "uint64", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "BanIPMessage": {
+      "description": "0x5A - Ban an IP address or CIDR range",
+      "sequence": [
+        { "name": "ip_cidr", "type": "LPString" },
+        { "name": "reason", "type": "LPString" },
+        { "name": "duration_seconds", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "IPBannedMessage": {
+      "description": "0xA5 - Response to BAN_IP",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "ban_id", "type": "uint64", "conditional": "success == 1" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "UnbanUserMessage": {
+      "description": "0x5B - Remove user ban",
+      "sequence": [
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "nickname", "type": "optional", "value_type": "LPString" }
+      ]
+    },
+
+    "UserUnbannedMessage": {
+      "description": "0xA6 - Response to UNBAN_USER",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "UnbanIPMessage": {
+      "description": "0x5C - Remove IP ban",
+      "sequence": [
+        { "name": "ip_cidr", "type": "LPString" }
+      ]
+    },
+
+    "IPUnbannedMessage": {
+      "description": "0xA7 - Response to UNBAN_IP",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "ListBansMessage": {
+      "description": "0x5D - Request list of all active bans",
+      "sequence": [
+        { "name": "include_expired", "type": "uint8" }
+      ]
+    },
+
+    "BanListMessage": {
+      "description": "0xA8 - List of active bans",
+      "sequence": [
+        { "name": "bans", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "BanEntry" } }
+      ]
+    },
+
+    "DeleteUserMessage": {
+      "description": "0x5E - Permanently delete a user account",
+      "sequence": [
+        { "name": "user_id", "type": "uint64" }
+      ]
+    },
+
+    "UserDeletedMessage": {
+      "description": "0xA9 - Response to DELETE_USER",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "DeleteChannelMessage": {
+      "description": "0x5F - Delete a channel (admin only)",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "reason", "type": "LPString" }
+      ]
+    },
+
+    "ChannelDeletedMessage": {
+      "description": "0xAA - Response to DELETE_CHANNEL + broadcast",
+      "sequence": [
+        { "name": "success", "type": "uint8" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "message", "type": "LPString" }
+      ]
+    },
+
+    "StartDMMessage": {
+      "description": "0x19 - Initiate a DM with another user",
+      "sequence": [
+        { "name": "target_type", "type": "uint8" },
+        { "name": "target_user_id", "type": "uint64", "conditional": "target_type == 0 || target_type == 2" },
+        { "name": "target_nickname", "type": "LPString", "conditional": "target_type == 1" },
+        { "name": "allow_unencrypted", "type": "uint8" }
+      ]
+    },
+
+    "ProvidePublicKeyMessage": {
+      "description": "0x1A - Upload X25519 public key for encryption",
+      "sequence": [
+        { "name": "key_type", "type": "uint8" },
+        { "name": "public_key", "type": "array", "kind": "fixed", "length": 32, "items": { "type": "uint8" } },
+        { "name": "label", "type": "LPString" }
+      ]
+    },
+
+    "AllowUnencryptedMessage": {
+      "description": "0x1B - Accept unencrypted DM",
+      "sequence": [
+        { "name": "dm_channel_id", "type": "uint64" },
+        { "name": "permanent", "type": "uint8" }
+      ]
+    },
+
+    "DeclineDMMessage": {
+      "description": "0x1E - Decline an incoming DM request",
+      "sequence": [
+        { "name": "dm_channel_id", "type": "uint64" }
+      ]
+    },
+
+    "KeyRequiredMessage": {
+      "description": "0xA1 - Server needs encryption key",
+      "sequence": [
+        { "name": "reason", "type": "LPString" },
+        { "name": "dm_channel_id", "type": "optional", "value_type": "uint64" }
+      ]
+    },
+
+    "DMReadyMessage": {
+      "description": "0xA2 - DM channel is ready to use",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "other_user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "other_nickname", "type": "LPString" },
+        { "name": "is_encrypted", "type": "uint8" },
+        { "name": "other_public_key", "type": "array", "kind": "fixed", "length": 32, "items": { "type": "uint8" }, "conditional": "is_encrypted == 1" }
+      ]
+    },
+
+    "DMPendingMessage": {
+      "description": "0xA3 - Waiting for other party",
+      "sequence": [
+        { "name": "dm_channel_id", "type": "uint64" },
+        { "name": "waiting_for_user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "waiting_for_nickname", "type": "LPString" },
+        { "name": "reason", "type": "LPString" }
+      ]
+    },
+
+    "DMRequestMessage": {
+      "description": "0xA4 - Incoming DM request",
+      "sequence": [
+        { "name": "dm_channel_id", "type": "uint64" },
+        { "name": "from_user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "from_nickname", "type": "LPString" },
+        { "name": "encryption_status", "type": "uint8" }
+      ]
+    },
+
+    "DMParticipantLeftMessage": {
+      "description": "0xAE - Notification when someone permanently leaves a DM",
+      "sequence": [
+        { "name": "dm_channel_id", "type": "uint64" },
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "nickname", "type": "LPString" }
+      ]
+    },
+
+    "DMDeclinedMessage": {
+      "description": "0xAF - Notification that a DM request was declined",
+      "sequence": [
+        { "name": "dm_channel_id", "type": "uint64" },
+        { "name": "user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "nickname", "type": "LPString" }
+      ]
+    }
+  },
+
+  "protocol": {
+    "name": "SuperChat",
+    "version": "3.0",
+    "description": "Binary protocol for SuperChat terminal-based threaded chat application",
+    "messages": [
+      { "code": "0x01", "name": "AUTH_REQUEST", "direction": "client_to_server", "payload_type": "AuthRequestMessage", "description": "Authenticate with password" },
+      { "code": "0x02", "name": "SET_NICKNAME", "direction": "client_to_server", "payload_type": "SetNicknameMessage", "description": "Set/change nickname" },
+      { "code": "0x03", "name": "REGISTER_USER", "direction": "client_to_server", "payload_type": "RegisterUserMessage", "description": "Register current nickname with password" },
+      { "code": "0x04", "name": "LIST_CHANNELS", "direction": "client_to_server", "payload_type": "ListChannelsMessage", "description": "Request channel list" },
+      { "code": "0x05", "name": "JOIN_CHANNEL", "direction": "client_to_server", "payload_type": "JoinChannelMessage", "description": "Join a channel" },
+      { "code": "0x06", "name": "LEAVE_CHANNEL", "direction": "client_to_server", "payload_type": "LeaveChannelMessage", "description": "Leave a channel" },
+      { "code": "0x07", "name": "CREATE_CHANNEL", "direction": "client_to_server", "payload_type": "CreateChannelMessage", "description": "Create a new channel" },
+      { "code": "0x08", "name": "CREATE_SUBCHANNEL", "direction": "client_to_server", "payload_type": "CreateSubchannelMessage", "description": "Create a new subchannel" },
+      { "code": "0x09", "name": "LIST_MESSAGES", "direction": "client_to_server", "payload_type": "ListMessagesMessage", "description": "Request messages" },
+      { "code": "0x0A", "name": "POST_MESSAGE", "direction": "client_to_server", "payload_type": "PostMessageMessage", "description": "Post a new message" },
+      { "code": "0x0B", "name": "EDIT_MESSAGE", "direction": "client_to_server", "payload_type": "EditMessageMessage", "description": "Edit an existing message" },
+      { "code": "0x0C", "name": "DELETE_MESSAGE", "direction": "client_to_server", "payload_type": "DeleteMessageMessage", "description": "Delete a message" },
+      { "code": "0x0D", "name": "ADD_SSH_KEY", "direction": "client_to_server", "payload_type": "AddSSHKeyRequest", "description": "Add SSH public key" },
+      { "code": "0x0E", "name": "CHANGE_PASSWORD", "direction": "client_to_server", "payload_type": "ChangePasswordRequest", "description": "Change password" },
+      { "code": "0x0F", "name": "GET_USER_INFO", "direction": "client_to_server", "payload_type": "GetUserInfoMessage", "description": "Request user information" },
+      { "code": "0x10", "name": "PING", "direction": "client_to_server", "payload_type": "PingMessage", "description": "Keepalive ping" },
+      { "code": "0x11", "name": "DISCONNECT", "direction": "bidirectional", "payload_type": "DisconnectMessage", "description": "Graceful disconnect" },
+      { "code": "0x12", "name": "UPDATE_SSH_KEY_LABEL", "direction": "client_to_server", "payload_type": "UpdateSSHKeyLabelRequest", "description": "Update SSH key label" },
+      { "code": "0x13", "name": "DELETE_SSH_KEY", "direction": "client_to_server", "payload_type": "DeleteSSHKeyRequest", "description": "Delete SSH key" },
+      { "code": "0x14", "name": "LIST_SSH_KEYS", "direction": "client_to_server", "payload_type": "ListSSHKeysRequest", "description": "Request SSH key list" },
+      { "code": "0x15", "name": "GET_SUBCHANNELS", "direction": "client_to_server", "payload_type": "GetSubchannelsMessage", "description": "Request subchannels for a channel" },
+      { "code": "0x16", "name": "LIST_USERS", "direction": "client_to_server", "payload_type": "ListUsersMessage", "description": "Request user list" },
+      { "code": "0x17", "name": "LIST_CHANNEL_USERS", "direction": "client_to_server", "payload_type": "ListChannelUsersMessage", "description": "Request channel user list" },
+      { "code": "0x18", "name": "GET_UNREAD_COUNTS", "direction": "client_to_server", "payload_type": "GetUnreadCountsMessage", "description": "Request unread counts" },
+      { "code": "0x19", "name": "START_DM", "direction": "client_to_server", "payload_type": "StartDMMessage", "description": "Initiate direct message" },
+      { "code": "0x1A", "name": "PROVIDE_PUBLIC_KEY", "direction": "client_to_server", "payload_type": "ProvidePublicKeyMessage", "description": "Upload encryption key" },
+      { "code": "0x1B", "name": "ALLOW_UNENCRYPTED", "direction": "client_to_server", "payload_type": "AllowUnencryptedMessage", "description": "Allow unencrypted DM" },
+      { "code": "0x1C", "name": "LOGOUT", "direction": "client_to_server", "payload_type": "LogoutMessage", "description": "Clear authentication" },
+      { "code": "0x1D", "name": "UPDATE_READ_STATE", "direction": "client_to_server", "payload_type": "UpdateReadStateMessage", "description": "Update read position" },
+      { "code": "0x1E", "name": "DECLINE_DM", "direction": "client_to_server", "payload_type": "DeclineDMMessage", "description": "Decline DM request" },
+      { "code": "0x51", "name": "SUBSCRIBE_THREAD", "direction": "client_to_server", "payload_type": "SubscribeThreadMessage", "description": "Subscribe to thread updates" },
+      { "code": "0x52", "name": "UNSUBSCRIBE_THREAD", "direction": "client_to_server", "payload_type": "UnsubscribeThreadMessage", "description": "Unsubscribe from thread" },
+      { "code": "0x53", "name": "SUBSCRIBE_CHANNEL", "direction": "client_to_server", "payload_type": "SubscribeChannelMessage", "description": "Subscribe to channel updates" },
+      { "code": "0x54", "name": "UNSUBSCRIBE_CHANNEL", "direction": "client_to_server", "payload_type": "UnsubscribeChannelMessage", "description": "Unsubscribe from channel" },
+      { "code": "0x55", "name": "LIST_SERVERS", "direction": "client_to_server", "payload_type": "ListServersMessage", "description": "Request server directory" },
+      { "code": "0x56", "name": "REGISTER_SERVER", "direction": "client_to_server", "payload_type": "RegisterServerMessage", "description": "Register with directory" },
+      { "code": "0x57", "name": "HEARTBEAT", "direction": "client_to_server", "payload_type": "HeartbeatMessage", "description": "Directory heartbeat" },
+      { "code": "0x58", "name": "VERIFY_RESPONSE", "direction": "client_to_server", "payload_type": "VerifyResponseMessage", "description": "Verification challenge response" },
+      { "code": "0x59", "name": "BAN_USER", "direction": "client_to_server", "payload_type": "BanUserMessage", "description": "Ban a user" },
+      { "code": "0x5A", "name": "BAN_IP", "direction": "client_to_server", "payload_type": "BanIPMessage", "description": "Ban an IP/CIDR" },
+      { "code": "0x5B", "name": "UNBAN_USER", "direction": "client_to_server", "payload_type": "UnbanUserMessage", "description": "Remove user ban" },
+      { "code": "0x5C", "name": "UNBAN_IP", "direction": "client_to_server", "payload_type": "UnbanIPMessage", "description": "Remove IP ban" },
+      { "code": "0x5D", "name": "LIST_BANS", "direction": "client_to_server", "payload_type": "ListBansMessage", "description": "Request ban list" },
+      { "code": "0x5E", "name": "DELETE_USER", "direction": "client_to_server", "payload_type": "DeleteUserMessage", "description": "Delete user account" },
+      { "code": "0x5F", "name": "DELETE_CHANNEL", "direction": "client_to_server", "payload_type": "DeleteChannelMessage", "description": "Delete a channel" },
+
+      { "code": "0x81", "name": "AUTH_RESPONSE", "direction": "server_to_client", "payload_type": "AuthResponseMessage", "description": "Authentication result" },
+      { "code": "0x82", "name": "NICKNAME_RESPONSE", "direction": "server_to_client", "payload_type": "NicknameResponseMessage", "description": "Nickname change result" },
+      { "code": "0x83", "name": "REGISTER_RESPONSE", "direction": "server_to_client", "payload_type": "RegisterResponseMessage", "description": "Registration result" },
+      { "code": "0x84", "name": "CHANNEL_LIST", "direction": "server_to_client", "payload_type": "ChannelListMessage", "description": "List of channels" },
+      { "code": "0x85", "name": "JOIN_RESPONSE", "direction": "server_to_client", "payload_type": "JoinResponseMessage", "description": "Join channel result" },
+      { "code": "0x86", "name": "LEAVE_RESPONSE", "direction": "server_to_client", "payload_type": "LeaveResponseMessage", "description": "Leave channel result" },
+      { "code": "0x87", "name": "CHANNEL_CREATED", "direction": "server_to_client", "payload_type": "ChannelCreatedMessage", "description": "Channel creation result + broadcast" },
+      { "code": "0x88", "name": "SUBCHANNEL_CREATED", "direction": "server_to_client", "payload_type": "SubchannelCreatedMessage", "description": "Subchannel creation result + broadcast" },
+      { "code": "0x89", "name": "MESSAGE_LIST", "direction": "server_to_client", "payload_type": "MessageListMessage", "description": "List of messages" },
+      { "code": "0x8A", "name": "MESSAGE_POSTED", "direction": "server_to_client", "payload_type": "MessagePostedMessage", "description": "Message post confirmation" },
+      { "code": "0x8B", "name": "MESSAGE_EDITED", "direction": "server_to_client", "payload_type": "MessageEditedMessage", "description": "Message edit confirmation + broadcast" },
+      { "code": "0x8C", "name": "MESSAGE_DELETED", "direction": "server_to_client", "payload_type": "MessageDeletedMessage", "description": "Message deletion confirmation + broadcast" },
+      { "code": "0x8D", "name": "NEW_MESSAGE", "direction": "server_to_client", "payload_type": "NewMessageMessage", "description": "Real-time new message broadcast" },
+      { "code": "0x8E", "name": "PASSWORD_CHANGED", "direction": "server_to_client", "payload_type": "PasswordChangedResponse", "description": "Password change result" },
+      { "code": "0x8F", "name": "USER_INFO", "direction": "server_to_client", "payload_type": "UserInfoMessage", "description": "User information response" },
+      { "code": "0x90", "name": "PONG", "direction": "server_to_client", "payload_type": "PongMessage", "description": "Ping response" },
+      { "code": "0x91", "name": "ERROR", "direction": "server_to_client", "payload_type": "ErrorMessage", "description": "Generic error response" },
+      { "code": "0x92", "name": "SSH_KEY_LABEL_UPDATED", "direction": "server_to_client", "payload_type": "SSHKeyLabelUpdatedResponse", "description": "SSH key label update result" },
+      { "code": "0x93", "name": "SSH_KEY_DELETED", "direction": "server_to_client", "payload_type": "SSHKeyDeletedResponse", "description": "SSH key deletion result" },
+      { "code": "0x94", "name": "SSH_KEY_LIST", "direction": "server_to_client", "payload_type": "SSHKeyListResponse", "description": "List of SSH keys" },
+      { "code": "0x95", "name": "SSH_KEY_ADDED", "direction": "server_to_client", "payload_type": "SSHKeyAddedResponse", "description": "SSH key addition result" },
+      { "code": "0x96", "name": "SUBCHANNEL_LIST", "direction": "server_to_client", "payload_type": "SubchannelListMessage", "description": "List of subchannels" },
+      { "code": "0x97", "name": "UNREAD_COUNTS", "direction": "server_to_client", "payload_type": "UnreadCountsMessage", "description": "Unread message counts" },
+      { "code": "0x98", "name": "SERVER_CONFIG", "direction": "server_to_client", "payload_type": "ServerConfigMessage", "description": "Server configuration and limits" },
+      { "code": "0x99", "name": "SUBSCRIBE_OK", "direction": "server_to_client", "payload_type": "SubscribeOkMessage", "description": "Subscription confirmed" },
+      { "code": "0x9A", "name": "USER_LIST", "direction": "server_to_client", "payload_type": "UserListMessage", "description": "List of users" },
+      { "code": "0x9B", "name": "SERVER_LIST", "direction": "server_to_client", "payload_type": "ServerListMessage", "description": "List of servers" },
+      { "code": "0x9C", "name": "REGISTER_ACK", "direction": "server_to_client", "payload_type": "RegisterAckMessage", "description": "Server registration acknowledgment" },
+      { "code": "0x9D", "name": "HEARTBEAT_ACK", "direction": "server_to_client", "payload_type": "HeartbeatAckMessage", "description": "Heartbeat acknowledgment" },
+      { "code": "0x9E", "name": "VERIFY_REGISTRATION", "direction": "server_to_client", "payload_type": "VerifyRegistrationMessage", "description": "Verification challenge" },
+      { "code": "0x9F", "name": "USER_BANNED", "direction": "server_to_client", "payload_type": "UserBannedMessage", "description": "User ban result" },
+      { "code": "0xA1", "name": "KEY_REQUIRED", "direction": "server_to_client", "payload_type": "KeyRequiredMessage", "description": "Server needs encryption key" },
+      { "code": "0xA2", "name": "DM_READY", "direction": "server_to_client", "payload_type": "DMReadyMessage", "description": "DM channel is ready" },
+      { "code": "0xA3", "name": "DM_PENDING", "direction": "server_to_client", "payload_type": "DMPendingMessage", "description": "Waiting for other party" },
+      { "code": "0xA4", "name": "DM_REQUEST", "direction": "server_to_client", "payload_type": "DMRequestMessage", "description": "Incoming DM request" },
+      { "code": "0xA5", "name": "IP_BANNED", "direction": "server_to_client", "payload_type": "IPBannedMessage", "description": "IP ban result" },
+      { "code": "0xA6", "name": "USER_UNBANNED", "direction": "server_to_client", "payload_type": "UserUnbannedMessage", "description": "User unban result" },
+      { "code": "0xA7", "name": "IP_UNBANNED", "direction": "server_to_client", "payload_type": "IPUnbannedMessage", "description": "IP unban result" },
+      { "code": "0xA8", "name": "BAN_LIST", "direction": "server_to_client", "payload_type": "BanListMessage", "description": "List of active bans" },
+      { "code": "0xA9", "name": "USER_DELETED", "direction": "server_to_client", "payload_type": "UserDeletedMessage", "description": "User deletion result" },
+      { "code": "0xAA", "name": "CHANNEL_DELETED", "direction": "server_to_client", "payload_type": "ChannelDeletedMessage", "description": "Channel deletion result + broadcast" },
+      { "code": "0xAB", "name": "CHANNEL_USER_LIST", "direction": "server_to_client", "payload_type": "ChannelUserListMessage", "description": "Users in a channel" },
+      { "code": "0xAC", "name": "CHANNEL_PRESENCE", "direction": "server_to_client", "payload_type": "ChannelPresenceMessage", "description": "User joined/left channel" },
+      { "code": "0xAD", "name": "SERVER_PRESENCE", "direction": "server_to_client", "payload_type": "ServerPresenceMessage", "description": "User connected/disconnected" },
+      { "code": "0xAE", "name": "DM_PARTICIPANT_LEFT", "direction": "server_to_client", "payload_type": "DMParticipantLeftMessage", "description": "DM participant left" },
+      { "code": "0xAF", "name": "DM_DECLINED", "direction": "server_to_client", "payload_type": "DMDeclinedMessage", "description": "DM request was declined" }
+    ],
+    "message_groups": [
+      { "name": "Authentication", "messages": ["0x01", "0x02", "0x03", "0x1C", "0x81", "0x82", "0x83"] },
+      { "name": "Channels", "messages": ["0x04", "0x05", "0x06", "0x07", "0x08", "0x15", "0x84", "0x85", "0x86", "0x87", "0x88", "0x96"] },
+      { "name": "Messages", "messages": ["0x09", "0x0A", "0x0B", "0x0C", "0x89", "0x8A", "0x8B", "0x8C", "0x8D"] },
+      { "name": "Subscriptions", "messages": ["0x51", "0x52", "0x53", "0x54", "0x99"] },
+      { "name": "Users", "messages": ["0x0F", "0x16", "0x17", "0x8F", "0x9A", "0xAB", "0xAC", "0xAD"] },
+      { "name": "SSH Keys", "messages": ["0x0D", "0x12", "0x13", "0x14", "0x92", "0x93", "0x94", "0x95"] },
+      { "name": "Account", "messages": ["0x0E", "0x8E"] },
+      { "name": "Server Directory", "messages": ["0x55", "0x56", "0x57", "0x58", "0x9B", "0x9C", "0x9D", "0x9E"] },
+      { "name": "Direct Messages", "messages": ["0x19", "0x1A", "0x1B", "0x1E", "0xA1", "0xA2", "0xA3", "0xA4", "0xAE", "0xAF"] },
+      { "name": "Admin", "messages": ["0x59", "0x5A", "0x5B", "0x5C", "0x5D", "0x5E", "0x5F", "0x9F", "0xA5", "0xA6", "0xA7", "0xA8", "0xA9", "0xAA"] },
+      { "name": "System", "messages": ["0x10", "0x11", "0x18", "0x1D", "0x90", "0x91", "0x97", "0x98"] }
+    ],
+    "constants": {
+      "PROTOCOL_VERSION": { "value": 1, "description": "Current protocol version" },
+      "MAX_FRAME_SIZE": { "value": 1048576, "description": "Maximum frame size (1MB)" },
+      "MAX_MESSAGE_LENGTH": { "value": 4096, "description": "Maximum message content length" },
+      "MAX_NICKNAME_LENGTH": { "value": 20, "description": "Maximum nickname length" },
+      "MIN_NICKNAME_LENGTH": { "value": 3, "description": "Minimum nickname length" }
+    }
+  }
+}
