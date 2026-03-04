@@ -1357,6 +1357,7 @@ type Message struct {
 	Content        string
 	CreatedAt      time.Time
 	EditedAt       *time.Time
+	DeletedAt      *time.Time
 	ReplyCount     uint32
 }
 
@@ -1408,6 +1409,9 @@ func (m *MessageListMessage) EncodeTo(w io.Writer) error {
 			return err
 		}
 		if err := WriteOptionalTimestamp(w, msg.EditedAt); err != nil {
+			return err
+		}
+		if err := WriteOptionalTimestamp(w, msg.DeletedAt); err != nil {
 			return err
 		}
 		if err := WriteUint32(w, msg.ReplyCount); err != nil {
@@ -1488,6 +1492,10 @@ func (m *MessageListMessage) Decode(payload []byte) error {
 		if err != nil {
 			return err
 		}
+		deletedAt, err := ReadOptionalTimestamp(buf)
+		if err != nil {
+			return err
+		}
 		replyCount, err := ReadUint32(buf)
 		if err != nil {
 			return err
@@ -1503,6 +1511,7 @@ func (m *MessageListMessage) Decode(payload []byte) error {
 			Content:        content,
 			CreatedAt:      createdAt,
 			EditedAt:       editedAt,
+			DeletedAt:      deletedAt,
 			ReplyCount:     replyCount,
 		}
 	}
@@ -2068,6 +2077,9 @@ func (m *NewMessageMessage) EncodeTo(w io.Writer) error {
 	if err := WriteOptionalTimestamp(w, m.EditedAt); err != nil {
 		return err
 	}
+	if err := WriteOptionalTimestamp(w, m.DeletedAt); err != nil {
+		return err
+	}
 	return WriteUint32(w, m.ReplyCount)
 }
 
@@ -2118,6 +2130,10 @@ func (m *NewMessageMessage) Decode(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	deletedAt, err := ReadOptionalTimestamp(buf)
+	if err != nil {
+		return err
+	}
 	replyCount, err := ReadUint32(buf)
 	if err != nil {
 		return err
@@ -2132,6 +2148,7 @@ func (m *NewMessageMessage) Decode(payload []byte) error {
 	m.Content = content
 	m.CreatedAt = createdAt
 	m.EditedAt = editedAt
+	m.DeletedAt = deletedAt
 	m.ReplyCount = replyCount
 
 	return nil

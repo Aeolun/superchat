@@ -520,7 +520,7 @@ export const storeActions = {
     setChannelStore('data', chKey, 'messages', msgKey, {
       ...msg,
       content: replacementContent,
-      edited_at: { present: 1, value: deletedAt }
+      deleted_at: { present: 1, value: deletedAt }
     })
 
     // Decrement parent's reply_count if this is a reply

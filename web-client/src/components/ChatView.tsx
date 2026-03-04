@@ -38,6 +38,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
                 message().created_at
               )
               const isOwn = () => isOwnMessage(message())
+              const deleted = () => message().deleted_at?.present === 1
 
               return (
                 <>
@@ -56,13 +57,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
                       <span class="text-xs text-base-content/50">
                         {formatMessageTime(message().created_at)}
                       </span>
-                      <Show when={message().edited_at?.present === 1}>
+                      <Show when={message().edited_at?.present === 1 && !deleted()}>
                         <span class="text-xs text-base-content/40 italic">(edited)</span>
                       </Show>
                     </div>
-                    <div class="text-base whitespace-pre-wrap pr-16">{message().content}</div>
+                    <div class={`text-base whitespace-pre-wrap pr-16 ${deleted() ? 'italic text-base-content/40' : ''}`}>{message().content}</div>
 
-                    <Show when={isOwn()}>
+                    <Show when={isOwn() && !deleted()}>
                       <div class="flex gap-0.5 absolute top-2 right-2 md:opacity-0 md:group-hover:opacity-100 md:transition-opacity">
                         <button
                           onClick={() => props.onEdit(message())}

@@ -2027,7 +2027,7 @@ func (m Model) handleMessageDeleted(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 
 	var statusCmd tea.Cmd
 	if msg.Success {
-		m.applyMessageDeletion(msg.MessageID, msg.Message)
+		m.applyMessageDeletion(msg.MessageID, msg.Message, msg.DeletedAt)
 		statusCmd = m.setStatus("Message deleted")
 	} else {
 		statusCmd = m.setError(msg.Message)
@@ -2106,7 +2106,7 @@ func (m Model) handleDisconnect(frame *protocol.Frame) (tea.Model, tea.Cmd) {
 // Command helpers
 
 // applyMessageDeletion updates local state to reflect a deleted message.
-func (m *Model) applyMessageDeletion(messageID uint64, replacement string) {
+func (m *Model) applyMessageDeletion(messageID uint64, replacement string, deletedAt time.Time) {
 	if m.pendingDeleteID == messageID {
 		m.pendingDeleteID = 0
 		m.confirmingDelete = false
@@ -2116,17 +2116,20 @@ func (m *Model) applyMessageDeletion(messageID uint64, replacement string) {
 	for i := range m.threads {
 		if m.threads[i].ID == messageID {
 			m.threads[i].Content = replacement
+			m.threads[i].DeletedAt = &deletedAt
 			updatedThreadList = true
 		}
 	}
 
 	if m.currentThread != nil && m.currentThread.ID == messageID {
 		m.currentThread.Content = replacement
+		m.currentThread.DeletedAt = &deletedAt
 	}
 
 	for i := range m.threadReplies {
 		if m.threadReplies[i].ID == messageID {
 			m.threadReplies[i].Content = replacement
+			m.threadReplies[i].DeletedAt = &deletedAt
 		}
 	}
 

@@ -61,7 +61,7 @@ const ThreadList: Component<ThreadListProps> = (props) => {
                   <span class="px-3 py-2 text-base-content/50 whitespace-nowrap">
                     {formatMessageTime(thread.created_at)}
                   </span>
-                  <span class="px-3 py-2 font-semibold truncate">
+                  <span class={`px-3 py-2 truncate ${thread.deleted_at?.present === 1 ? 'italic text-base-content/40' : 'font-semibold'}`}>
                     {title}
                   </span>
                   <span class="px-3 py-2 text-secondary font-semibold whitespace-nowrap">

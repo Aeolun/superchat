@@ -22,6 +22,9 @@ interface ThreadDetailProps {
   isFocused: boolean
 }
 
+/** Check if a message has been soft-deleted */
+const isDeleted = (msg: Message) => msg.deleted_at?.present === 1
+
 /** Action buttons shown on each message (reply, edit, delete) */
 const MessageActions: Component<{
   message: Message
@@ -30,39 +33,42 @@ const MessageActions: Component<{
   onDelete: (messageId: bigint) => void
 }> = (props) => {
   const isOwn = () => isOwnMessage(props.message)
+  const deleted = () => isDeleted(props.message)
 
   return (
-    <div class="flex gap-0.5 absolute top-2 right-2">
-      <button
-        onClick={() => props.onReply(props.message.message_id, props.message)}
-        class="btn btn-xs btn-ghost"
-        title="Reply"
-      >
-        <Icon name="arrow-bend-up-left" size={16} />
-      </button>
-      <Show when={isOwn()}>
+    <Show when={!deleted()}>
+      <div class="flex gap-0.5 absolute top-2 right-2">
         <button
-          onClick={() => props.onEdit(props.message)}
+          onClick={() => props.onReply(props.message.message_id, props.message)}
           class="btn btn-xs btn-ghost"
-          title="Edit"
+          title="Reply"
         >
-          <Icon name="pencil" size={16} />
+          <Icon name="arrow-bend-up-left" size={16} />
         </button>
-        <button
-          onClick={() => props.onDelete(props.message.message_id)}
-          class="btn btn-xs btn-ghost text-error/70 hover:text-error"
-          title="Delete"
-        >
-          <Icon name="trash" size={16} />
-        </button>
-      </Show>
-    </div>
+        <Show when={isOwn()}>
+          <button
+            onClick={() => props.onEdit(props.message)}
+            class="btn btn-xs btn-ghost"
+            title="Edit"
+          >
+            <Icon name="pencil" size={16} />
+          </button>
+          <button
+            onClick={() => props.onDelete(props.message.message_id)}
+            class="btn btn-xs btn-ghost text-error/70 hover:text-error"
+            title="Delete"
+          >
+            <Icon name="trash" size={16} />
+          </button>
+        </Show>
+      </div>
+    </Show>
   )
 }
 
-/** Small "(edited)" indicator */
+/** Small "(edited)" indicator - only for non-deleted messages */
 const EditedIndicator: Component<{ message: Message }> = (props) => (
-  <Show when={props.message.edited_at?.present === 1}>
+  <Show when={props.message.edited_at?.present === 1 && !isDeleted(props.message)}>
     <span class="text-xs text-base-content/40 italic">(edited)</span>
   </Show>
 )
@@ -94,8 +100,9 @@ const ThreadDetail: Component<ThreadDetailProps> = (props) => {
                   </span>
                   <EditedIndicator message={thread()} />
                 </div>
-                <div class="text-base whitespace-pre-wrap pr-20">
+                <div class={`text-base whitespace-pre-wrap pr-20 ${isDeleted(thread()) ? 'italic text-base-content/40' : ''}`}>
                   {(() => {
+                    if (isDeleted(thread())) return thread().content
                     const idx = thread().content.indexOf('\n\n')
                     if (idx < 0) return thread().content
                     return <>
@@ -166,7 +173,7 @@ const MessageWithRepliesComponent: Component<MessageWithRepliesComponentProps> =
             </span>
             <EditedIndicator message={props.message} />
           </div>
-          <div class="text-base whitespace-pre-wrap pr-20">
+          <div class={`text-base whitespace-pre-wrap pr-20 ${isDeleted(props.message) ? 'italic text-base-content/40' : ''}`}>
             {props.message.content}
           </div>
         </div>

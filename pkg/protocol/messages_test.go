@@ -824,6 +824,7 @@ func TestListMessagesMessage(t *testing.T) {
 func TestMessageListMessage(t *testing.T) {
 	now := time.Now()
 	editedTime := now.Add(5 * time.Minute)
+	deletedTime := now.Add(10 * time.Minute)
 
 	subchannelID := uint64(5)
 	parentID := uint64(10)
@@ -893,7 +894,31 @@ func TestMessageListMessage(t *testing.T) {
 						Content:        "Reply message",
 						CreatedAt:      now.Add(time.Minute),
 						EditedAt:       &editedTime,
+						DeletedAt:      nil,
 						ReplyCount:     0,
+					},
+				},
+			},
+		},
+		{
+			name: "message with deleted_at",
+			msg: MessageListMessage{
+				ChannelID:    1,
+				SubchannelID: nil,
+				ParentID:     nil,
+				Messages: []Message{
+					{
+						ID:             3,
+						ChannelID:      1,
+						SubchannelID:   nil,
+						ParentID:       nil,
+						AuthorUserID:   &authorUserID,
+						AuthorNickname: "alice",
+						Content:        "[deleted by ~alice]",
+						CreatedAt:      now,
+						EditedAt:       nil,
+						DeletedAt:      &deletedTime,
+						ReplyCount:     1,
 					},
 				},
 			},
@@ -949,6 +974,13 @@ func TestMessageListMessage(t *testing.T) {
 				} else {
 					require.NotNil(t, dec.EditedAt)
 					assert.InDelta(t, msg.EditedAt.UnixMilli(), dec.EditedAt.UnixMilli(), 1)
+				}
+
+				if msg.DeletedAt == nil {
+					assert.Nil(t, dec.DeletedAt)
+				} else {
+					require.NotNil(t, dec.DeletedAt)
+					assert.InDelta(t, msg.DeletedAt.UnixMilli(), dec.DeletedAt.UnixMilli(), 1)
 				}
 			}
 		})
@@ -1364,6 +1396,7 @@ func TestServerConfigMessage(t *testing.T) {
 func TestNewMessageMessage(t *testing.T) {
 	now := time.Now()
 	editedTime := now.Add(5 * time.Minute)
+	deletedTime := now.Add(10 * time.Minute)
 
 	subchannelID := uint64(5)
 	parentID := uint64(10)
@@ -1400,6 +1433,23 @@ func TestNewMessageMessage(t *testing.T) {
 				Content:        "This is a reply",
 				CreatedAt:      now,
 				EditedAt:       &editedTime,
+				DeletedAt:      nil,
+				ReplyCount:     0,
+			},
+		},
+		{
+			name: "deleted message",
+			msg: NewMessageMessage{
+				ID:             3,
+				ChannelID:      1,
+				SubchannelID:   nil,
+				ParentID:       nil,
+				AuthorUserID:   &authorUserID,
+				AuthorNickname: "alice",
+				Content:        "[deleted by ~alice]",
+				CreatedAt:      now,
+				EditedAt:       nil,
+				DeletedAt:      &deletedTime,
 				ReplyCount:     0,
 			},
 		},
@@ -1448,6 +1498,13 @@ func TestNewMessageMessage(t *testing.T) {
 			} else {
 				require.NotNil(t, decoded.EditedAt)
 				assert.InDelta(t, tt.msg.EditedAt.UnixMilli(), decoded.EditedAt.UnixMilli(), 1)
+			}
+
+			if tt.msg.DeletedAt == nil {
+				assert.Nil(t, decoded.DeletedAt)
+			} else {
+				require.NotNil(t, decoded.DeletedAt)
+				assert.InDelta(t, tt.msg.DeletedAt.UnixMilli(), decoded.DeletedAt.UnixMilli(), 1)
 			}
 		})
 	}

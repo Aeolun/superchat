@@ -475,6 +475,7 @@ export interface NewMessage {
   content_raw?: Uint8Array;
   created_at: bigint;
   edited_at: { present: number, value?: bigint };
+  deleted_at: { present: number, value?: bigint };
   reply_count: number;
 }
 
@@ -517,6 +518,10 @@ export class NewMessageEncoder extends BitStreamEncoder {
     this.writeUint8(value.edited_at.present);
     if (value.edited_at.present == 1 && value.edited_at.value !== undefined) {
       this.writeInt64(value.edited_at.value, "big_endian");
+    }
+    this.writeUint8(value.deleted_at.present);
+    if (value.deleted_at.present == 1 && value.deleted_at.value !== undefined) {
+      this.writeInt64(value.deleted_at.value, "big_endian");
     }
     this.writeUint32(value.reply_count, "big_endian");
     return this.finish();
@@ -567,6 +572,11 @@ export class NewMessageDecoder extends BitStreamDecoder {
     value.edited_at.present = this.readUint8();
     if (value.edited_at.present == 1) {
       value.edited_at.value = this.readInt64("big_endian");
+    }
+    value.deleted_at = {};
+    value.deleted_at.present = this.readUint8();
+    if (value.deleted_at.present == 1) {
+      value.deleted_at.value = this.readInt64("big_endian");
     }
     value.reply_count = this.readUint32("big_endian");
     return value;
@@ -1066,6 +1076,7 @@ export interface Message {
   content_raw?: Uint8Array;
   created_at: bigint;
   edited_at: { present: number, value?: bigint };
+  deleted_at: { present: number, value?: bigint };
   reply_count: number;
 }
 
@@ -1108,6 +1119,10 @@ export class MessageEncoder extends BitStreamEncoder {
     this.writeUint8(value.edited_at.present);
     if (value.edited_at.present == 1 && value.edited_at.value !== undefined) {
       this.writeInt64(value.edited_at.value, "big_endian");
+    }
+    this.writeUint8(value.deleted_at.present);
+    if (value.deleted_at.present == 1 && value.deleted_at.value !== undefined) {
+      this.writeInt64(value.deleted_at.value, "big_endian");
     }
     this.writeUint32(value.reply_count, "big_endian");
     return this.finish();
@@ -1158,6 +1173,11 @@ export class MessageDecoder extends BitStreamDecoder {
     value.edited_at.present = this.readUint8();
     if (value.edited_at.present == 1) {
       value.edited_at.value = this.readInt64("big_endian");
+    }
+    value.deleted_at = {};
+    value.deleted_at.present = this.readUint8();
+    if (value.deleted_at.present == 1) {
+      value.deleted_at.value = this.readInt64("big_endian");
     }
     value.reply_count = this.readUint32("big_endian");
     return value;
@@ -1225,6 +1245,10 @@ export class MessageListEncoder extends BitStreamEncoder {
       this.writeUint8(value_messages_item.edited_at.present);
       if (value_messages_item.edited_at.present == 1 && value_messages_item.edited_at.value !== undefined) {
         this.writeInt64(value_messages_item.edited_at.value, "big_endian");
+      }
+      this.writeUint8(value_messages_item.deleted_at.present);
+      if (value_messages_item.deleted_at.present == 1 && value_messages_item.deleted_at.value !== undefined) {
+        this.writeInt64(value_messages_item.deleted_at.value, "big_endian");
       }
       this.writeUint32(value_messages_item.reply_count, "big_endian");
     }
@@ -1296,6 +1320,11 @@ export class MessageListDecoder extends BitStreamDecoder {
       messages_item.edited_at.present = this.readUint8();
       if (messages_item.edited_at.present == 1) {
         messages_item.edited_at.value = this.readInt64("big_endian");
+      }
+      messages_item.deleted_at = {};
+      messages_item.deleted_at.present = this.readUint8();
+      if (messages_item.deleted_at.present == 1) {
+        messages_item.deleted_at.value = this.readInt64("big_endian");
       }
       messages_item.reply_count = this.readUint32("big_endian");
       value.messages.push(messages_item);

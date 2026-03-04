@@ -64,6 +64,7 @@ func CreateTestMessage(id uint64, channelID uint64, author string, content strin
 		Content:        content,
 		CreatedAt:      time.Now(),
 		EditedAt:       nil,
+		DeletedAt:      nil,
 		ReplyCount:     0,
 	}
 }

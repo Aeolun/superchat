@@ -1974,7 +1974,7 @@ func convertDBMessagesToProtocol(dbMessages []*database.Message, db *database.Me
 // convertDBMessageToProtocol converts a database message to protocol message
 func convertDBMessageToProtocol(dbMsg *database.Message, db *database.MemDB) *protocol.Message {
 	var subchannelID, parentID, authorUserID *uint64
-	var editedAt *time.Time
+	var editedAt, deletedAt *time.Time
 
 	if dbMsg.SubchannelID != nil {
 		id := uint64(*dbMsg.SubchannelID)
@@ -1991,6 +1991,10 @@ func convertDBMessageToProtocol(dbMsg *database.Message, db *database.MemDB) *pr
 	if dbMsg.EditedAt != nil {
 		t := time.UnixMilli(*dbMsg.EditedAt)
 		editedAt = &t
+	}
+	if dbMsg.DeletedAt != nil {
+		t := time.UnixMilli(*dbMsg.DeletedAt)
+		deletedAt = &t
 	}
 
 	// Determine display nickname (with prefix)
@@ -2029,6 +2033,7 @@ func convertDBMessageToProtocol(dbMsg *database.Message, db *database.MemDB) *pr
 		Content:        dbMsg.Content,
 		CreatedAt:      time.UnixMilli(dbMsg.CreatedAt),
 		EditedAt:       editedAt,
+		DeletedAt:      deletedAt,
 		ReplyCount:     replyCount,
 	}
 }

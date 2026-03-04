@@ -4,6 +4,7 @@ import (
 	"io"
 	"log"
 	"testing"
+	"time"
 
 	"github.com/aeolun/superchat/pkg/client"
 	"github.com/aeolun/superchat/pkg/protocol"
@@ -338,7 +339,7 @@ func TestApplyMessageDeletion(t *testing.T) {
 	m.threads = []protocol.Message{rootMsg}
 
 	// Delete the reply
-	m.applyMessageDeletion(2, "[deleted by author]")
+	m.applyMessageDeletion(2, "[deleted by author]", time.Now())
 
 	if m.threadReplies[0].Content != "[deleted by author]" {
 		t.Errorf("threadReplies[0].Content = %q, want %q",

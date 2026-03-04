@@ -603,14 +603,14 @@ Each message:
 +------------------------------+--------------------------------+
 | created_at (Timestamp) | edited_at (Optional Timestamp) |
 +------------------------+--------------------------------+
-| thread_depth (u8)      | reply_count (u32)              |
-+------------------------+--------------------------------+
+| deleted_at (Optional Timestamp) | reply_count (u32)     |
++---------------------------------+-----------------------+
 ```
 
 **Notes:**
 - Response includes the request context (`channel_id`, `subchannel_id`, `parent_id`) so clients can match responses to requests
 - `author_user_id` is null for anonymous users
-- `thread_depth`: 0 = root, 1+ = nested
+- `deleted_at`: set when message has been soft-deleted; clients should use this (not content) to determine deletion state
 - `reply_count`: Total number of replies (all descendants)
 
 ### 0x0A - POST_MESSAGE (Client → Server)
@@ -657,8 +657,8 @@ Uses the same format as a single message in MESSAGE_LIST:
 +------------------------------+--------------------------------+
 | created_at (Timestamp) | edited_at (Optional Timestamp) |
 +------------------------+--------------------------------+
-| thread_depth (u8)      | reply_count (u32)              |
-+------------------------+--------------------------------+
+| deleted_at (Optional Timestamp) | reply_count (u32)     |
++---------------------------------+-----------------------+
 ```
 
 ### 0x0B - EDIT_MESSAGE (Client → Server)

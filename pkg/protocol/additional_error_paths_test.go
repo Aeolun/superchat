@@ -32,6 +32,7 @@ func TestMessageListEncodeToAllErrorPaths(t *testing.T) {
 				Content:        "test",
 				CreatedAt:      now,
 				EditedAt:       &editTime,
+				DeletedAt:      &editTime,
 				ReplyCount:     5,
 			},
 		},
@@ -52,7 +53,8 @@ func TestMessageListEncodeToAllErrorPaths(t *testing.T) {
 		{"fail on content", 10},           // Seventh field
 		{"fail on createdAt", 11},         // Eighth field
 		{"fail on editedAt", 12},          // Ninth field
-		{"fail on replyCount", 13},        // Tenth field
+		{"fail on deletedAt", 13},         // Tenth field
+		{"fail on replyCount", 14},        // Eleventh field
 	}
 
 	for _, tt := range tests {
@@ -146,6 +148,7 @@ func TestNewMessageEncodeToAllErrorPaths(t *testing.T) {
 		Content:        "new message",
 		CreatedAt:      now,
 		EditedAt:       &editTime,
+		DeletedAt:      &editTime,
 		ReplyCount:     3,
 	}
 
@@ -162,7 +165,8 @@ func TestNewMessageEncodeToAllErrorPaths(t *testing.T) {
 		{"fail on Content", 6},
 		{"fail on CreatedAt", 7},
 		{"fail on EditedAt", 8},
-		{"fail on ReplyCount", 9},
+		{"fail on DeletedAt", 9},
+		{"fail on ReplyCount", 10},
 	}
 
 	for _, tt := range tests {

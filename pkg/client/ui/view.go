@@ -1066,9 +1066,9 @@ func (m Model) formatMessage(msg protocol.Message, depth int, selected bool) str
 	timeStr := client.FormatRelativeTime(msg.CreatedAt)
 	timestamp := MessageTimeStyle.Render(timeStr)
 
-	// Add edited indicator if message was edited
+	// Add edited indicator if message was edited (but not if deleted)
 	editedIndicator := ""
-	if msg.EditedAt != nil {
+	if msg.EditedAt != nil && msg.DeletedAt == nil {
 		editedIndicator = "  " + MessageTimeStyle.Render("(edited)")
 	}
 
