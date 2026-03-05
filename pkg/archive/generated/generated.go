@@ -2,7 +2,7 @@ package generated
 
 import (
 	"fmt"
-	"github.com/anthropics/binschema/runtime"
+	"github.com/aeolun/superchat/pkg/archive/generated/runtime"
 )
 
 // String is a type alias for string (encoding config used inline at call sites)
