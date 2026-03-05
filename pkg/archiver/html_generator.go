@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,9 +19,10 @@ const messagesPerPage = 50
 
 // HTMLGenerator produces static HTML pages from archived messages.
 type HTMLGenerator struct {
-	outputDir string
-	store     *Store
-	templates *template.Template
+	outputDir  string
+	store      *Store
+	templates  *template.Template
+	generating atomic.Bool
 }
 
 // NewHTMLGenerator creates a new HTML generator.
@@ -66,7 +68,14 @@ func (g *HTMLGenerator) RunPeriodic(intervalSeconds int, shutdown <-chan struct{
 }
 
 // GenerateAll regenerates all HTML pages for all servers.
+// Skips if a generation is already in progress.
 func (g *HTMLGenerator) GenerateAll() {
+	if !g.generating.CompareAndSwap(false, true) {
+		log.Printf("[archiver/html] skipping generation, previous run still in progress")
+		return
+	}
+	defer g.generating.Store(false)
+
 	servers, err := g.store.GetServers()
 	if err != nil {
 		log.Printf("[archiver/html] failed to get servers: %v", err)
