@@ -50,6 +50,9 @@ func (s *Server) Start() error {
 	}
 	s.listener = ln
 
+	// Generate initial HTML so nginx has something to serve immediately
+	s.htmlGen.GenerateAll()
+
 	// Start periodic HTML generation if configured
 	if s.config.HTMLIntervalSeconds > 0 {
 		s.wg.Add(1)
