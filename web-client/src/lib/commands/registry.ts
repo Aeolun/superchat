@@ -51,7 +51,7 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     name: 'Up',
     helpText: 'Move selection up',
     scope: CommandScope.View,
-    viewStates: [ViewState.ChannelList, ViewState.ThreadList, ViewState.ThreadDetail],
+    viewStates: [ViewState.ChannelList, ViewState.ThreadList, ViewState.ThreadDetail, ViewState.ChatView],
     modalStates: [ModalState.None],
     actionId: 'navigate-up',
     priority: 10
@@ -62,7 +62,7 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     name: 'Down',
     helpText: 'Move selection down',
     scope: CommandScope.View,
-    viewStates: [ViewState.ChannelList, ViewState.ThreadList, ViewState.ThreadDetail],
+    viewStates: [ViewState.ChannelList, ViewState.ThreadList, ViewState.ThreadDetail, ViewState.ChatView],
     modalStates: [ModalState.None],
     actionId: 'navigate-down',
     priority: 11
@@ -73,7 +73,7 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     name: 'Select',
     helpText: 'Select current item',
     scope: CommandScope.View,
-    viewStates: [ViewState.ChannelList, ViewState.ThreadList],
+    viewStates: [ViewState.ChannelList, ViewState.ThreadList, ViewState.ChatView],
     modalStates: [ModalState.None],
     actionId: 'select',
     priority: 20
@@ -94,10 +94,10 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
 
   {
     keys: ['n'],
-    name: 'New Message',
-    helpText: 'Compose new message/thread',
+    name: 'New Thread',
+    helpText: 'Compose new thread',
     scope: CommandScope.View,
-    viewStates: [ViewState.ThreadList, ViewState.ChatView],
+    viewStates: [ViewState.ThreadList],
     modalStates: [ModalState.None],
     actionId: 'compose-new-thread',
     isAvailable: (executor) => executor.hasSelectedChannel(),
@@ -116,17 +116,6 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     priority: 101
   },
 
-  {
-    keys: ['i'],
-    name: 'Compose',
-    helpText: 'Focus compose area',
-    scope: CommandScope.View,
-    viewStates: [ViewState.ChatView],
-    modalStates: [ModalState.None],
-    actionId: 'focus-compose',
-    isAvailable: (executor) => executor.hasSelectedChannel(),
-    priority: 102
-  },
 
   {
     keys: ['Control+Enter', 'Meta+Enter'],
@@ -147,7 +136,7 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     viewStates: [ViewState.ThreadDetail],
     modalStates: [ModalState.None],
     actionId: 'edit-message',
-    isAvailable: (executor) => executor.hasSelectedMessage(),
+    isAvailable: (executor) => executor.hasSelectedOwnMessage(),
     priority: 103
   },
 
@@ -159,7 +148,7 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     viewStates: [ViewState.ThreadDetail],
     modalStates: [ModalState.None],
     actionId: 'delete-message',
-    isAvailable: (executor) => executor.hasSelectedMessage(),
+    isAvailable: (executor) => executor.hasSelectedOwnMessage(),
     priority: 104
   },
 
@@ -177,6 +166,18 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     priority: 801
   },
 
+  {
+    keys: ['s'],
+    name: 'Create Subchannel',
+    helpText: 'Create a subchannel in selected channel',
+    scope: CommandScope.View,
+    viewStates: [ViewState.ChannelList],
+    modalStates: [ModalState.None],
+    actionId: 'create-subchannel',
+    isAvailable: (executor) => executor.hasSelectedChannel(),
+    priority: 802
+  },
+
   // === DM Commands ===
 
   {
@@ -190,7 +191,7 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     priority: 200
   },
 
-  // === Registration Commands ===
+  // === Registration & Identity Commands ===
 
   {
     keys: ['Control+r', 'Meta+r'],
@@ -201,6 +202,39 @@ export const SHARED_COMMANDS: CommandDefinition[] = [
     actionId: 'register-nickname',
     isAvailable: (executor) => executor.isConnected() && !executor.isRegistered(),
     priority: 201
+  },
+
+  {
+    keys: ['Control+a', 'Meta+a'],
+    name: 'Go Anonymous',
+    helpText: 'Switch to anonymous mode',
+    scope: CommandScope.Global,
+    modalStates: [ModalState.None],
+    actionId: 'go-anonymous',
+    isAvailable: (executor) => executor.isConnected() && executor.isRegistered(),
+    priority: 202
+  },
+
+  {
+    keys: ['Control+n', 'Meta+n'],
+    name: 'Change Nickname',
+    helpText: 'Change your nickname',
+    scope: CommandScope.Global,
+    modalStates: [ModalState.None],
+    actionId: 'change-nickname',
+    isAvailable: (executor) => executor.isConnected(),
+    priority: 203
+  },
+
+  {
+    keys: ['Control+p', 'Meta+p'],
+    name: 'Change Password',
+    helpText: 'Change your password',
+    scope: CommandScope.Global,
+    modalStates: [ModalState.None],
+    actionId: 'change-password',
+    isAvailable: (executor) => executor.isConnected() && executor.isRegistered(),
+    priority: 204
   },
 
   // === Admin Commands ===

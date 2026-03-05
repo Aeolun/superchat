@@ -31,6 +31,7 @@ export const currentChannel = createMemo<Channel | null>(() => {
       is_operator: 0,
       has_subchannels: 0,
       subchannel_count: 0,
+      archive_enabled: 0,
     }
   }
 

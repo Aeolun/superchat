@@ -26,7 +26,10 @@ export enum ModalState {
   DMRequest = 'dm-request',
   EncryptionSetup = 'encryption-setup',
   Register = 'register',
-  CreateChannel = 'create-channel'
+  CreateChannel = 'create-channel',
+  CreateSubchannel = 'create-subchannel',
+  ChangeNickname = 'change-nickname',
+  ChangePassword = 'change-password'
 }
 
 // Interface for querying application state
@@ -38,6 +41,7 @@ export interface CommandExecutor {
   hasSelectedMessage(): boolean
   hasSelectedThread(): boolean
   hasComposeContent(): boolean
+  hasSelectedOwnMessage(): boolean
   canGoBack(): boolean
   isAdmin(): boolean
   isConnected(): boolean

@@ -42,8 +42,8 @@ export function useKeyboardShortcuts(
     const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
     const hasModifier = e.ctrlKey || e.metaKey || e.altKey
 
-    // For inputs, only process modifier shortcuts (Ctrl+D, etc.) and Escape
-    if (isInput && !hasModifier && e.key !== 'Escape') {
+    // For inputs, only process modifier shortcuts (Ctrl+D, etc.), Escape, and Tab
+    if (isInput && !hasModifier && e.key !== 'Escape' && e.key !== 'Tab') {
       return
     }
 

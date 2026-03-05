@@ -16,6 +16,10 @@ render(
         <Route path="/" component={ChannelContent} />
         <Route path="/thread/:threadId" component={ThreadDetailPage} />
       </Route>
+      <Route path="/channel/:channelId/sub/:subchannelId" component={ChannelLayout}>
+        <Route path="/" component={ChannelContent} />
+        <Route path="/thread/:threadId" component={ThreadDetailPage} />
+      </Route>
     </HashRouter>
   ),
   document.getElementById('app')!

@@ -6,7 +6,7 @@ import { SuperChatEventClient, type SuperChatEvent } from './superchat-events'
 import { store, storeActions, ModalState } from '../store/app-store'
 import { computeSharedSecret, deriveChannelKey, decryptMessage, KEY_TYPE_GENERATED } from './crypto'
 import { safeLog, safeWarn, safeError } from './utils/safe-log'
-import type { ChannelCreated, MessageEdited, MessageDeleted, ChannelDeleted, ServerPresence, ChannelPresence, AuthResponse, RegisterResponse, UserInfo, KeyRequired, DMReady, DMPending, DMRequest, DMParticipantLeft, DMDeclined, NewMessage, Message } from '../SuperChatCodec'
+import type { ChannelCreated, MessageEdited, MessageDeleted, ChannelDeleted, ServerPresence, ChannelPresence, AuthResponse, RegisterResponse, NicknameResponse, UserInfo, KeyRequired, DMReady, DMPending, DMRequest, DMParticipantLeft, DMDeclined, NewMessage, Message, PasswordChanged, SubchannelCreated, SubchannelList } from '../SuperChatCodec'
 
 /**
  * Try to decrypt a message's content_raw using the channel's encryption key.
@@ -137,6 +137,10 @@ export class ProtocolBridge {
         this.handleUserInfo(event.info)
         break
 
+      case 'nickname-response':
+        this.handleNicknameResponse(event.response)
+        break
+
       case 'auth-response':
         this.handleAuthResponse(event.response)
         break
@@ -167,6 +171,18 @@ export class ProtocolBridge {
 
       case 'dm-declined':
         this.handleDMDeclined(event.data)
+        break
+
+      case 'password-changed':
+        this.handlePasswordChanged(event.data)
+        break
+
+      case 'subchannel-created':
+        this.handleSubchannelCreated(event.data)
+        break
+
+      case 'subchannel-list':
+        this.handleSubchannelList(event.data)
         break
 
       case 'server-config':
@@ -334,6 +350,7 @@ export class ProtocolBridge {
       description: data.description ?? '',
       type: data.type ?? 0,
       retention_hours: data.retention_hours ?? 168,
+      archive_enabled: data.archive_enabled ?? 0,
       user_count: 0,
       is_operator: 0,
       has_subchannels: 0,
@@ -424,6 +441,34 @@ export class ProtocolBridge {
   }
 
   /**
+   * Handle NICKNAME_RESPONSE - result of nickname change or initial set
+   */
+  private handleNicknameResponse(response: NicknameResponse): void {
+    const pendingNick = store.pendingNicknameChange
+    const isChangeAttempt = pendingNick !== ''
+
+    if (response.success === 1) {
+      if (isChangeAttempt) {
+        safeLog('Nickname changed to:', pendingNick)
+        store.setNickname(pendingNick)
+        store.setPendingNicknameChange('')
+        localStorage.setItem('superchat_last_nickname', pendingNick)
+      }
+      if (store.activeModal === ModalState.ChangeNickname) {
+        storeActions.closeModal()
+      }
+    } else {
+      store.setPendingNicknameChange('')
+      if (isChangeAttempt) {
+        store.setAuthError(response.message || 'Nickname change failed')
+      } else {
+        // Initial connection nickname failure
+        store.setErrorMessage(response.message || 'Nickname rejected')
+      }
+    }
+  }
+
+  /**
    * Handle AUTH_RESPONSE - result of authentication attempt
    */
   private handleAuthResponse(response: AuthResponse): void {
@@ -462,6 +507,20 @@ export class ProtocolBridge {
     } else {
       safeLog('Registration failed')
       store.setAuthError('Registration failed. Please try again.')
+    }
+  }
+
+  /**
+   * Handle PASSWORD_CHANGED - result of password change attempt
+   */
+  private handlePasswordChanged(data: PasswordChanged): void {
+    if (data.success === 1) {
+      safeLog('Password changed successfully')
+      store.setAuthError('')
+      storeActions.closeModal()
+    } else {
+      safeLog('Password change failed:', data.error_message)
+      store.setAuthError(data.error_message || 'Password change failed')
     }
   }
 
@@ -568,6 +627,43 @@ export class ProtocolBridge {
     safeLog(`DM participant left: ${data.nickname} left DM channel ${data.dm_channel_id}`)
 
     storeActions.markDMParticipantLeft(data.dm_channel_id)
+  }
+
+  /**
+   * Handle SUBCHANNEL_CREATED broadcast
+   */
+  private handleSubchannelCreated(data: SubchannelCreated): void {
+    if (data.success !== 1) {
+      if (data.message) safeError('Create subchannel failed:', data.message)
+      return
+    }
+
+    // Add to cached subchannels
+    storeActions.addSubchannelToCache(data.channel_id, {
+      id: data.subchannel_id,
+      name: data.name,
+      description: data.description,
+      type: data.type,
+      retention_hours: data.retention_hours,
+    })
+
+    // Update parent channel's subchannel_count
+    const parent = store.channels.get(data.channel_id)
+    if (parent) {
+      storeActions.addChannel({
+        ...parent,
+        has_subchannels: 1,
+        subchannel_count: parent.subchannel_count + 1,
+      })
+    }
+  }
+
+  /**
+   * Handle SUBCHANNEL_LIST response
+   */
+  private handleSubchannelList(data: SubchannelList): void {
+    storeActions.setSubchannelsForChannel(data.channel_id, data.subchannels)
+    store.setLoadingSubchannels(false)
   }
 
   /**

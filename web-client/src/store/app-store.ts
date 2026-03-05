@@ -3,7 +3,7 @@
 
 import { createSignal } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
-import type { Channel, Message } from '../SuperChatCodec'
+import type { Channel, Message, SubchannelInfo } from '../SuperChatCodec'
 
 // Stringify bigint for use as object key (BigInt can't be object keys)
 export const k = (id: bigint) => String(id)
@@ -39,7 +39,10 @@ export enum ModalState {
   EncryptionSetup = 'encryption-setup',
   Password = 'password',
   Register = 'register',
-  CreateChannel = 'create-channel'
+  CreateChannel = 'create-channel',
+  CreateSubchannel = 'create-subchannel',
+  ChangeNickname = 'change-nickname',
+  ChangePassword = 'change-password'
 }
 
 // Focus area for keyboard navigation
@@ -137,6 +140,7 @@ const [focusArea, setFocusArea] = createSignal<FocusArea>(FocusArea.Sidebar)
 // Selection indices for keyboard navigation
 const [selectedChannelIndex, setSelectedChannelIndex] = createSignal<number>(0)
 const [selectedMessageIndex, setSelectedMessageIndex] = createSignal<number>(0)
+const [selectedThreadListIndex, setSavedThreadListIndex] = createSignal<number>(0)
 
 // Subscription tracking
 const [subscribedChannelId, setSubscribedChannelId] = createSignal<bigint | null>(null)
@@ -164,10 +168,17 @@ const [encryptionSetupReason, setEncryptionSetupReason] = createSignal<string>('
 const [pendingAuthNickname, setPendingAuthNickname] = createSignal<string>('')
 const [nicknameIsRegistered, setNicknameIsRegistered] = createSignal<boolean>(false)
 const [authError, setAuthError] = createSignal<string>('')
+const [pendingNicknameChange, setPendingNicknameChange] = createSignal<string>('')
 
 // Mobile panel toggles (only effective below md breakpoint)
 const [mobileSidebarOpen, setMobileSidebarOpen] = createSignal(false)
 const [mobileUsersOpen, setMobileUsersOpen] = createSignal(false)
+
+// Subchannel state
+const [expandedChannelId, setExpandedChannelId] = createSignal<bigint | null>(null)
+const [subchannels, setSubchannels] = createSignal<Map<bigint, SubchannelInfo[]>>(new Map())
+const [loadingSubchannels, setLoadingSubchannels] = createSignal(false)
+const [activeSubchannelId, setActiveSubchannelId] = createSignal<bigint | null>(null)
 
 // Export the store as an object with getters and setters
 export const store = {
@@ -224,6 +235,9 @@ export const store = {
   get selectedMessageIndex() { return selectedMessageIndex() },
   setSelectedMessageIndex,
 
+  get selectedThreadListIndex() { return selectedThreadListIndex() },
+  setSavedThreadListIndex,
+
   // Subscriptions
   get subscribedChannelId() { return subscribedChannelId() },
   setSubscribedChannelId,
@@ -278,12 +292,28 @@ export const store = {
   get authError() { return authError() },
   setAuthError,
 
+  get pendingNicknameChange() { return pendingNicknameChange() },
+  setPendingNicknameChange,
+
   // Mobile panels
   get mobileSidebarOpen() { return mobileSidebarOpen() },
   setMobileSidebarOpen,
 
   get mobileUsersOpen() { return mobileUsersOpen() },
   setMobileUsersOpen,
+
+  // Subchannel state
+  get expandedChannelId() { return expandedChannelId() },
+  setExpandedChannelId,
+
+  get subchannels() { return subchannels() },
+  setSubchannels,
+
+  get loadingSubchannels() { return loadingSubchannels() },
+  setLoadingSubchannels,
+
+  get activeSubchannelId() { return activeSubchannelId() },
+  setActiveSubchannelId,
 }
 
 // Helper actions for common operations
@@ -472,6 +502,7 @@ export const storeActions = {
     this.clearMessages()
     this.clearCompose()
     this.clearDMState()
+    this.clearSubchannelState()
   },
 
   // Open/close modals
@@ -670,6 +701,31 @@ export const storeActions = {
   toggleMobileUsers() {
     setMobileSidebarOpen(false)
     setMobileUsersOpen(prev => !prev)
+  },
+
+  // Subchannel actions
+  setSubchannelsForChannel(channelId: bigint, subs: SubchannelInfo[]) {
+    setSubchannels(prev => new Map(prev).set(channelId, subs))
+  },
+
+  addSubchannelToCache(channelId: bigint, sub: SubchannelInfo) {
+    setSubchannels(prev => {
+      const newMap = new Map(prev)
+      const existing = newMap.get(channelId) || []
+      newMap.set(channelId, [...existing, sub])
+      return newMap
+    })
+  },
+
+  toggleExpandChannel(channelId: bigint) {
+    setExpandedChannelId(prev => prev === channelId ? null : channelId)
+  },
+
+  clearSubchannelState() {
+    setExpandedChannelId(null)
+    setSubchannels(new Map())
+    setLoadingSubchannels(false)
+    setActiveSubchannelId(null)
   },
 
   clearDMState() {

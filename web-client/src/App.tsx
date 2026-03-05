@@ -12,6 +12,9 @@ import PasswordModal from './components/PasswordModal'
 import RegisterModal from './components/RegisterModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import CreateChannelModal from './components/CreateChannelModal'
+import CreateSubchannelModal from './components/CreateSubchannelModal'
+import ChangeNicknameModal from './components/ChangeNicknameModal'
+import ChangePasswordModal from './components/ChangePasswordModal'
 import { DM_TARGET_BY_USER_ID, DM_TARGET_BY_SESSION_ID, type Message } from './SuperChatCodec'
 import Icon from './components/Icon'
 import { encryptMessage } from './lib/crypto'
@@ -80,6 +83,7 @@ const App: Component<ParentProps> = (props) => {
         case ModalState.Compose: return CmdModalState.Compose
         case ModalState.ServerSelector: return CmdModalState.ServerSelector
         case ModalState.ConfirmDelete: return CmdModalState.ConfirmDelete
+        case ModalState.CreateSubchannel: return CmdModalState.CreateSubchannel
         case ModalState.StartDM: return CmdModalState.StartDM
         case ModalState.DMRequest: return CmdModalState.DMRequest
         case ModalState.EncryptionSetup: return CmdModalState.EncryptionSetup
@@ -88,7 +92,12 @@ const App: Component<ParentProps> = (props) => {
     },
     hasSelectedChannel: () => store.activeChannelId !== null,
     hasSelectedMessage: () => store.selectedMessageIndex >= 0,
-    hasSelectedThread: () => currentThreadList().length > 0 && store.selectedMessageIndex >= 0,
+    hasSelectedOwnMessage: () => {
+      const messages = flattenedThreadMessages()
+      const idx = store.selectedMessageIndex
+      return idx >= 0 && idx < messages.length && isOwnMessage(messages[idx])
+    },
+    hasSelectedThread: () => currentThreadList().length > 0 && store.selectedThreadListIndex >= 0,
     hasComposeContent: () => store.compose.content.trim().length > 0,
     canGoBack: () => {
       return store.activeModal !== ModalState.None ||
@@ -131,7 +140,10 @@ const App: Component<ParentProps> = (props) => {
           if (store.currentView === ViewState.ThreadDetail) {
             // Forum: go back to thread list via router
             if (store.activeChannelId !== null) {
-              navigate(`/channel/${store.activeChannelId}`)
+              const base = store.activeSubchannelId
+                ? `/channel/${store.activeChannelId}/sub/${store.activeSubchannelId}`
+                : `/channel/${store.activeChannelId}`
+              navigate(base)
             }
           } else if (isCurrentChannelChat()) {
             // Chat channel: go back to channel list
@@ -153,6 +165,9 @@ const App: Component<ParentProps> = (props) => {
         if (store.focusArea === FocusArea.Sidebar) {
           const newIndex = Math.max(0, store.selectedChannelIndex - 1)
           store.setSelectedChannelIndex(newIndex)
+        } else if (store.currentView === ViewState.ThreadList) {
+          const newIndex = Math.max(0, store.selectedThreadListIndex - 1)
+          store.setSelectedThreadListIndex(newIndex)
         } else {
           const newIndex = Math.max(0, store.selectedMessageIndex - 1)
           store.setSelectedMessageIndex(newIndex)
@@ -164,12 +179,14 @@ const App: Component<ParentProps> = (props) => {
           const maxIndex = channels().length - 1
           const newIndex = Math.min(maxIndex, store.selectedChannelIndex + 1)
           store.setSelectedChannelIndex(newIndex)
+        } else if (store.currentView === ViewState.ThreadList) {
+          const maxIndex = currentThreadList().length - 1
+          const newIndex = Math.min(Math.max(0, maxIndex), store.selectedThreadListIndex + 1)
+          store.setSelectedThreadListIndex(newIndex)
         } else {
           let maxIndex = 0
           if (isCurrentChannelChat()) {
             maxIndex = currentChannelMessages().length - 1
-          } else if (store.currentView === ViewState.ThreadList) {
-            maxIndex = currentThreadList().length - 1
           } else if (store.currentView === ViewState.ThreadDetail) {
             maxIndex = flattenedThreadMessages().length - 1
           }
@@ -189,10 +206,13 @@ const App: Component<ParentProps> = (props) => {
           }
         } else if (store.currentView === ViewState.ThreadList) {
           const threads = currentThreadList()
-          if (threads.length > 0 && store.selectedMessageIndex < threads.length) {
-            const thread = threads[store.selectedMessageIndex]
+          if (threads.length > 0 && store.selectedThreadListIndex < threads.length) {
+            const thread = threads[store.selectedThreadListIndex]
             if (store.activeChannelId !== null) {
-              navigate(`/channel/${store.activeChannelId}/thread/${thread.message_id}`)
+              const base = store.activeSubchannelId
+                ? `/channel/${store.activeChannelId}/sub/${store.activeSubchannelId}`
+                : `/channel/${store.activeChannelId}`
+              navigate(`${base}/thread/${thread.message_id}`)
               store.setSelectedMessageIndex(0)
             }
           }
@@ -226,18 +246,50 @@ const App: Component<ParentProps> = (props) => {
         }
         break
 
-      case 'focus-compose':
-        if (currentChannel()) {
-          storeActions.openModal(ModalState.Compose)
-        }
-        break
-
       case 'start-dm':
         storeActions.openModal(ModalState.StartDM)
         break
 
       case 'register-nickname':
         storeActions.openModal(ModalState.Register)
+        break
+
+      case 'go-anonymous': {
+        // Full disconnect/reconnect to avoid server linking sessions
+        const url = store.serverUrl
+        const nick = store.nickname
+        const throttle = store.traffic.throttleBytesPerSecond
+
+        if (store.subscribedChannelId !== null) {
+          client.unsubscribeChannel(store.subscribedChannelId, store.activeSubchannelId ?? undefined)
+        }
+
+        // Clear auth state
+        sessionStorage.removeItem('superchat_auth_hash')
+        store.setIsRegistered(false)
+        store.setUserId(0n)
+
+        // Disconnect and reconnect as anonymous
+        client.disconnect()
+        storeActions.resetConnection()
+        navigate('/')
+
+        // Reconnect with same nickname but no auth
+        setTimeout(() => {
+          store.setServerUrl(url)
+          store.setNickname(nick)
+          storeActions.updateTraffic({ throttleBytesPerSecond: throttle })
+          client.connect(url, nick)
+        }, 100)
+        break
+      }
+
+      case 'change-nickname':
+        storeActions.openModal(ModalState.ChangeNickname)
+        break
+
+      case 'change-password':
+        storeActions.openModal(ModalState.ChangePassword)
         break
 
       case 'edit-message': {
@@ -271,6 +323,10 @@ const App: Component<ParentProps> = (props) => {
 
       case 'create-channel':
         storeActions.openModal(ModalState.CreateChannel)
+        break
+
+      case 'create-subchannel':
+        storeActions.openModal(ModalState.CreateSubchannel)
         break
 
       default:
@@ -335,21 +391,22 @@ const App: Component<ParentProps> = (props) => {
   // Auto-request message list when channel changes
   createEffect(() => {
     const channelId = store.activeChannelId
+    const subId = store.activeSubchannelId ?? undefined
     if (channelId !== null) {
-      safeLog('Active channel changed to:', channelId)
+      safeLog('Active channel changed to:', channelId, 'sub:', subId)
 
       if (storeActions.isChannelLoaded(channelId)) {
         // Already loaded — fetch only messages we missed (after_id)
         const latestId = storeActions.getChannelLatestMessageId(channelId)
         if (latestId) {
-          client.listMessages(channelId, 0n, 100, latestId)
+          client.listMessages(channelId, 0n, 100, latestId, subId)
         }
       } else {
         // First visit — full fetch
-        client.listMessages(channelId, 0n, 100)
+        client.listMessages(channelId, 0n, 100, undefined, subId)
       }
 
-      client.subscribeChannel(channelId)
+      client.subscribeChannel(channelId, subId)
     }
   })
 
@@ -364,7 +421,7 @@ const App: Component<ParentProps> = (props) => {
 
   const handleDisconnect = () => {
     if (store.subscribedChannelId !== null) {
-      client.unsubscribeChannel(store.subscribedChannelId)
+      client.unsubscribeChannel(store.subscribedChannelId, store.activeSubchannelId ?? undefined)
     }
 
     localStorage.removeItem('superchat_last_url')
@@ -389,13 +446,14 @@ const App: Component<ParentProps> = (props) => {
 
     const channelId = currentChannel()!.channel_id
     const key = store.dmChannelKeys.get(channelId)
+    const subId = store.activeSubchannelId ?? undefined
 
     if (key) {
       const plaintext = new TextEncoder().encode(content)
       const encrypted = await encryptMessage(key, plaintext)
-      client.postMessageRaw(channelId, encrypted, store.compose.replyToId)
+      client.postMessageRaw(channelId, encrypted, store.compose.replyToId, subId)
     } else {
-      client.postMessage(channelId, content, store.compose.replyToId)
+      client.postMessage(channelId, content, store.compose.replyToId, subId)
     }
 
     storeActions.clearCompose()
@@ -569,26 +627,82 @@ const App: Component<ParentProps> = (props) => {
               <div class="space-y-1">
                 <For each={channels()}>
                   {(channel, index) => {
-                    const isSelected = () => store.activeChannelId === channel.channel_id
+                    const isSelected = () => store.activeChannelId === channel.channel_id && store.activeSubchannelId === null
                     const isKeyboardSelected = () =>
                       store.focusArea === FocusArea.Sidebar && store.selectedChannelIndex === index()
+                    const isExpanded = () => store.expandedChannelId === channel.channel_id
+                    const hasSubs = () => channel.has_subchannels > 0 || channel.subchannel_count > 0
+                    const subs = () => store.subchannels.get(channel.channel_id) || []
 
                     return (
-                      <button
-                        onClick={() => {
-                          store.setSelectedChannelIndex(index())
-                          storeActions.closeMobilePanels()
-                          navigate(`/channel/${channel.channel_id}`)
-                        }}
-                        class={`btn btn-ghost w-full justify-start text-left ${
-                          isSelected() ? 'btn-active' : ''
-                        } ${isKeyboardSelected() ? 'ring-2 ring-primary ring-offset-1' : ''}`}
-                      >
-                        <span class="font-mono text-primary">
-                          {channel.type === 0 ? '>' : '#'}
-                        </span>
-                        <span class="truncate">{channel.name}</span>
-                      </button>
+                      <>
+                        <div class="flex items-center">
+                          <Show when={hasSubs()}>
+                            <button
+                              onClick={() => {
+                                storeActions.toggleExpandChannel(channel.channel_id)
+                                if (!isExpanded() && subs().length === 0) {
+                                  store.setLoadingSubchannels(true)
+                                  client.getSubchannels(channel.channel_id)
+                                }
+                              }}
+                              class="btn btn-ghost btn-xs btn-circle flex-shrink-0"
+                              title={isExpanded() ? 'Collapse' : 'Expand'}
+                            >
+                              <Icon name={isExpanded() ? 'caret-down' : 'caret-right'} size={12} />
+                            </button>
+                          </Show>
+                          <button
+                            onClick={() => {
+                              store.setSelectedChannelIndex(index())
+                              store.setActiveSubchannelId(null)
+                              storeActions.closeMobilePanels()
+                              navigate(`/channel/${channel.channel_id}`)
+                            }}
+                            class={`btn btn-ghost flex-1 justify-start text-left ${
+                              isSelected() ? 'btn-active' : ''
+                            } ${isKeyboardSelected() ? 'ring-2 ring-primary ring-offset-1' : ''} ${
+                              hasSubs() ? '' : 'ml-6'
+                            }`}
+                          >
+                            <span class="font-mono text-primary">
+                              {channel.type === 0 ? '>' : '#'}
+                            </span>
+                            <span class="truncate">{channel.name}</span>
+                            <Show when={hasSubs()}>
+                              <span class="badge badge-xs badge-ghost ml-auto">{channel.subchannel_count}</span>
+                            </Show>
+                          </button>
+                        </div>
+                        {/* Expanded subchannels */}
+                        <Show when={isExpanded()}>
+                          <Show when={store.loadingSubchannels && subs().length === 0}>
+                            <div class="ml-10 text-xs text-base-content/50 py-1">Loading...</div>
+                          </Show>
+                          <For each={subs()}>
+                            {(sub) => {
+                              const isSubSelected = () =>
+                                store.activeChannelId === channel.channel_id && store.activeSubchannelId === sub.id
+                              return (
+                                <button
+                                  onClick={() => {
+                                    storeActions.closeMobilePanels()
+                                    navigate(`/channel/${channel.channel_id}/sub/${sub.id}`)
+                                  }}
+                                  class={`btn btn-ghost btn-sm w-full justify-start text-left ml-8 ${
+                                    isSubSelected() ? 'btn-active' : ''
+                                  }`}
+                                >
+                                  <span class="font-mono text-secondary text-xs">
+                                    {sub.type === 0 ? '>' : '#'}
+                                  </span>
+                                  <span class="truncate text-sm">{sub.name}</span>
+                                </button>
+                              )
+                            }}
+                          </For>
+                        </Show>
+                      </>
                     )
                   }}
                 </For>
@@ -789,6 +903,9 @@ const App: Component<ParentProps> = (props) => {
       <RegisterModal />
       <ConfirmDeleteModal />
       <CreateChannelModal />
+      <CreateSubchannelModal />
+      <ChangeNicknameModal />
+      <ChangePasswordModal />
     </div>
   )
 }

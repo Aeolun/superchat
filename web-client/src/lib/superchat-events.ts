@@ -28,7 +28,10 @@ import type {
   DMPending,
   DMRequest,
   DMParticipantLeft,
-  DMDeclined
+  DMDeclined,
+  PasswordChanged,
+  SubchannelCreated,
+  SubchannelList
 } from '../SuperChatCodec'
 
 // Event types for all protocol messages
@@ -59,6 +62,9 @@ export type SuperChatEvent =
   | { type: 'dm-request', data: DMRequest }
   | { type: 'dm-participant-left', data: DMParticipantLeft }
   | { type: 'dm-declined', data: DMDeclined }
+  | { type: 'password-changed', data: PasswordChanged }
+  | { type: 'subchannel-created', data: SubchannelCreated }
+  | { type: 'subchannel-list', data: SubchannelList }
   | { type: 'pong', timestamp: bigint }
   | { type: 'traffic-update', sent: number, received: number }
 
@@ -126,6 +132,9 @@ export class SuperChatEventClient {
       onAuthResponse: (response) => {
         this.emit({ type: 'auth-response', response })
       },
+      onNicknameResponse: (response) => {
+        this.emit({ type: 'nickname-response', response })
+      },
       onRegisterResponse: (response) => {
         this.emit({ type: 'register-response', response })
       },
@@ -146,6 +155,15 @@ export class SuperChatEventClient {
       },
       onDMDeclined: (data) => {
         this.emit({ type: 'dm-declined', data })
+      },
+      onPasswordChanged: (data) => {
+        this.emit({ type: 'password-changed', data })
+      },
+      onSubchannelCreated: (data) => {
+        this.emit({ type: 'subchannel-created', data })
+      },
+      onSubchannelList: (data) => {
+        this.emit({ type: 'subchannel-list', data })
       },
       onTrafficUpdate: (bytesSent, bytesReceived) => {
         this.emit({ type: 'traffic-update', sent: bytesSent, received: bytesReceived })
@@ -208,45 +226,45 @@ export class SuperChatEventClient {
   }
 
   /**
-   * Join a channel
+   * Join a channel (optionally a subchannel)
    */
-  joinChannel(channelId: bigint): void {
-    this.client.joinChannel(channelId)
+  joinChannel(channelId: bigint, subchannelId?: bigint): void {
+    this.client.joinChannel(channelId, subchannelId)
   }
 
   /**
-   * List messages in a channel
+   * List messages in a channel (optionally a subchannel)
    */
-  listMessages(channelId: bigint, fromMessageId: bigint = 0n, limit: number = 100, afterId?: bigint): void {
-    this.client.listMessages(channelId, fromMessageId, limit, afterId)
+  listMessages(channelId: bigint, fromMessageId: bigint = 0n, limit: number = 100, afterId?: bigint, subchannelId?: bigint): void {
+    this.client.listMessages(channelId, fromMessageId, limit, afterId, subchannelId)
   }
 
   /**
    * List messages for a specific thread (replies only)
    */
-  listMessagesForThread(channelId: bigint, threadId: bigint, limit: number = 100): void {
-    this.client.listMessagesForThread(channelId, threadId, limit)
+  listMessagesForThread(channelId: bigint, threadId: bigint, limit: number = 100, subchannelId?: bigint): void {
+    this.client.listMessagesForThread(channelId, threadId, limit, subchannelId)
   }
 
   /**
-   * Post a message to a channel
+   * Post a message to a channel (optionally a subchannel)
    */
-  postMessage(channelId: bigint, content: string, parentId: bigint | null = null): void {
-    this.client.postMessage(channelId, content, parentId)
+  postMessage(channelId: bigint, content: string, parentId: bigint | null = null, subchannelId?: bigint): void {
+    this.client.postMessage(channelId, content, parentId, subchannelId)
   }
 
   /**
-   * Subscribe to channel broadcasts
+   * Subscribe to channel broadcasts (optionally a subchannel)
    */
-  subscribeChannel(channelId: bigint): void {
-    this.client.subscribeChannel(channelId)
+  subscribeChannel(channelId: bigint, subchannelId?: bigint): void {
+    this.client.subscribeChannel(channelId, subchannelId)
   }
 
   /**
-   * Unsubscribe from channel broadcasts
+   * Unsubscribe from channel broadcasts (optionally a subchannel)
    */
-  unsubscribeChannel(channelId: bigint): void {
-    this.client.unsubscribeChannel(channelId)
+  unsubscribeChannel(channelId: bigint, subchannelId?: bigint): void {
+    this.client.unsubscribeChannel(channelId, subchannelId)
   }
 
   /**
@@ -294,15 +312,29 @@ export class SuperChatEventClient {
   /**
    * Post a message with raw binary content (for encrypted messages)
    */
-  postMessageRaw(channelId: bigint, contentRaw: Uint8Array, parentId: bigint | null = null): void {
-    this.client.postMessageRaw(channelId, contentRaw, parentId)
+  postMessageRaw(channelId: bigint, contentRaw: Uint8Array, parentId: bigint | null = null, subchannelId?: bigint): void {
+    this.client.postMessageRaw(channelId, contentRaw, parentId, subchannelId)
   }
 
   /**
    * Leave a channel (with optional permanent flag for DMs)
    */
-  leaveChannel(channelId: bigint, permanent: boolean = false): void {
-    this.client.leaveChannel(channelId, permanent)
+  leaveChannel(channelId: bigint, permanent: boolean = false, subchannelId?: bigint): void {
+    this.client.leaveChannel(channelId, permanent, subchannelId)
+  }
+
+  /**
+   * Create a subchannel within a channel
+   */
+  createSubchannel(channelId: bigint, name: string, description: string, type: number, retentionHours: number): void {
+    this.client.createSubchannel(channelId, name, description, type, retentionHours)
+  }
+
+  /**
+   * Request list of subchannels for a channel
+   */
+  getSubchannels(channelId: bigint): void {
+    this.client.getSubchannels(channelId)
   }
 
   /**
@@ -317,6 +349,20 @@ export class SuperChatEventClient {
    */
   sendRegisterUser(hashedPassword: string): void {
     this.client.sendRegisterUser(hashedPassword)
+  }
+
+  /**
+   * Change nickname while connected
+   */
+  sendSetNickname(nickname: string): void {
+    this.client.sendSetNickname(nickname)
+  }
+
+  /**
+   * Change password for authenticated user
+   */
+  sendChangePassword(oldPasswordHash: string, newPasswordHash: string): void {
+    this.client.sendChangePassword(oldPasswordHash, newPasswordHash)
   }
 
   /**
@@ -383,5 +429,8 @@ export const onDMPending = createEventFilter('dm-pending')
 export const onDMRequest = createEventFilter('dm-request')
 export const onDMParticipantLeft = createEventFilter('dm-participant-left')
 export const onDMDeclined = createEventFilter('dm-declined')
+export const onPasswordChanged = createEventFilter('password-changed')
+export const onSubchannelCreated = createEventFilter('subchannel-created')
+export const onSubchannelList = createEventFilter('subchannel-list')
 export const onPong = createEventFilter('pong')
 export const onTrafficUpdate = createEventFilter('traffic-update')

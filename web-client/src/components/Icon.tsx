@@ -8,6 +8,8 @@ import { Component } from 'solid-js'
 // Import bold SVGs as raw markup strings (Vite ?raw suffix)
 import arrowBendUpLeft from '@phosphor-icons/core/bold/arrow-bend-up-left-bold.svg?raw'
 import arrowLeft from '@phosphor-icons/core/bold/arrow-left-bold.svg?raw'
+import caretDown from '@phosphor-icons/core/bold/caret-down-bold.svg?raw'
+import caretRight from '@phosphor-icons/core/bold/caret-right-bold.svg?raw'
 import envelope from '@phosphor-icons/core/bold/envelope-simple-bold.svg?raw'
 import list from '@phosphor-icons/core/bold/list-bold.svg?raw'
 import lock from '@phosphor-icons/core/bold/lock-bold.svg?raw'
@@ -21,6 +23,8 @@ import x from '@phosphor-icons/core/bold/x-bold.svg?raw'
 const registry = {
   'arrow-bend-up-left': arrowBendUpLeft,
   'arrow-left': arrowLeft,
+  'caret-down': caretDown,
+  'caret-right': caretRight,
   'envelope': envelope,
   'list': list,
   'lock': lock,

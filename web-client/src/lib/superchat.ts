@@ -8,6 +8,7 @@ import {
   SetNicknameEncoder, NicknameResponseDecoder,
   AuthRequestEncoder, AuthResponseDecoder,
   RegisterUserEncoder, RegisterResponseDecoder,
+  ChangePasswordEncoder, PasswordChangedDecoder,
   UserInfoDecoder,
   ListChannelsEncoder, ChannelListDecoder,
   JoinChannelEncoder, JoinResponseDecoder,
@@ -34,6 +35,10 @@ import {
   EditMessageEncoder,
   DeleteMessageEncoder,
   CreateChannelEncoder,
+  CreateSubchannelEncoder,
+  GetSubchannelsEncoder,
+  SubchannelCreatedDecoder,
+  SubchannelListDecoder,
   KeyRequiredDecoder,
   DMReadyDecoder,
   DMPendingDecoder,
@@ -53,6 +58,7 @@ import {
   type ChannelDeleted,
   type ServerPresence,
   type ChannelPresence,
+  type NicknameResponse,
   type AuthResponse,
   type RegisterResponse,
   type UserInfo,
@@ -62,6 +68,9 @@ import {
   type DMRequest,
   type DMParticipantLeft,
   type DMDeclined,
+  type PasswordChanged,
+  type SubchannelCreated,
+  type SubchannelList,
 } from '../SuperChatCodec'
 
 // Protocol message type codes
@@ -90,12 +99,16 @@ const MSG_SUBSCRIBE_THREAD = 0x51
 const MSG_UNSUBSCRIBE_THREAD = 0x52
 const MSG_SUBSCRIBE_CHANNEL = 0x53
 const MSG_UNSUBSCRIBE_CHANNEL = 0x54
+const MSG_CREATE_SUBCHANNEL = 0x08
+const MSG_GET_SUBCHANNELS = 0x15
 const MSG_LIST_SERVERS = 0x55
 const MSG_SERVER_LIST = 0x9B
 const MSG_SUBSCRIBE_OK = 0x99
 const MSG_ERROR = 0x91
 const MSG_SERVER_CONFIG = 0x98
 const MSG_CHANNEL_CREATED = 0x87
+const MSG_SUBCHANNEL_CREATED = 0x88
+const MSG_SUBCHANNEL_LIST = 0x96
 const MSG_MESSAGE_EDITED = 0x8B
 const MSG_MESSAGE_DELETED = 0x8C
 const MSG_CHANNEL_DELETED = 0xAA
@@ -110,6 +123,8 @@ const MSG_DM_PENDING = 0xA3
 const MSG_DM_REQUEST = 0xA4
 const MSG_CHANNEL_PRESENCE = 0xAC
 const MSG_SERVER_PRESENCE = 0xAD
+const MSG_CHANGE_PASSWORD = 0x0E
+const MSG_PASSWORD_CHANGED = 0x8E
 const MSG_DM_PARTICIPANT_LEFT = 0xAE
 const MSG_DM_DECLINED = 0xAF
 
@@ -133,6 +148,7 @@ export interface SuperChatClientEvents {
   onChannelPresence?: (data: ChannelPresence) => void
   onUserInfo?: (info: UserInfo) => void
   onAuthResponse?: (response: AuthResponse) => void
+  onNicknameResponse?: (response: NicknameResponse) => void
   onRegisterResponse?: (response: RegisterResponse) => void
   onKeyRequired?: (data: KeyRequired) => void
   onDMReady?: (data: DMReady) => void
@@ -140,6 +156,9 @@ export interface SuperChatClientEvents {
   onDMRequest?: (data: DMRequest) => void
   onDMParticipantLeft?: (data: DMParticipantLeft) => void
   onDMDeclined?: (data: DMDeclined) => void
+  onPasswordChanged?: (data: PasswordChanged) => void
+  onSubchannelCreated?: (data: SubchannelCreated) => void
+  onSubchannelList?: (data: SubchannelList) => void
   onTrafficUpdate?: (bytesSent: number, bytesReceived: number) => void
   onError: (error: string) => void
 }
@@ -413,6 +432,15 @@ export class SuperChatClient {
         case MSG_DM_DECLINED:
           this.handleDMDeclined(payload)
           break
+        case MSG_PASSWORD_CHANGED:
+          this.handlePasswordChanged(payload)
+          break
+        case MSG_SUBCHANNEL_CREATED:
+          this.handleSubchannelCreated(payload)
+          break
+        case MSG_SUBCHANNEL_LIST:
+          this.handleSubchannelList(payload)
+          break
         default:
           safeWarn(`Unhandled message type: 0x${header.type.toString(16)}`)
       }
@@ -422,7 +450,7 @@ export class SuperChatClient {
     }
   }
 
-  private sendSetNickname(nickname: string) {
+  sendSetNickname(nickname: string) {
     const encoder = new SetNicknameEncoder()
     const payload = encoder.encode({ nickname })
     this.sendFrame(MSG_SET_NICKNAME, payload)
@@ -436,7 +464,12 @@ export class SuperChatClient {
       safeLog('Nickname set successfully:', response.message)
       // Request channel list after successful nickname setup
       this.sendListChannels()
-    } else {
+    }
+
+    if (this.events.onNicknameResponse) {
+      this.events.onNicknameResponse(response)
+    } else if (response.success !== 1) {
+      // Only emit generic error if no nickname-response handler is registered
       this.events.onError(response.message)
     }
   }
@@ -460,6 +493,22 @@ export class SuperChatClient {
 
     if (this.events.onRegisterResponse) {
       this.events.onRegisterResponse(response)
+    }
+  }
+
+  sendChangePassword(oldPasswordHash: string, newPasswordHash: string) {
+    const encoder = new ChangePasswordEncoder()
+    const payload = encoder.encode({ old_password_hash: oldPasswordHash, new_password_hash: newPasswordHash })
+    this.sendFrame(MSG_CHANGE_PASSWORD, payload)
+  }
+
+  private handlePasswordChanged(payload: Uint8Array) {
+    const decoder = new PasswordChangedDecoder(payload)
+    const response = decoder.decode()
+    safeLog('Password changed response: success=%d', response.success)
+
+    if (this.events.onPasswordChanged) {
+      this.events.onPasswordChanged(response)
     }
   }
 
@@ -504,11 +553,11 @@ export class SuperChatClient {
     this.events.onChannelsReceived(channelList.channels)
   }
 
-  joinChannel(channelId: bigint) {
+  joinChannel(channelId: bigint, subchannelId?: bigint) {
     const encoder = new JoinChannelEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
-      subchannel_id: { present: 0 }
+      subchannel_id: subchannelId != null ? { present: 1, value: subchannelId } : { present: 0 }
     })
     this.sendFrame(MSG_JOIN_CHANNEL, payload)
   }
@@ -700,11 +749,11 @@ export class SuperChatClient {
 
   // Public API methods
 
-  listMessages(channelId: bigint, fromMessageId: bigint, limit: number, afterId?: bigint) {
+  listMessages(channelId: bigint, fromMessageId: bigint, limit: number, afterId?: bigint, subchannelId?: bigint) {
     const encoder = new ListMessagesEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
-      subchannel_id: { present: 0 },
+      subchannel_id: subchannelId != null ? { present: 1, value: subchannelId } : { present: 0 },
       limit,
       before_id: fromMessageId !== 0n ? { present: 1, value: fromMessageId } : { present: 0 },
       parent_id: { present: 0 },
@@ -713,11 +762,11 @@ export class SuperChatClient {
     this.sendFrame(MSG_LIST_MESSAGES, payload)
   }
 
-  listMessagesForThread(channelId: bigint, threadId: bigint, limit: number) {
+  listMessagesForThread(channelId: bigint, threadId: bigint, limit: number, subchannelId?: bigint) {
     const encoder = new ListMessagesEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
-      subchannel_id: { present: 0 },
+      subchannel_id: subchannelId != null ? { present: 1, value: subchannelId } : { present: 0 },
       limit,
       before_id: { present: 0 },
       parent_id: { present: 1, value: threadId },
@@ -726,31 +775,31 @@ export class SuperChatClient {
     this.sendFrame(MSG_LIST_MESSAGES, payload)
   }
 
-  postMessage(channelId: bigint, content: string, parentId: bigint | null = null) {
+  postMessage(channelId: bigint, content: string, parentId: bigint | null = null, subchannelId?: bigint) {
     const encoder = new PostMessageEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
-      subchannel_id: { present: 0 },
+      subchannel_id: subchannelId != null ? { present: 1, value: subchannelId } : { present: 0 },
       parent_id: parentId !== null ? { present: 1, value: parentId } : { present: 0 },
       content
     })
     this.sendFrame(MSG_POST_MESSAGE, payload)
   }
 
-  subscribeChannel(channelId: bigint) {
+  subscribeChannel(channelId: bigint, subchannelId?: bigint) {
     const encoder = new SubscribeChannelEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
-      subchannel_id: { present: 0 }
+      subchannel_id: subchannelId != null ? { present: 1, value: subchannelId } : { present: 0 }
     })
     this.sendFrame(MSG_SUBSCRIBE_CHANNEL, payload)
   }
 
-  unsubscribeChannel(channelId: bigint) {
+  unsubscribeChannel(channelId: bigint, subchannelId?: bigint) {
     const encoder = new UnsubscribeChannelEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
-      subchannel_id: { present: 0 }
+      subchannel_id: subchannelId != null ? { present: 1, value: subchannelId } : { present: 0 }
     })
     this.sendFrame(MSG_UNSUBSCRIBE_CHANNEL, payload)
   }
@@ -799,11 +848,11 @@ export class SuperChatClient {
     this.sendFrame(MSG_PROVIDE_PUBLIC_KEY, payload)
   }
 
-  postMessageRaw(channelId: bigint, contentRaw: Uint8Array, parentId: bigint | null = null) {
+  postMessageRaw(channelId: bigint, contentRaw: Uint8Array, parentId: bigint | null = null, subchannelId?: bigint) {
     const encoder = new PostMessageEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
-      subchannel_id: { present: 0 },
+      subchannel_id: subchannelId != null ? { present: 1, value: subchannelId } : { present: 0 },
       parent_id: parentId !== null ? { present: 1, value: parentId } : { present: 0 },
       content: '',
       content_raw: contentRaw
@@ -811,11 +860,11 @@ export class SuperChatClient {
     this.sendFrame(MSG_POST_MESSAGE, payload)
   }
 
-  leaveChannel(channelId: bigint, permanent: boolean) {
+  leaveChannel(channelId: bigint, permanent: boolean, subchannelId?: bigint) {
     const encoder = new LeaveChannelEncoder()
     const payload = encoder.encode({
       channel_id: channelId,
-      subchannel_id: { present: 0 },
+      subchannel_id: subchannelId != null ? { present: 1, value: subchannelId } : { present: 0 },
       permanent: permanent ? 1 : 0
     })
     this.sendFrame(MSG_LEAVE_CHANNEL, payload)
@@ -843,5 +892,35 @@ export class SuperChatClient {
       retention_hours: retentionHours
     })
     this.sendFrame(MSG_CREATE_CHANNEL, payload)
+  }
+
+  createSubchannel(channelId: bigint, name: string, description: string, type: number, retentionHours: number) {
+    const encoder = new CreateSubchannelEncoder()
+    const payload = encoder.encode({ channel_id: channelId, name, description, type, retention_hours: retentionHours })
+    this.sendFrame(MSG_CREATE_SUBCHANNEL, payload)
+  }
+
+  getSubchannels(channelId: bigint) {
+    const encoder = new GetSubchannelsEncoder()
+    const payload = encoder.encode({ channel_id: channelId })
+    this.sendFrame(MSG_GET_SUBCHANNELS, payload)
+  }
+
+  private handleSubchannelCreated(payload: Uint8Array) {
+    const decoder = new SubchannelCreatedDecoder(payload)
+    const data = decoder.decode()
+    safeLog('Subchannel created:', data)
+    if (this.events.onSubchannelCreated) {
+      this.events.onSubchannelCreated(data)
+    }
+  }
+
+  private handleSubchannelList(payload: Uint8Array) {
+    const decoder = new SubchannelListDecoder(payload)
+    const data = decoder.decode()
+    safeLog('Subchannel list:', data)
+    if (this.events.onSubchannelList) {
+      this.events.onSubchannelList(data)
+    }
   }
 }

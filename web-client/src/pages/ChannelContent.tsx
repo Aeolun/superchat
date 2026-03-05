@@ -53,11 +53,16 @@ const ChannelContent: Component = () => {
     }
   })
 
-  // Auto-focus chat input when entering a chat channel
+  // Focus/blur chat input when switching focus areas
   createEffect(() => {
     const channel = currentChannel()
+    const focused = store.focusArea === FocusArea.Content
     if (channel && channel.type === 0 && chatInputRef) {
-      setTimeout(() => chatInputRef?.focus(), 100)
+      if (focused) {
+        setTimeout(() => chatInputRef?.focus(), 100)
+      } else {
+        chatInputRef.blur()
+      }
     }
   })
 
@@ -101,12 +106,14 @@ const ChannelContent: Component = () => {
     const channelId = currentChannel()!.channel_id
     const key = store.dmChannelKeys.get(channelId)
 
+    const subId = store.activeSubchannelId ?? undefined
+
     if (key) {
       const plaintext = new TextEncoder().encode(content)
       const encrypted = await encryptMessage(key, plaintext)
-      client.postMessageRaw(channelId, encrypted, null)
+      client.postMessageRaw(channelId, encrypted, null, subId)
     } else {
-      client.postMessage(channelId, content, null)
+      client.postMessage(channelId, content, null, subId)
     }
 
     setChatInput('')
@@ -120,7 +127,10 @@ const ChannelContent: Component = () => {
   }
 
   const handleThreadClick = (threadId: bigint) => {
-    navigate(`/channel/${params.channelId}/thread/${threadId}`)
+    const base = params.subchannelId
+      ? `/channel/${params.channelId}/sub/${params.subchannelId}`
+      : `/channel/${params.channelId}`
+    navigate(`${base}/thread/${threadId}`)
   }
 
   const handleEdit = (message: Message) => {
@@ -191,7 +201,7 @@ const ChannelContent: Component = () => {
           threads={currentThreadList()}
           loading={isChannelLoading()}
           onThreadClick={handleThreadClick}
-          selectedIndex={store.selectedMessageIndex}
+          selectedIndex={store.selectedThreadListIndex}
           isFocused={store.focusArea === FocusArea.Content}
         />
       </Show>

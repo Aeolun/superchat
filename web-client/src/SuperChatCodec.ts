@@ -675,6 +675,67 @@ export class RegisterResponseDecoder extends BitStreamDecoder {
 }
 
 /**
+ * Change password request
+ */
+export interface ChangePassword {
+  old_password_hash: String;
+  new_password_hash: String;
+}
+
+export class ChangePasswordEncoder extends BitStreamEncoder {
+  private compressionDict: Map<string, number> = new Map();
+
+  constructor() {
+    super("msb_first");
+  }
+
+  encode(value: ChangePassword): Uint8Array {
+    this.compressionDict.clear();
+
+    const old_hash_bytes = new TextEncoder().encode(value.old_password_hash);
+    this.writeUint16(old_hash_bytes.length, "big_endian");
+    for (const byte of old_hash_bytes) {
+      this.writeUint8(byte);
+    }
+
+    const new_hash_bytes = new TextEncoder().encode(value.new_password_hash);
+    this.writeUint16(new_hash_bytes.length, "big_endian");
+    for (const byte of new_hash_bytes) {
+      this.writeUint8(byte);
+    }
+
+    return this.finish();
+  }
+}
+
+/**
+ * Password change result
+ */
+export interface PasswordChanged {
+  success: number;
+  error_message: String;
+}
+
+export class PasswordChangedDecoder extends BitStreamDecoder {
+  constructor(bytes: Uint8Array | number[], private context?: any) {
+    super(bytes, "msb_first");
+  }
+
+  decode(): PasswordChanged {
+    const value: any = {};
+
+    value.success = this.readUint8();
+    const message_length = this.readUint16("big_endian");
+    const message_bytes: number[] = [];
+    for (let i = 0; i < message_length; i++) {
+      message_bytes.push(this.readUint8());
+    }
+    value.error_message = new TextDecoder().decode(new Uint8Array(message_bytes));
+    return value;
+  }
+}
+
+/**
  * Request channel list
  */
 export interface ListChannels {
@@ -726,6 +787,7 @@ export interface Channel {
   retention_hours: number;
   has_subchannels: number;
   subchannel_count: number;
+  archive_enabled: number;
 }
 
 export class ChannelEncoder extends BitStreamEncoder {
@@ -756,6 +818,7 @@ export class ChannelEncoder extends BitStreamEncoder {
     this.writeUint32(value.retention_hours, "big_endian");
     this.writeUint8(value.has_subchannels);
     this.writeUint16(value.subchannel_count, "big_endian");
+    this.writeUint8(value.archive_enabled);
     return this.finish();
   }
 }
@@ -787,6 +850,7 @@ export class ChannelDecoder extends BitStreamDecoder {
     value.retention_hours = this.readUint32("big_endian");
     value.has_subchannels = this.readUint8();
     value.subchannel_count = this.readUint16("big_endian");
+    value.archive_enabled = this.readUint8();
     return value;
   }
 }
@@ -829,6 +893,7 @@ export class ChannelListEncoder extends BitStreamEncoder {
       this.writeUint32(value_channels_item.retention_hours, "big_endian");
       this.writeUint8(value_channels_item.has_subchannels);
       this.writeUint16(value_channels_item.subchannel_count, "big_endian");
+      this.writeUint8(value_channels_item.archive_enabled);
     }
     return this.finish();
   }
@@ -870,6 +935,7 @@ export class ChannelListDecoder extends BitStreamDecoder {
       channels_item.retention_hours = this.readUint32("big_endian");
       channels_item.has_subchannels = this.readUint8();
       channels_item.subchannel_count = this.readUint16("big_endian");
+      channels_item.archive_enabled = this.readUint8();
       value.channels.push(channels_item);
     }
     return value;
@@ -1736,6 +1802,7 @@ export interface ChannelCreated {
   description?: string;
   type?: number;
   retention_hours?: number;
+  archive_enabled?: number;
   message: string;
 }
 
@@ -1764,6 +1831,7 @@ export class ChannelCreatedDecoder extends BitStreamDecoder {
       value.description = new TextDecoder().decode(new Uint8Array(description_bytes));
       value.type = this.readUint8();
       value.retention_hours = this.readUint32("big_endian");
+      value.archive_enabled = this.readUint8();
     }
     const message_length = this.readUint16("big_endian");
     const message_bytes: number[] = [];
@@ -2502,6 +2570,183 @@ export class ServerListDecoder extends BitStreamDecoder {
     }
 
     return { server_count, servers };
+  }
+}
+
+/**
+ * Create a subchannel within a channel (0x08)
+ * Wire format: Uint64(ChannelID) String(Name) String(Description) Uint8(Type) Uint32(RetentionHours)
+ */
+export interface CreateSubchannel {
+  channel_id: bigint;
+  name: string;
+  description: string;
+  type: number;
+  retention_hours: number;
+}
+
+export class CreateSubchannelEncoder extends BitStreamEncoder {
+  constructor() {
+    super("msb_first");
+  }
+
+  encode(value: CreateSubchannel): Uint8Array {
+    this.writeUint64(value.channel_id, "big_endian");
+    const name_bytes = new TextEncoder().encode(value.name);
+    this.writeUint16(name_bytes.length, "big_endian");
+    for (const byte of name_bytes) {
+      this.writeUint8(byte);
+    }
+    const desc_bytes = new TextEncoder().encode(value.description);
+    this.writeUint16(desc_bytes.length, "big_endian");
+    for (const byte of desc_bytes) {
+      this.writeUint8(byte);
+    }
+    this.writeUint8(value.type);
+    this.writeUint32(value.retention_hours, "big_endian");
+    return this.finish();
+  }
+}
+
+/**
+ * Subchannel created response/broadcast (0x88)
+ * Wire format: Bool(Success) [if success: Uint64(ChannelID) Uint64(SubchannelID) String(Name) String(Description) Uint8(Type) Uint32(RetentionHours)] String(Message)
+ */
+export interface SubchannelCreated {
+  success: number;
+  channel_id: bigint;
+  subchannel_id: bigint;
+  name: string;
+  description: string;
+  type: number;
+  retention_hours: number;
+  message: string;
+}
+
+export class SubchannelCreatedDecoder extends BitStreamDecoder {
+  constructor(bytes: Uint8Array | number[], private context?: any) {
+    super(bytes, "msb_first");
+  }
+
+  decode(): SubchannelCreated {
+    const value: any = {};
+
+    value.success = this.readUint8();
+
+    if (value.success === 1) {
+      value.channel_id = this.readUint64("big_endian");
+      value.subchannel_id = this.readUint64("big_endian");
+
+      const name_length = this.readUint16("big_endian");
+      const name_bytes: number[] = [];
+      for (let i = 0; i < name_length; i++) {
+        name_bytes.push(this.readUint8());
+      }
+      value.name = new TextDecoder().decode(new Uint8Array(name_bytes));
+
+      const desc_length = this.readUint16("big_endian");
+      const desc_bytes: number[] = [];
+      for (let i = 0; i < desc_length; i++) {
+        desc_bytes.push(this.readUint8());
+      }
+      value.description = new TextDecoder().decode(new Uint8Array(desc_bytes));
+
+      value.type = this.readUint8();
+      value.retention_hours = this.readUint32("big_endian");
+    } else {
+      value.channel_id = 0n;
+      value.subchannel_id = 0n;
+      value.name = '';
+      value.description = '';
+      value.type = 0;
+      value.retention_hours = 0;
+    }
+
+    const msg_length = this.readUint16("big_endian");
+    const msg_bytes: number[] = [];
+    for (let i = 0; i < msg_length; i++) {
+      msg_bytes.push(this.readUint8());
+    }
+    value.message = new TextDecoder().decode(new Uint8Array(msg_bytes));
+
+    return value;
+  }
+}
+
+/**
+ * Request subchannels for a channel (0x15)
+ * Wire format: Uint64(ChannelID)
+ */
+export interface GetSubchannels {
+  channel_id: bigint;
+}
+
+export class GetSubchannelsEncoder extends BitStreamEncoder {
+  constructor() {
+    super("msb_first");
+  }
+
+  encode(value: GetSubchannels): Uint8Array {
+    this.writeUint64(value.channel_id, "big_endian");
+    return this.finish();
+  }
+}
+
+/**
+ * Subchannel info in a list
+ */
+export interface SubchannelInfo {
+  id: bigint;
+  name: string;
+  description: string;
+  type: number;
+  retention_hours: number;
+}
+
+/**
+ * List of subchannels for a channel (0x96)
+ * Wire format: Uint64(ChannelID) Uint16(Count) [Count x {Uint64(ID) String(Name) String(Description) Uint8(Type) Uint32(RetentionHours)}]
+ */
+export interface SubchannelList {
+  channel_id: bigint;
+  count: number;
+  subchannels: SubchannelInfo[];
+}
+
+export class SubchannelListDecoder extends BitStreamDecoder {
+  constructor(bytes: Uint8Array | number[], private context?: any) {
+    super(bytes, "msb_first");
+  }
+
+  decode(): SubchannelList {
+    const channel_id = this.readUint64("big_endian");
+    const count = this.readUint16("big_endian");
+    const subchannels: SubchannelInfo[] = [];
+
+    for (let i = 0; i < count; i++) {
+      const id = this.readUint64("big_endian");
+
+      const name_length = this.readUint16("big_endian");
+      const name_bytes: number[] = [];
+      for (let j = 0; j < name_length; j++) {
+        name_bytes.push(this.readUint8());
+      }
+      const name = new TextDecoder().decode(new Uint8Array(name_bytes));
+
+      const desc_length = this.readUint16("big_endian");
+      const desc_bytes: number[] = [];
+      for (let j = 0; j < desc_length; j++) {
+        desc_bytes.push(this.readUint8());
+      }
+      const description = new TextDecoder().decode(new Uint8Array(desc_bytes));
+
+      const type = this.readUint8();
+      const retention_hours = this.readUint32("big_endian");
+
+      subchannels.push({ id, name, description, type, retention_hours });
+    }
+
+    return { channel_id, count, subchannels };
   }
 }
 

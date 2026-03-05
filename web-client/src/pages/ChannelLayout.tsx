@@ -27,25 +27,27 @@ const ChannelLayout: Component<ParentProps> = (props) => {
   const currentDMChannel = selectors.currentDMChannel
 
   // Join channel when params change (gated on connection)
-  // Only isConnected() and params.channelId are tracked — other store reads
+  // Only isConnected() and params.channelId/subchannelId are tracked — other store reads
   // are wrapped in untrack() so subscription confirmations and DM state changes
   // don't re-trigger this effect and wipe activeThreadId.
   createEffect(() => {
     if (!isConnected()) return
 
     const channelId = BigInt(params.channelId)
-    safeLog('Route: joining channel', channelId)
+    const subchannelId = params.subchannelId != null ? BigInt(params.subchannelId) : undefined
+    safeLog('Route: joining channel', channelId, 'subchannel', subchannelId)
 
     // Unsubscribe from previous channel if different
     untrack(() => {
       if (store.subscribedChannelId !== null && store.subscribedChannelId !== channelId) {
-        client.unsubscribeChannel(store.subscribedChannelId)
+        client.unsubscribeChannel(store.subscribedChannelId, store.activeSubchannelId ?? undefined)
         store.setSubscribedChannelId(null)
       }
     })
 
     // Clear state for new channel
     store.setActiveThreadId(null)
+    store.setActiveSubchannelId(subchannelId ?? null)
     storeActions.clearCompose()
     storeActions.closeMobilePanels()
 
@@ -57,19 +59,22 @@ const ChannelLayout: Component<ParentProps> = (props) => {
       }
     })
 
-    client.joinChannel(channelId)
+    client.joinChannel(channelId, subchannelId)
   })
 
   // Cleanup on unmount: unsubscribe from channel
   onCleanup(() => {
     if (store.subscribedChannelId !== null) {
-      client.unsubscribeChannel(store.subscribedChannelId)
+      client.unsubscribeChannel(store.subscribedChannelId, store.activeSubchannelId ?? undefined)
       store.setSubscribedChannelId(null)
     }
   })
 
   const handleBackToThreadList = () => {
-    navigate(`/channel/${params.channelId}`)
+    const base = params.subchannelId
+      ? `/channel/${params.channelId}/sub/${params.subchannelId}`
+      : `/channel/${params.channelId}`
+    navigate(base)
   }
 
   return (
@@ -104,7 +109,27 @@ const ChannelLayout: Component<ParentProps> = (props) => {
           <span class="font-mono text-primary text-lg">
             {currentChannel()!.type === 0 ? '>' : '#'}
           </span>
-          <h3 class="font-bold text-lg">{currentChannel()!.name}</h3>
+          <Show
+            when={store.activeSubchannelId !== null}
+            fallback={<h3 class="font-bold text-lg">{currentChannel()!.name}</h3>}
+          >
+            {(() => {
+              const parentName = currentChannel()!.name
+              const subs = store.subchannels.get(currentChannel()!.channel_id) || []
+              const sub = subs.find(s => s.id === store.activeSubchannelId)
+              const subName = sub?.name ?? `sub-${store.activeSubchannelId}`
+              return (
+                <h3 class="font-bold text-lg">
+                  <button
+                    class="hover:underline text-base-content/70"
+                    onClick={() => navigate(`/channel/${params.channelId}`)}
+                  >{parentName}</button>
+                  <span class="text-base-content/40 mx-1">/</span>
+                  <span>{subName}</span>
+                </h3>
+              )
+            })()}
+          </Show>
           <Show when={store.subscribedChannelId === currentChannel()!.channel_id}>
             <span class="w-2.5 h-2.5 rounded-full bg-success" title="Connected" />
           </Show>
@@ -142,6 +167,9 @@ const ChannelLayout: Component<ParentProps> = (props) => {
             </Show>
             <Show when={currentChannel()!.retention_hours > 0}>
               <span class="text-base-content/50"> · {formatRetention(currentChannel()!.retention_hours)} retention</span>
+            </Show>
+            <Show when={currentChannel()!.archive_enabled}>
+              <span class="text-base-content/50"> · Archived</span>
             </Show>
           </div>
           {/* Mobile: users panel toggle */}
