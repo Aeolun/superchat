@@ -958,12 +958,14 @@ func TestChannelCreatedRoundTrip(t *testing.T) {
 		var description string
 		var channelType uint8
 		var retentionHours uint32
+		var archiveEnabled bool
 		if success {
 			channelID = rapid.Uint64().Draw(t, "channel_id")
 			name = rapid.StringN(1, 20, 256).Draw(t, "name")
 			description = rapid.StringN(0, 100, 256).Draw(t, "description")
 			channelType = rapid.Uint8().Draw(t, "type")
 			retentionHours = rapid.Uint32().Draw(t, "retention_hours")
+			archiveEnabled = rapid.Bool().Draw(t, "archive_enabled")
 		}
 		message := rapid.StringN(0, 100, 256).Draw(t, "message")
 
@@ -974,6 +976,7 @@ func TestChannelCreatedRoundTrip(t *testing.T) {
 			Description:    description,
 			Type:           channelType,
 			RetentionHours: retentionHours,
+			ArchiveEnabled: archiveEnabled,
 			Message:        message,
 		}
 
@@ -1010,6 +1013,9 @@ func TestChannelCreatedRoundTrip(t *testing.T) {
 			}
 			if decoded.RetentionHours != original.RetentionHours {
 				t.Fatalf("retention_hours mismatch")
+			}
+			if decoded.ArchiveEnabled != original.ArchiveEnabled {
+				t.Fatalf("archive_enabled mismatch")
 			}
 		}
 	})

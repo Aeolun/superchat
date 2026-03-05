@@ -25,6 +25,27 @@ services:
       # - SUPERCHAT_DISCOVERY_SERVER_DESCRIPTION=Welcome to my community!
       # - SUPERCHAT_DISCOVERY_PUBLIC_HOSTNAME=superchat.example.com
       # - SUPERCHAT_DISCOVERY_MAX_USERS=100
+      #
+      # Archive: uncomment to enable forwarding to the archiver service
+      # - SUPERCHAT_ARCHIVE_ENABLED=true
+      # - SUPERCHAT_ARCHIVE_ENDPOINT=archiver:6470
+
+  archiver:
+    image: aeolun/superchat-archiver:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.archiver
+    ports:
+      - "6470:6470" # Archive protocol
+      - "8081:80"    # Archive HTML (nginx)
+    volumes:
+      - archiver-data:/data
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
+      # - ARCHIVER_LISTEN=:6470
+      # - ARCHIVER_DB=/data/archive.db
+      # - ARCHIVER_HTML_INTERVAL=300
 
   website:
     image: aeolun/superchat-website:latest
@@ -39,4 +60,6 @@ services:
 
 volumes:
   superchat-data:
+    driver: local
+  archiver-data:
     driver: local

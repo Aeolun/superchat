@@ -17,6 +17,12 @@ type TOMLConfig struct {
 	Retention RetentionSection `toml:"retention"`
 	Channels  ChannelsSection  `toml:"channels"`
 	Discovery DiscoverySection `toml:"discovery"`
+	Archive   ArchiveSection   `toml:"archive"`
+}
+
+type ArchiveSection struct {
+	Enabled  bool   `toml:"enabled"`
+	Endpoint string `toml:"endpoint"`
 }
 
 type ServerSection struct {
@@ -251,6 +257,16 @@ func applyEnvOverrides(config TOMLConfig) TOMLConfig {
 		}
 	}
 
+	// Archive section
+	if val := os.Getenv("SUPERCHAT_ARCHIVE_ENABLED"); val != "" {
+		if enabled, err := strconv.ParseBool(val); err == nil {
+			config.Archive.Enabled = enabled
+		}
+	}
+	if val := os.Getenv("SUPERCHAT_ARCHIVE_ENDPOINT"); val != "" {
+		config.Archive.Endpoint = val
+	}
+
 	return config
 }
 
@@ -365,6 +381,16 @@ server_description = "A SuperChat community server"
 # Maximum concurrent users (0 = unlimited)
 # Uncomment to set a limit:
 # max_users = 100
+
+[archive]
+# Enable archive mode (forward messages to an archiver service)
+# When enabled, all channels archive by default (override per-channel in DB)
+# Uncomment to enable:
+# enabled = true
+
+# Address of the archive service
+# Uncomment and set your archiver address:
+# endpoint = "localhost:6470"
 `
 
 	if _, err := f.WriteString(content); err != nil {
@@ -456,6 +482,12 @@ func (c *TOMLConfig) ToServerConfig() ServerConfig {
 	}
 	if c.Server.AdminPassword != "" {
 		cfg.AdminPassword = c.Server.AdminPassword
+	}
+
+	// Archive configuration
+	cfg.ArchiveEnabled = c.Archive.Enabled
+	if strings.TrimSpace(c.Archive.Endpoint) != "" {
+		cfg.ArchiveEndpoint = c.Archive.Endpoint
 	}
 
 	return cfg

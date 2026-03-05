@@ -1,4 +1,4 @@
-.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean build build-desktop build-gui-legacy run-server run-client run-website website docker-build docker-build-push docker-build-server docker-build-website docker-run docker-push docker-stop
+.PHONY: test coverage coverage-html coverage-lcov coverage-protocol coverage-summary fuzz clean build build-desktop build-gui-legacy run-server run-client run-website website docker-build docker-build-push docker-build-server docker-build-website docker-build-archiver docker-run docker-push docker-stop
 
 # Run all tests (excludes GUI client which requires system dependencies)
 test:
@@ -74,7 +74,8 @@ build:
 	echo "Building with version: $$VERSION"; \
 	go build -ldflags="-X main.Version=$$VERSION" -o superchat-server ./cmd/server; \
 	go build -ldflags="-X main.Version=$$VERSION" -o superchat ./cmd/client; \
-	echo "✓ Built: superchat-server, superchat"
+	go build -ldflags="-X main.Version=$$VERSION" -o superchat-archiver ./cmd/archiver; \
+	echo "✓ Built: superchat-server, superchat, superchat-archiver"
 
 # Build desktop client (requires wails and bun)
 build-desktop:
@@ -134,6 +135,12 @@ docker-build-website:
 	echo "Building website Docker image with version: $$VERSION"; \
 	VERSION=$$VERSION depot bake --load website
 
+# Build only archiver image
+docker-build-archiver:
+	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
+	echo "Building archiver Docker image with version: $$VERSION"; \
+	VERSION=$$VERSION depot bake --load archiver
+
 docker-run:
 	docker run -d \
 		--name superchat \
@@ -156,4 +163,4 @@ clean:
 	rm -f server.out server.lcov
 	rm -f client.out client.lcov
 	rm -f database.out database.lcov
-	rm -f superchat-server superchat superchat-desktop-bin superchat-gui-legacy
+	rm -f superchat-server superchat superchat-archiver superchat-desktop-bin superchat-gui-legacy

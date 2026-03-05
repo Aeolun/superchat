@@ -421,8 +421,8 @@ Each channel:
 +-------------------+----------------------+------------------------+------------------------+
 | is_operator (bool)| type (u8)            | retention_hours(u32)   | has_subchannels (bool) |
 +-------------------+----------------------+------------------------+------------------------+
-| subchannel_count(u16) |
-+----------------------+
+| subchannel_count(u16) | archive_enabled (bool) |
++----------------------+------------------------+
 ```
 
 **Notes:**
@@ -430,6 +430,7 @@ Each channel:
 - Channels returned in ascending ID order
 - `has_subchannels`: true if channel has subchannels defined
 - `subchannel_count`: number of subchannels (0 if none)
+- `archive_enabled`: true if messages in this channel are being archived (resolved from server-wide default and per-channel override)
 - To get subchannels, use GET_SUBCHANNELS request
 - If `channel_count < limit`, there are no more channels to fetch
 

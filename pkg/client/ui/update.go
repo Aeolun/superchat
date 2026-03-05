@@ -1631,6 +1631,7 @@ func (m Model) handleChannelCreated(frame *protocol.Frame) (tea.Model, tea.Cmd) 
 			IsOperator:     true, // Creator is always operator
 			Type:           msg.Type,
 			RetentionHours: msg.RetentionHours,
+			ArchiveEnabled: msg.ArchiveEnabled,
 		}
 		m.channels = append(m.channels, newChannel)
 

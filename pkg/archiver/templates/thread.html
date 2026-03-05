@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{{template "head"}}
+<title>Thread in #{{.Channel.Name}} - SuperChat Archive</title>
+<meta name="description" content="Thread by {{.RootMessage.AuthorNickname}} in #{{.Channel.Name}}">
+</head>
+<body>
+<header>
+  <div class="container">
+    <h1><a href="/">SuperChat Archive</a></h1>
+    <span class="breadcrumb">/ <a href="/channel/{{.Channel.Name}}/">#{{.Channel.Name}}</a> / Thread</span>
+  </div>
+</header>
+<div class="container">
+  {{range .Messages}}
+  <div class="message{{if .DeletedAt}} deleted{{end}}{{if .ParentID}} reply{{end}}">
+    <div class="message-meta">
+      <span class="author">{{if .AuthorNickname}}{{.AuthorNickname}}{{else}}anonymous{{end}}</span>
+      <span>{{formatTime .CreatedAt}}</span>
+      {{if .EditedAt}}<span>(edited)</span>{{end}}
+    </div>
+    <div class="message-content">{{if .DeletedAt}}[message deleted]{{else}}{{.Content}}{{end}}</div>
+  </div>
+  {{end}}
+</div>
+<footer>
+  <div class="container">Generated {{.GeneratedAt}} by SuperChat Archiver</div>
+</footer>
+</body>
+</html>

@@ -1135,7 +1135,11 @@ func min(a, b int) int {
 func (m Model) buildThreadListContent() string {
 	var title string
 	if m.currentChannel != nil {
-		title = ThreadTitleStyle.Render("#" + m.currentChannel.Name + " - Threads")
+		suffix := " - Threads"
+		if m.currentChannel.ArchiveEnabled {
+			suffix += " [ARCHIVED]"
+		}
+		title = ThreadTitleStyle.Render("#" + m.currentChannel.Name + suffix)
 	} else {
 		title = ThreadTitleStyle.Render("Threads")
 	}

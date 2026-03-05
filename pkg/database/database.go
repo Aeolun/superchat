@@ -227,6 +227,7 @@ type Channel struct {
 	IsPrivate             bool
 	ParentID              *int64 // V3: NULL for top-level channels, populated for subchannels
 	IsDM                  bool   // V3: true for direct message channels
+	ArchiveEnabled        *bool  // NULL = inherit server default, false = disabled, true = enabled
 }
 
 // Session represents an active connection
@@ -386,7 +387,7 @@ func (db *DB) CreateChannel(name, displayName string, description *string, chann
 // ListChannels returns all public top-level channels (not subchannels, not DMs)
 func (db *DB) ListChannels() ([]*Channel, error) {
 	rows, err := db.conn.Query(`
-		SELECT id, name, display_name, description, channel_type, message_retention_hours, created_by, created_at, is_private, parent_id, is_dm
+		SELECT id, name, display_name, description, channel_type, message_retention_hours, created_by, created_at, is_private, parent_id, is_dm, archive_enabled
 		FROM Channel
 		WHERE is_private = 0 AND parent_id IS NULL AND is_dm = 0
 		ORDER BY name ASC
@@ -402,6 +403,7 @@ func (db *DB) ListChannels() ([]*Channel, error) {
 		var desc sql.NullString
 		var createdBy sql.NullInt64
 		var parentID sql.NullInt64
+		var archiveEnabled sql.NullBool
 
 		err := rows.Scan(
 			&ch.ID,
@@ -415,6 +417,7 @@ func (db *DB) ListChannels() ([]*Channel, error) {
 			&ch.IsPrivate,
 			&parentID,
 			&ch.IsDM,
+			&archiveEnabled,
 		)
 		if err != nil {
 			return nil, err
@@ -429,6 +432,9 @@ func (db *DB) ListChannels() ([]*Channel, error) {
 		if parentID.Valid {
 			ch.ParentID = &parentID.Int64
 		}
+		if archiveEnabled.Valid {
+			ch.ArchiveEnabled = &archiveEnabled.Bool
+		}
 
 		channels = append(channels, ch)
 	}
@@ -442,9 +448,10 @@ func (db *DB) GetChannel(id int64) (*Channel, error) {
 	var desc sql.NullString
 	var createdBy sql.NullInt64
 	var parentID sql.NullInt64
+	var archiveEnabled sql.NullBool
 
 	err := db.conn.QueryRow(`
-		SELECT id, name, display_name, description, channel_type, message_retention_hours, created_by, created_at, is_private, parent_id, is_dm
+		SELECT id, name, display_name, description, channel_type, message_retention_hours, created_by, created_at, is_private, parent_id, is_dm, archive_enabled
 		FROM Channel
 		WHERE id = ?
 	`, id).Scan(
@@ -459,6 +466,7 @@ func (db *DB) GetChannel(id int64) (*Channel, error) {
 		&ch.IsPrivate,
 		&parentID,
 		&ch.IsDM,
+		&archiveEnabled,
 	)
 
 	if err != nil {
@@ -473,6 +481,9 @@ func (db *DB) GetChannel(id int64) (*Channel, error) {
 	}
 	if parentID.Valid {
 		ch.ParentID = &parentID.Int64
+	}
+	if archiveEnabled.Valid {
+		ch.ArchiveEnabled = &archiveEnabled.Bool
 	}
 
 	return ch, nil

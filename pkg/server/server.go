@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aeolun/superchat/pkg/archive"
 	"github.com/aeolun/superchat/pkg/database"
 	"github.com/aeolun/superchat/pkg/protocol"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -60,6 +61,9 @@ type Server struct {
 	discoveryRateLimitMu   sync.Mutex
 	autoRegisterMu         sync.Mutex
 	autoRegisterAttempts   map[string][]time.Time
+
+	// Archive
+	archiveClient *archive.Client
 }
 
 // ServerConfig holds server configuration
@@ -88,6 +92,10 @@ type ServerConfig struct {
 	// Admin configuration
 	AdminUsers    []string // List of admin user nicknames
 	AdminPassword string   // If set, reset the first admin user's password on boot
+
+	// Archive configuration
+	ArchiveEnabled  bool   // If true, forward messages to archiver (default for all channels)
+	ArchiveEndpoint string // Address of the archive service (e.g., "localhost:6470")
 }
 
 // DefaultConfig returns default server configuration
@@ -168,6 +176,19 @@ func NewServer(dbPath string, config ServerConfig, configPath string) (*Server, 
 		verificationChallenges: make(map[uint64]uint64),
 		discoveryRateLimits:    make(map[string]*discoveryRateLimiter),
 		autoRegisterAttempts:   make(map[string][]time.Time),
+	}
+
+	// Initialize archive client if enabled
+	if config.ArchiveEnabled && config.ArchiveEndpoint != "" {
+		serverName := config.ServerName
+		if serverName == "" {
+			serverName = "superchat"
+		}
+		server.archiveClient = archive.NewClient(
+			config.ArchiveEndpoint,
+			serverName,
+			&archiveProvider{db: memDB, server: server},
+		)
 	}
 
 	return server, nil
@@ -344,6 +365,12 @@ func (s *Server) Start() error {
 		go s.directoryHealthCheckLoop()
 	}
 
+	// Start archive client if configured
+	if s.archiveClient != nil {
+		s.archiveClient.Start()
+		log.Printf("Archive client started, forwarding to %s", s.config.ArchiveEndpoint)
+	}
+
 	// Accept TCP connections
 	s.wg.Add(1)
 	go s.acceptLoop()
@@ -387,6 +414,12 @@ func (s *Server) Stop() error {
 	// Wait for goroutines to finish (with timeout)
 	log.Println("Waiting for background goroutines to finish...")
 	s.wg.Wait()
+
+	// Stop archive client (drains buffer)
+	if s.archiveClient != nil {
+		log.Println("Stopping archive client...")
+		s.archiveClient.Stop()
+	}
 
 	// Close in-memory database (triggers final snapshot to SQLite)
 	log.Println("Flushing in-memory database to disk...")

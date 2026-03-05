@@ -13,12 +13,15 @@ client.lcov
 # Build artifacts
 /superchat-server
 /superchat
+/superchat-archiver
 /superchat-gui
 /superchat-gui-legacy
 /superchat-desktop-bin
 /superchat-client
 /superchat-bot
 /superchat-simulator
+/archive-html/
+/archive.db
 /client
 /server
 *.exe

@@ -1,6 +1,6 @@
 module github.com/aeolun/superchat
 
-go 1.24.4
+go 1.25.2
 
 require (
 	gioui.org v0.9.0
@@ -22,6 +22,7 @@ require (
 require (
 	gioui.org/shader v1.0.8 // indirect
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
+	github.com/anthropics/binschema v0.0.0
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -72,3 +73,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/anthropics/binschema => /home/bart/Projects/binschema/go

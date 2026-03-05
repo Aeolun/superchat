@@ -853,6 +853,31 @@ func (m *MemDB) MessageExists(messageID int64) (bool, error) {
 	return m.hasNonDeletedDescendants(messageID), nil
 }
 
+// GetMessagesAfter returns all messages in a channel with ID > afterMessageID, ordered by ID ascending.
+// Used by the archive backfill to sync messages the archiver is missing.
+func (m *MemDB) GetMessagesAfter(channelID int64, afterMessageID int64) ([]*Message, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	allMessageIDs, exists := m.messagesByChannel[channelID]
+	if !exists {
+		return nil, nil
+	}
+
+	var result []*Message
+	for _, msgID := range allMessageIDs {
+		if msgID <= afterMessageID {
+			continue
+		}
+		msg := m.messages[msgID]
+		if msg == nil {
+			continue
+		}
+		result = append(result, msg)
+	}
+	return result, nil
+}
+
 // ListRootMessages retrieves top-level messages sorted by last activity (compatible with SQLite DB interface)
 func (m *MemDB) ListRootMessages(channelID int64, subchannelID *int64, limit uint16, beforeID *uint64, afterID *uint64) ([]*Message, error) {
 	m.mu.RLock()

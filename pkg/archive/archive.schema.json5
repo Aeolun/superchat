@@ -1,0 +1,201 @@
+{
+  "meta": {
+    "title": "SuperChat Archive Protocol",
+    "description": "Binary protocol for pushing chat history from a SuperChat server to an archive service. Primarily unidirectional (server→archiver) with a handshake ack.",
+    "version": "1.0"
+  },
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "String": {
+      "description": "Length-prefixed UTF-8 string",
+      "type": "string",
+      "kind": "length_prefixed",
+      "length_type": "uint16",
+      "encoding": "utf8"
+    },
+    "ArchiveFrameHeader": {
+      "description": "Simple length-prefixed frame header for the archive protocol",
+      "sequence": [
+        { "name": "length", "type": "uint32", "description": "Total size of type + payload (excludes the length field itself)" },
+        { "name": "type", "type": "uint8", "description": "Archive message type identifier" }
+      ]
+    },
+    "Handshake": {
+      "description": "Server identifies itself to the archiver on connection",
+      "sequence": [
+        { "name": "server_name", "type": "String", "description": "Human-readable server name" },
+        { "name": "protocol_version", "type": "uint8", "description": "Archive protocol version (current: 1)" }
+      ]
+    },
+    "ChannelState": {
+      "description": "Per-channel sync state reported by archiver",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64", "description": "Channel ID" },
+        { "name": "last_message_id", "type": "uint64", "description": "ID of the last message the archiver has for this channel (0 if none)" }
+      ]
+    },
+    "HandshakeAck": {
+      "description": "Archiver acknowledges connection and reports its sync state",
+      "sequence": [
+        { "name": "success", "type": "uint8", "description": "1 if archiver is ready, 0 if rejecting connection" },
+        { "name": "channel_count", "type": "uint16", "description": "Number of channels the archiver already has data for" },
+        {
+          "name": "channels",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "channel_count",
+          "items": { "type": "ChannelState" }
+        }
+      ]
+    },
+    "ChannelInfo": {
+      "description": "Channel metadata, sent during backfill and when channels are created/updated",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "name", "type": "String" },
+        { "name": "description", "type": "String" },
+        { "name": "channel_type", "type": "uint8", "description": "0=chat, 1=forum" },
+        { "name": "retention_hours", "type": "uint32" },
+        { "name": "archive_enabled", "type": "uint8", "description": "1 if archiving is enabled for this channel" }
+      ]
+    },
+    "BackfillStart": {
+      "description": "Signals the start of a backfill for a specific channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "total_messages", "type": "uint32", "description": "Estimated total messages to be sent (0 if unknown)" }
+      ]
+    },
+    "MessageSync": {
+      "description": "A message being synced (used for both backfill and real-time forwarding)",
+      "sequence": [
+        { "name": "message_id", "type": "uint64" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "parent_id", "type": "optional", "value_type": "uint64" },
+        { "name": "thread_root_id", "type": "optional", "value_type": "uint64" },
+        { "name": "author_user_id", "type": "optional", "value_type": "uint64" },
+        { "name": "author_nickname", "type": "String" },
+        { "name": "content", "type": "String" },
+        { "name": "created_at", "type": "int64", "description": "Unix timestamp in milliseconds" },
+        { "name": "edited_at", "type": "optional", "value_type": "int64" },
+        { "name": "deleted_at", "type": "optional", "value_type": "int64" }
+      ]
+    },
+    "BackfillEnd": {
+      "description": "Signals the end of backfill for a channel",
+      "sequence": [
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "message_count", "type": "uint32", "description": "Actual number of messages sent during backfill" }
+      ]
+    },
+    "MessageEdited": {
+      "description": "Real-time notification that a message was edited",
+      "sequence": [
+        { "name": "message_id", "type": "uint64" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "new_content", "type": "String" },
+        { "name": "edited_at", "type": "int64" }
+      ]
+    },
+    "MessageDeleted": {
+      "description": "Real-time notification that a message was deleted",
+      "sequence": [
+        { "name": "message_id", "type": "uint64" },
+        { "name": "channel_id", "type": "uint64" },
+        { "name": "deleted_at", "type": "int64" }
+      ]
+    }
+  },
+  "protocol": {
+    "name": "SuperChat Archive Protocol",
+    "version": "1.0",
+    "description": "Unidirectional push protocol for forwarding chat history from a SuperChat server to an archive service.",
+    "header": "ArchiveFrameHeader",
+    "header_size_field": "length",
+    "discriminator": "type",
+    "notes": [
+      "All multi-byte integers use big-endian byte order.",
+      "Strings are UTF-8 encoded with uint16 length prefix.",
+      "The server connects to the archiver and pushes events. The archiver only sends HandshakeAck.",
+      "On connection, the server sends Handshake, archiver responds with HandshakeAck reporting sync state.",
+      "The server then backfills any missing messages and switches to real-time forwarding."
+    ],
+    "messages": [
+      {
+        "code": "0x01",
+        "name": "HANDSHAKE",
+        "direction": "client_to_server",
+        "payload_type": "Handshake",
+        "description": "Server identifies itself to archiver"
+      },
+      {
+        "code": "0x81",
+        "name": "HANDSHAKE_ACK",
+        "direction": "server_to_client",
+        "payload_type": "HandshakeAck",
+        "description": "Archiver acknowledges and reports sync state"
+      },
+      {
+        "code": "0x02",
+        "name": "CHANNEL_INFO",
+        "direction": "client_to_server",
+        "payload_type": "ChannelInfo",
+        "description": "Channel metadata (sent during backfill and on channel create/update)"
+      },
+      {
+        "code": "0x03",
+        "name": "BACKFILL_START",
+        "direction": "client_to_server",
+        "payload_type": "BackfillStart",
+        "description": "Signals start of backfill for a channel"
+      },
+      {
+        "code": "0x04",
+        "name": "MESSAGE_SYNC",
+        "direction": "client_to_server",
+        "payload_type": "MessageSync",
+        "description": "Sync a message (backfill or real-time)"
+      },
+      {
+        "code": "0x05",
+        "name": "BACKFILL_END",
+        "direction": "client_to_server",
+        "payload_type": "BackfillEnd",
+        "description": "Signals end of backfill for a channel"
+      },
+      {
+        "code": "0x06",
+        "name": "MESSAGE_EDITED",
+        "direction": "client_to_server",
+        "payload_type": "MessageEdited",
+        "description": "Real-time edit notification"
+      },
+      {
+        "code": "0x07",
+        "name": "MESSAGE_DELETED",
+        "direction": "client_to_server",
+        "payload_type": "MessageDeleted",
+        "description": "Real-time delete notification"
+      }
+    ],
+    "message_groups": [
+      {
+        "name": "Connection",
+        "messages": ["0x01", "0x81"],
+        "description": "Connection handshake"
+      },
+      {
+        "name": "Backfill",
+        "messages": ["0x02", "0x03", "0x04", "0x05"],
+        "description": "Historical message synchronization"
+      },
+      {
+        "name": "Real-time",
+        "messages": ["0x04", "0x06", "0x07"],
+        "description": "Live event forwarding"
+      }
+    ]
+  }
+}

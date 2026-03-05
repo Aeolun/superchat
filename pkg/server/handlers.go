@@ -547,6 +547,7 @@ func (s *Server) handleListChannels(sess *Session, frame *protocol.Frame) error 
 			RetentionHours:  dbCh.MessageRetentionHours,
 			HasSubchannels:  subchannelCount > 0,
 			SubchannelCount: uint16(subchannelCount),
+			ArchiveEnabled:  s.resolveArchiveEnabled(dbCh),
 		}
 		channelList = append(channelList, ch)
 
@@ -828,6 +829,7 @@ func (s *Server) handleCreateChannel(sess *Session, frame *protocol.Frame) error
 		Description:    safeDeref(msg.Description, ""),
 		Type:           msg.ChannelType,
 		RetentionHours: msg.RetentionHours,
+		ArchiveEnabled: s.config.ArchiveEnabled, // New channels inherit server default (NULL in DB)
 		Message:        fmt.Sprintf("Channel '%s' created successfully", msg.DisplayName),
 	}
 
@@ -1176,6 +1178,9 @@ func (s *Server) handlePostMessage(sess *Session, frame *protocol.Frame) error {
 		fmt.Printf("Failed to broadcast new message: %v\n", err)
 	}
 
+	// Forward to archive service (non-blocking)
+	s.archiveNewMessage(dbMsg)
+
 	return nil
 }
 
@@ -1252,6 +1257,9 @@ func (s *Server) handleEditMessage(sess *Session, frame *protocol.Frame) error {
 		log.Printf("Failed to broadcast message edit: %v", err)
 	}
 
+	// Forward to archive service (non-blocking)
+	s.archiveMessageEdited(dbMsg)
+
 	return nil
 }
 
@@ -1314,6 +1322,9 @@ func (s *Server) handleDeleteMessage(sess *Session, frame *protocol.Frame) error
 	if err := s.broadcastToChannel(dbMsg.ChannelID, protocol.TypeMessageDeleted, resp); err != nil {
 		log.Printf("Failed to broadcast message deletion: %v", err)
 	}
+
+	// Forward to archive service (non-blocking)
+	s.archiveMessageDeleted(dbMsg)
 
 	return nil
 }
@@ -2408,6 +2419,7 @@ func (s *Server) broadcastChannelCreated(ch *database.Channel, creatorSessionID 
 		Description:    safeDeref(ch.Description, ""),
 		Type:           ch.ChannelType,
 		RetentionHours: ch.MessageRetentionHours,
+		ArchiveEnabled: ch.ArchiveEnabled != nil && *ch.ArchiveEnabled,
 		Message:        fmt.Sprintf("New channel '%s' created", ch.DisplayName),
 	}
 

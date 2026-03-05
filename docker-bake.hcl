@@ -3,7 +3,7 @@ variable "VERSION" {
 }
 
 group "default" {
-  targets = ["server", "website"]
+  targets = ["server", "website", "archiver"]
 }
 
 target "server" {
@@ -21,4 +21,14 @@ target "website" {
   dockerfile = "website/Dockerfile"
   platforms = ["linux/amd64", "linux/arm64"]
   tags = ["aeolun/superchat-website:latest", "aeolun/superchat-website:${VERSION}"]
+}
+
+target "archiver" {
+  context = "."
+  dockerfile = "Dockerfile.archiver"
+  platforms = ["linux/amd64", "linux/arm64"]
+  tags = ["aeolun/superchat-archiver:latest", "aeolun/superchat-archiver:${VERSION}"]
+  args = {
+    VERSION = "${VERSION}"
+  }
 }

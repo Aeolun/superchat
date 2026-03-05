@@ -513,6 +513,7 @@ type Channel struct {
 	RetentionHours  uint32
 	HasSubchannels  bool   // V3: true if channel has subchannels
 	SubchannelCount uint16 // V3: number of subchannels
+	ArchiveEnabled  bool   // true if messages in this channel are being archived
 }
 
 // ChannelListMessage (0x84) - List of channels
@@ -554,6 +555,9 @@ func (m *ChannelListMessage) EncodeTo(w io.Writer) error {
 			return err
 		}
 		if err := WriteUint16(w, ch.SubchannelCount); err != nil {
+			return err
+		}
+		if err := WriteBool(w, ch.ArchiveEnabled); err != nil {
 			return err
 		}
 	}
@@ -618,6 +622,10 @@ func (m *ChannelListMessage) Decode(payload []byte) error {
 		if err != nil {
 			return err
 		}
+		archiveEnabled, err := ReadBool(buf)
+		if err != nil {
+			return err
+		}
 
 		m.Channels[i] = Channel{
 			ID:              id,
@@ -629,6 +637,7 @@ func (m *ChannelListMessage) Decode(payload []byte) error {
 			RetentionHours:  retention,
 			HasSubchannels:  hasSubchannels,
 			SubchannelCount: subchannelCount,
+			ArchiveEnabled:  archiveEnabled,
 		}
 	}
 
@@ -902,6 +911,7 @@ type ChannelCreatedMessage struct {
 	Description    string // Only present if Success=true
 	Type           uint8  // Only present if Success=true
 	RetentionHours uint32 // Only present if Success=true
+	ArchiveEnabled bool   // Only present if Success=true
 	Message        string // Error if failed, confirmation if success
 }
 
@@ -925,6 +935,9 @@ func (m *ChannelCreatedMessage) EncodeTo(w io.Writer) error {
 			return err
 		}
 		if err := WriteUint32(w, m.RetentionHours); err != nil {
+			return err
+		}
+		if err := WriteBool(w, m.ArchiveEnabled); err != nil {
 			return err
 		}
 	}
@@ -971,12 +984,17 @@ func (m *ChannelCreatedMessage) Decode(payload []byte) error {
 		if err != nil {
 			return err
 		}
+		archiveEnabled, err := ReadBool(buf)
+		if err != nil {
+			return err
+		}
 
 		m.ChannelID = channelID
 		m.Name = name
 		m.Description = description
 		m.Type = channelType
 		m.RetentionHours = retentionHours
+		m.ArchiveEnabled = archiveEnabled
 	}
 
 	message, err := ReadString(buf)

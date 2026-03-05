@@ -558,6 +558,81 @@ func TestMigrationPath(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:        "v14 → v15: Add archive_enabled to Channel",
+			fromVersion: 14,
+			toVersion:   15,
+			setupData: func(db *sql.DB) error {
+				now := time.Now().UnixMilli()
+
+				// Create channels in v14 schema (no archive_enabled column yet)
+				_, err := db.Exec(`
+					INSERT INTO Channel (id, name, display_name, channel_type, message_retention_hours, is_private, created_at)
+					VALUES (1, 'general', 'General', 1, 168, 0, ?)
+				`, now)
+				if err != nil {
+					return err
+				}
+
+				_, err = db.Exec(`
+					INSERT INTO Channel (id, name, display_name, channel_type, message_retention_hours, is_private, created_at)
+					VALUES (2, 'random', 'Random', 0, 24, 0, ?)
+				`, now)
+				return err
+			},
+			validateData: func(db *sql.DB, t *testing.T) {
+				// Verify existing channels have NULL archive_enabled (inherit server default)
+				var archiveEnabled sql.NullBool
+				err := db.QueryRow("SELECT archive_enabled FROM Channel WHERE id = 1").Scan(&archiveEnabled)
+				if err != nil {
+					t.Fatalf("Failed to query archive_enabled: %v", err)
+				}
+				if archiveEnabled.Valid {
+					t.Errorf("Expected NULL archive_enabled for existing channel, got %v", archiveEnabled.Bool)
+				}
+
+				// Verify column accepts explicit values
+				_, err = db.Exec("UPDATE Channel SET archive_enabled = 1 WHERE id = 1")
+				if err != nil {
+					t.Fatalf("Failed to set archive_enabled = 1: %v", err)
+				}
+				_, err = db.Exec("UPDATE Channel SET archive_enabled = 0 WHERE id = 2")
+				if err != nil {
+					t.Fatalf("Failed to set archive_enabled = 0: %v", err)
+				}
+
+				// Read back and verify
+				err = db.QueryRow("SELECT archive_enabled FROM Channel WHERE id = 1").Scan(&archiveEnabled)
+				if err != nil {
+					t.Fatalf("Failed to re-query archive_enabled: %v", err)
+				}
+				if !archiveEnabled.Valid || !archiveEnabled.Bool {
+					t.Errorf("Expected archive_enabled=true for channel 1, got valid=%v, val=%v", archiveEnabled.Valid, archiveEnabled.Bool)
+				}
+
+				err = db.QueryRow("SELECT archive_enabled FROM Channel WHERE id = 2").Scan(&archiveEnabled)
+				if err != nil {
+					t.Fatalf("Failed to re-query archive_enabled: %v", err)
+				}
+				if !archiveEnabled.Valid || archiveEnabled.Bool {
+					t.Errorf("Expected archive_enabled=false for channel 2, got valid=%v, val=%v", archiveEnabled.Valid, archiveEnabled.Bool)
+				}
+			},
+			validateSchema: func(db *sql.DB, t *testing.T) {
+				// Verify archive_enabled column exists on Channel table
+				var colCount int
+				err := db.QueryRow(`
+					SELECT COUNT(*) FROM pragma_table_info('Channel')
+					WHERE name = 'archive_enabled'
+				`).Scan(&colCount)
+				if err != nil {
+					t.Fatalf("Failed to check archive_enabled column: %v", err)
+				}
+				if colCount != 1 {
+					t.Errorf("Column archive_enabled not found in Channel table")
+				}
+			},
+		},
 	}
 
 	for _, tt := range migrationTests {
