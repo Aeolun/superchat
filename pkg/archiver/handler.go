@@ -129,8 +129,8 @@ func (h *Handler) processMessage(msgType uint8, payload []byte) error {
 			return err
 		}
 		log.Printf("[archiver] backfill end: channel %d, %d messages", msg.ChannelId, msg.MessageCount)
-		// Trigger HTML generation for the backfilled channel
-		h.htmlGen.GenerateChannel(int64(msg.ChannelId))
+		// Trigger full HTML regeneration (index + channel pages)
+		h.htmlGen.GenerateAll()
 		return nil
 
 	case archive.TypeMessageEdited:
