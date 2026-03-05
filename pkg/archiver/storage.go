@@ -3,15 +3,48 @@ package archiver
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	gen "github.com/aeolun/superchat/pkg/archive/generated"
 	_ "modernc.org/sqlite"
 )
 
 // ChannelStateRow is the per-channel state returned to the server during handshake.
+// IDs are remote (server-side) values so the server can determine what to backfill.
 type ChannelStateRow struct {
 	ChannelID     int64
 	LastMessageID int64
+}
+
+// ServerRow is a server from the archive database.
+type ServerRow struct {
+	ID   int64
+	Name string
+	Slug string
+}
+
+// ChannelRow is a channel from the archive database.
+type ChannelRow struct {
+	ID             int64
+	Name           string
+	Description    string
+	ChannelType    int
+	RetentionHours int
+	ArchiveEnabled int
+}
+
+// MessageRow is a message from the archive database.
+type MessageRow struct {
+	ID             int64
+	ChannelID      int64
+	ParentID       *int64
+	ThreadRootID   *int64
+	AuthorUserID   *int64
+	AuthorNickname string
+	Content        string
+	CreatedAt      int64
+	EditedAt       *int64
+	DeletedAt      *int64
 }
 
 // Store manages the archiver's persistent SQLite database.
@@ -46,45 +79,120 @@ func (s *Store) Close() {
 }
 
 // migrate creates the schema if it doesn't exist.
+// Detects old single-server schema and recreates for multi-server support.
 func migrate(db *sql.DB) error {
+	// Check if we need to migrate from old schema (no Server table)
+	var serverTableExists int
+	_ = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Server'").Scan(&serverTableExists)
+
+	if serverTableExists == 0 {
+		// Drop old tables if they exist (will be re-backfilled from server)
+		db.Exec("DROP TABLE IF EXISTS Message")
+		db.Exec("DROP TABLE IF EXISTS Channel")
+	}
+
 	schema := `
+	CREATE TABLE IF NOT EXISTS Server (
+		id   INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT UNIQUE NOT NULL
+	);
+
 	CREATE TABLE IF NOT EXISTS Channel (
-		id              INTEGER PRIMARY KEY,
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		server_id       INTEGER NOT NULL REFERENCES Server(id),
+		remote_id       INTEGER NOT NULL,
 		name            TEXT NOT NULL,
 		description     TEXT NOT NULL DEFAULT '',
 		channel_type    INTEGER NOT NULL DEFAULT 0,
 		retention_hours INTEGER NOT NULL DEFAULT 168,
-		archive_enabled INTEGER NOT NULL DEFAULT 1
+		archive_enabled INTEGER NOT NULL DEFAULT 1,
+		UNIQUE(server_id, remote_id)
 	);
 
 	CREATE TABLE IF NOT EXISTS Message (
-		id              INTEGER PRIMARY KEY,
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		server_id       INTEGER NOT NULL REFERENCES Server(id),
+		remote_id       INTEGER NOT NULL,
 		channel_id      INTEGER NOT NULL REFERENCES Channel(id),
-		parent_id       INTEGER,
-		thread_root_id  INTEGER,
+		parent_id       INTEGER REFERENCES Message(id),
+		thread_root_id  INTEGER REFERENCES Message(id),
 		author_user_id  INTEGER,
 		author_nickname TEXT NOT NULL DEFAULT '',
 		content         TEXT NOT NULL DEFAULT '',
 		created_at      INTEGER NOT NULL,
 		edited_at       INTEGER,
-		deleted_at      INTEGER
+		deleted_at      INTEGER,
+		UNIQUE(server_id, remote_id)
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_message_channel ON Message(channel_id, id);
 	CREATE INDEX IF NOT EXISTS idx_message_thread ON Message(thread_root_id);
+	CREATE INDEX IF NOT EXISTS idx_channel_server ON Channel(server_id);
+	CREATE INDEX IF NOT EXISTS idx_message_server_remote ON Message(server_id, remote_id);
 	`
 	_, err := db.Exec(schema)
 	return err
 }
 
-// GetChannelStates returns the last message ID for each channel.
-func (s *Store) GetChannelStates() ([]ChannelStateRow, error) {
+// GetOrCreateServer returns the server ID for the given name, creating it if needed.
+func (s *Store) GetOrCreateServer(name string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow("SELECT id FROM Server WHERE name = ?", name).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	result, err := s.db.Exec("INSERT INTO Server (name) VALUES (?)", name)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// GetServers returns all servers.
+func (s *Store) GetServers() ([]ServerRow, error) {
+	rows, err := s.db.Query("SELECT id, name FROM Server ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var servers []ServerRow
+	for rows.Next() {
+		var srv ServerRow
+		if err := rows.Scan(&srv.ID, &srv.Name); err != nil {
+			return nil, err
+		}
+		srv.Slug = Slugify(srv.Name)
+		servers = append(servers, srv)
+	}
+	return servers, rows.Err()
+}
+
+// GetServerByID returns a single server by ID.
+func (s *Store) GetServerByID(id int64) (*ServerRow, error) {
+	var srv ServerRow
+	err := s.db.QueryRow("SELECT id, name FROM Server WHERE id = ?", id).Scan(&srv.ID, &srv.Name)
+	if err != nil {
+		return nil, err
+	}
+	srv.Slug = Slugify(srv.Name)
+	return &srv, nil
+}
+
+// GetChannelStates returns the last remote message ID per channel for a specific server.
+// Returns remote IDs so the server can determine what to backfill.
+func (s *Store) GetChannelStates(serverID int64) ([]ChannelStateRow, error) {
 	rows, err := s.db.Query(`
-		SELECT c.id, COALESCE(MAX(m.id), 0) as last_message_id
+		SELECT c.remote_id, COALESCE(MAX(m.remote_id), 0) as last_message_id
 		FROM Channel c
 		LEFT JOIN Message m ON m.channel_id = c.id
+		WHERE c.server_id = ?
 		GROUP BY c.id
-	`)
+	`, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -101,56 +209,97 @@ func (s *Store) GetChannelStates() ([]ChannelStateRow, error) {
 	return states, rows.Err()
 }
 
-// UpsertChannel inserts or updates a channel.
-func (s *Store) UpsertChannel(msg *gen.ChannelInfo) error {
+// UpsertChannel inserts or updates a channel for a specific server.
+func (s *Store) UpsertChannel(serverID int64, msg *gen.ChannelInfo) error {
 	_, err := s.db.Exec(`
-		INSERT INTO Channel (id, name, description, channel_type, retention_hours, archive_enabled)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
+		INSERT INTO Channel (server_id, remote_id, name, description, channel_type, retention_hours, archive_enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(server_id, remote_id) DO UPDATE SET
 			name = excluded.name,
 			description = excluded.description,
 			channel_type = excluded.channel_type,
 			retention_hours = excluded.retention_hours,
 			archive_enabled = excluded.archive_enabled
-	`, msg.ChannelId, msg.Name, msg.Description, msg.ChannelType, msg.RetentionHours, msg.ArchiveEnabled)
+	`, serverID, msg.ChannelId, msg.Name, msg.Description, msg.ChannelType, msg.RetentionHours, msg.ArchiveEnabled)
 	return err
 }
 
-// UpsertMessage inserts or updates a message (idempotent for backfill).
-func (s *Store) UpsertMessage(msg *gen.MessageSync) error {
-	_, err := s.db.Exec(`
-		INSERT INTO Message (id, channel_id, parent_id, thread_root_id, author_user_id, author_nickname, content, created_at, edited_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
+// UpsertMessage inserts or updates a message for a specific server.
+// Resolves remote channel/parent/thread IDs to local archiver IDs.
+func (s *Store) UpsertMessage(serverID int64, msg *gen.MessageSync) error {
+	// Resolve remote channel ID to local channel ID
+	var channelID int64
+	err := s.db.QueryRow(
+		"SELECT id FROM Channel WHERE server_id = ? AND remote_id = ?",
+		serverID, msg.ChannelId,
+	).Scan(&channelID)
+	if err != nil {
+		return fmt.Errorf("resolve channel %d: %w", msg.ChannelId, err)
+	}
+
+	// Resolve remote parent_id to local ID (may not exist yet)
+	var parentID *int64
+	if msg.ParentId != nil {
+		var pid int64
+		err := s.db.QueryRow(
+			"SELECT id FROM Message WHERE server_id = ? AND remote_id = ?",
+			serverID, *msg.ParentId,
+		).Scan(&pid)
+		if err == nil {
+			parentID = &pid
+		}
+	}
+
+	// Resolve remote thread_root_id to local ID
+	var threadRootID *int64
+	if msg.ThreadRootId != nil {
+		var tid int64
+		err := s.db.QueryRow(
+			"SELECT id FROM Message WHERE server_id = ? AND remote_id = ?",
+			serverID, *msg.ThreadRootId,
+		).Scan(&tid)
+		if err == nil {
+			threadRootID = &tid
+		}
+	}
+
+	_, err = s.db.Exec(`
+		INSERT INTO Message (server_id, remote_id, channel_id, parent_id, thread_root_id,
+			author_user_id, author_nickname, content, created_at, edited_at, deleted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(server_id, remote_id) DO UPDATE SET
 			content = excluded.content,
 			edited_at = excluded.edited_at,
 			deleted_at = excluded.deleted_at
-	`, msg.MessageId, msg.ChannelId, msg.ParentId, msg.ThreadRootId, msg.AuthorUserId, msg.AuthorNickname, msg.Content, msg.CreatedAt, msg.EditedAt, msg.DeletedAt)
+	`, serverID, msg.MessageId, channelID, parentID, threadRootID,
+		msg.AuthorUserId, msg.AuthorNickname, msg.Content, msg.CreatedAt, msg.EditedAt, msg.DeletedAt)
 	return err
 }
 
-// UpdateMessage applies an edit to a message.
-func (s *Store) UpdateMessage(msg *gen.MessageEdited) error {
+// UpdateMessage applies an edit to a message identified by server and remote ID.
+func (s *Store) UpdateMessage(serverID int64, msg *gen.MessageEdited) error {
 	_, err := s.db.Exec(`
-		UPDATE Message SET content = ?, edited_at = ? WHERE id = ?
-	`, msg.NewContent, msg.EditedAt, msg.MessageId)
+		UPDATE Message SET content = ?, edited_at = ?
+		WHERE server_id = ? AND remote_id = ?
+	`, msg.NewContent, msg.EditedAt, serverID, msg.MessageId)
 	return err
 }
 
-// DeleteMessage applies a soft delete to a message.
-func (s *Store) DeleteMessage(msg *gen.MessageDeleted) error {
+// DeleteMessage applies a soft delete to a message identified by server and remote ID.
+func (s *Store) DeleteMessage(serverID int64, msg *gen.MessageDeleted) error {
 	_, err := s.db.Exec(`
-		UPDATE Message SET deleted_at = ? WHERE id = ?
-	`, msg.DeletedAt, msg.MessageId)
+		UPDATE Message SET deleted_at = ?
+		WHERE server_id = ? AND remote_id = ?
+	`, msg.DeletedAt, serverID, msg.MessageId)
 	return err
 }
 
-// GetChannels returns all channels.
-func (s *Store) GetChannels() ([]ChannelRow, error) {
+// GetChannelsByServer returns all channels for a specific server.
+func (s *Store) GetChannelsByServer(serverID int64) ([]ChannelRow, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, description, channel_type, retention_hours, archive_enabled
-		FROM Channel ORDER BY name
-	`)
+		FROM Channel WHERE server_id = ? ORDER BY name
+	`, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +316,7 @@ func (s *Store) GetChannels() ([]ChannelRow, error) {
 	return channels, rows.Err()
 }
 
-// GetChannelByID returns a single channel by ID.
+// GetChannelByID returns a single channel by local ID.
 func (s *Store) GetChannelByID(id int64) (*ChannelRow, error) {
 	var ch ChannelRow
 	err := s.db.QueryRow(`
@@ -213,35 +362,11 @@ func (s *Store) GetThreadMessages(threadRootID int64) ([]MessageRow, error) {
 	return scanMessages(rows)
 }
 
-// GetMessageCount returns the total number of messages in a channel.
+// GetMessageCount returns the total number of root messages in a channel.
 func (s *Store) GetMessageCount(channelID int64) (int, error) {
 	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM Message WHERE channel_id = ?", channelID).Scan(&count)
+	err := s.db.QueryRow("SELECT COUNT(*) FROM Message WHERE channel_id = ? AND parent_id IS NULL", channelID).Scan(&count)
 	return count, err
-}
-
-// ChannelRow is a channel from the archive database.
-type ChannelRow struct {
-	ID             int64
-	Name           string
-	Description    string
-	ChannelType    int
-	RetentionHours int
-	ArchiveEnabled int
-}
-
-// MessageRow is a message from the archive database.
-type MessageRow struct {
-	ID             int64
-	ChannelID      int64
-	ParentID       *int64
-	ThreadRootID   *int64
-	AuthorUserID   *int64
-	AuthorNickname string
-	Content        string
-	CreatedAt      int64
-	EditedAt       *int64
-	DeletedAt      *int64
 }
 
 func scanMessages(rows *sql.Rows) ([]MessageRow, error) {
@@ -254,4 +379,22 @@ func scanMessages(rows *sql.Rows) ([]MessageRow, error) {
 		messages = append(messages, m)
 	}
 	return messages, rows.Err()
+}
+
+// Slugify converts a server name to a URL-safe slug.
+func Slugify(name string) string {
+	s := strings.ToLower(name)
+	var buf strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			buf.WriteRune(r)
+		} else {
+			buf.WriteRune('-')
+		}
+	}
+	result := buf.String()
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
+	}
+	return strings.Trim(result, "-")
 }

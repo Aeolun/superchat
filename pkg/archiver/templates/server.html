@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{{template "head"}}
+<title>{{.Server.Name}} - SuperChat Archive</title>
+<meta name="description" content="Archive of {{.Server.Name}} channels">
+</head>
+<body>
+<header>
+  <div class="container">
+    <h1><a href="/">SuperChat Archive</a></h1>
+    <span class="breadcrumb">/ <a href="/{{.Server.Slug}}/">{{.Server.Name}}</a></span>
+  </div>
+</header>
+<div class="container">
+  <h2>Channels</h2>
+  <ul class="channel-list">
+  {{range .Channels}}
+    <li>
+      <a href="/{{$.Server.Slug}}/channel/{{.Name}}/">#{{.Name}}</a>
+      {{if .Description}}<div class="channel-desc">{{.Description}}</div>{{end}}
+    </li>
+  {{else}}
+    <li>No archived channels yet.</li>
+  {{end}}
+  </ul>
+</div>
+<footer>
+  <div class="container">Generated {{.GeneratedAt}} by SuperChat Archiver</div>
+</footer>
+</body>
+</html>

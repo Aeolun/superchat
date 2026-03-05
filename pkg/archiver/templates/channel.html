@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
 {{template "head"}}
-<title>#{{.Channel.Name}} - SuperChat Archive</title>
-<meta name="description" content="Archive of #{{.Channel.Name}} - {{.Channel.Description}}">
+<title>#{{.Channel.Name}} - {{.Server.Name}} - SuperChat Archive</title>
+<meta name="description" content="Archive of #{{.Channel.Name}} on {{.Server.Name}} - {{.Channel.Description}}">
 </head>
 <body>
 <header>
   <div class="container">
     <h1><a href="/">SuperChat Archive</a></h1>
-    <span class="breadcrumb">/ <a href="/channel/{{.Channel.Name}}/">#{{.Channel.Name}}</a>{{if gt .Page 1}} / Page {{.Page}}{{end}}</span>
+    <span class="breadcrumb">/ <a href="/{{.Server.Slug}}/">{{.Server.Name}}</a> / <a href="/{{.Server.Slug}}/channel/{{.Channel.Name}}/">#{{.Channel.Name}}</a>{{if gt .Page 1}} / Page {{.Page}}{{end}}</span>
   </div>
 </header>
 <div class="container">
@@ -24,7 +24,7 @@
     </div>
     <div class="message-content">{{if .DeletedAt}}[message deleted]{{else}}{{.Content}}{{end}}</div>
     <div class="message-footer">
-      <a href="/channel/{{$.Channel.Name}}/thread/{{.ID}}.html">View thread</a>
+      <a href="/{{$.Server.Slug}}/channel/{{$.Channel.Name}}/thread/{{.ID}}.html">View thread</a>
     </div>
   </div>
   {{else}}
@@ -35,8 +35,6 @@
   <div class="pagination">
     {{if gt .Page 1}}
       <a href="{{if eq (sub .Page 1) 1}}index.html{{else}}page-{{sub .Page 1}}.html{{end}}">Prev</a>
-    {{end}}
-    {{range $i := .TotalPages}}
     {{end}}
     <span class="current">Page {{.Page}} of {{.TotalPages}}</span>
     {{if lt .Page .TotalPages}}

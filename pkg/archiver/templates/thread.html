@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
 {{template "head"}}
-<title>Thread in #{{.Channel.Name}} - SuperChat Archive</title>
-<meta name="description" content="Thread by {{.RootMessage.AuthorNickname}} in #{{.Channel.Name}}">
+<title>Thread in #{{.Channel.Name}} - {{.Server.Name}} - SuperChat Archive</title>
+<meta name="description" content="Thread by {{.RootMessage.AuthorNickname}} in #{{.Channel.Name}} on {{.Server.Name}}">
 </head>
 <body>
 <header>
   <div class="container">
     <h1><a href="/">SuperChat Archive</a></h1>
-    <span class="breadcrumb">/ <a href="/channel/{{.Channel.Name}}/">#{{.Channel.Name}}</a> / Thread</span>
+    <span class="breadcrumb">/ <a href="/{{.Server.Slug}}/">{{.Server.Name}}</a> / <a href="/{{.Server.Slug}}/channel/{{.Channel.Name}}/">#{{.Channel.Name}}</a> / Thread</span>
   </div>
 </header>
 <div class="container">

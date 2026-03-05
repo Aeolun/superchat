@@ -10,9 +10,10 @@ import (
 
 // Handler processes a single archive connection.
 type Handler struct {
-	conn    *archive.Conn
-	store   *Store
-	htmlGen *HTMLGenerator
+	conn     *archive.Conn
+	store    *Store
+	htmlGen  *HTMLGenerator
+	serverID int64 // set after handshake
 }
 
 // NewHandler creates a handler for an incoming archive connection.
@@ -34,7 +35,7 @@ func (h *Handler) Serve(shutdown <-chan struct{}) {
 		log.Printf("[archiver] handshake failed: %v", err)
 		return
 	}
-	log.Printf("[archiver] accepted connection from server %q", serverName)
+	log.Printf("[archiver] accepted connection from server %q (id=%d)", serverName, h.serverID)
 
 	// Process messages
 	for {
@@ -71,8 +72,15 @@ func (h *Handler) handleHandshake() (string, error) {
 		return "", err
 	}
 
-	// Get channel states for backfill
-	channelStates, err := h.store.GetChannelStates()
+	// Get or create server record
+	serverID, err := h.store.GetOrCreateServer(hs.ServerName)
+	if err != nil {
+		return "", err
+	}
+	h.serverID = serverID
+
+	// Get channel states for backfill (filtered by this server)
+	channelStates, err := h.store.GetChannelStates(serverID)
 	if err != nil {
 		log.Printf("[archiver] failed to get channel states: %v", err)
 		channelStates = nil
@@ -106,7 +114,7 @@ func (h *Handler) processMessage(msgType uint8, payload []byte) error {
 		if err != nil {
 			return err
 		}
-		return h.store.UpsertChannel(msg)
+		return h.store.UpsertChannel(h.serverID, msg)
 
 	case archive.TypeBackfillStart:
 		msg, err := gen.DecodeBackfillStart(payload)
@@ -121,7 +129,7 @@ func (h *Handler) processMessage(msgType uint8, payload []byte) error {
 		if err != nil {
 			return err
 		}
-		return h.store.UpsertMessage(msg)
+		return h.store.UpsertMessage(h.serverID, msg)
 
 	case archive.TypeBackfillEnd:
 		msg, err := gen.DecodeBackfillEnd(payload)
@@ -138,14 +146,14 @@ func (h *Handler) processMessage(msgType uint8, payload []byte) error {
 		if err != nil {
 			return err
 		}
-		return h.store.UpdateMessage(msg)
+		return h.store.UpdateMessage(h.serverID, msg)
 
 	case archive.TypeMessageDeleted:
 		msg, err := gen.DecodeMessageDeleted(payload)
 		if err != nil {
 			return err
 		}
-		return h.store.DeleteMessage(msg)
+		return h.store.DeleteMessage(h.serverID, msg)
 
 	default:
 		log.Printf("[archiver] ignoring unknown message type 0x%02x", msgType)

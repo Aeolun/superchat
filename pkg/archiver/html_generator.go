@@ -59,34 +59,57 @@ func (g *HTMLGenerator) RunPeriodic(intervalSeconds int, shutdown <-chan struct{
 	}
 }
 
-// GenerateAll regenerates all HTML pages.
+// GenerateAll regenerates all HTML pages for all servers.
 func (g *HTMLGenerator) GenerateAll() {
-	channels, err := g.store.GetChannels()
+	servers, err := g.store.GetServers()
 	if err != nil {
-		log.Printf("[archiver/html] failed to get channels: %v", err)
+		log.Printf("[archiver/html] failed to get servers: %v", err)
 		return
 	}
 
-	if err := g.generateIndex(channels); err != nil {
+	if err := g.generateIndex(servers); err != nil {
 		log.Printf("[archiver/html] failed to generate index: %v", err)
 	}
 
-	for _, ch := range channels {
-		g.GenerateChannel(ch.ID)
+	for _, srv := range servers {
+		g.generateServer(srv)
 	}
 }
 
-// GenerateChannel regenerates HTML pages for a single channel.
-func (g *HTMLGenerator) GenerateChannel(channelID int64) {
-	ch, err := g.store.GetChannelByID(channelID)
+// generateServer generates all HTML pages for a single server.
+func (g *HTMLGenerator) generateServer(srv ServerRow) {
+	channels, err := g.store.GetChannelsByServer(srv.ID)
 	if err != nil {
-		log.Printf("[archiver/html] channel %d not found: %v", channelID, err)
+		log.Printf("[archiver/html] failed to get channels for server %q: %v", srv.Name, err)
 		return
 	}
 
-	totalMessages, err := g.store.GetMessageCount(channelID)
+	serverDir := filepath.Join(g.outputDir, srv.Slug)
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		log.Printf("[archiver/html] failed to create dir %s: %v", serverDir, err)
+		return
+	}
+
+	// Generate server index (channel listing)
+	data := serverPageData{
+		Server:      srv,
+		Channels:    channels,
+		GeneratedAt: time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
+	}
+	if err := g.renderToFile(filepath.Join(serverDir, "index.html"), "server.html", data); err != nil {
+		log.Printf("[archiver/html] failed to write server index for %q: %v", srv.Name, err)
+	}
+
+	for _, ch := range channels {
+		g.generateChannel(srv, ch)
+	}
+}
+
+// generateChannel regenerates HTML pages for a single channel.
+func (g *HTMLGenerator) generateChannel(srv ServerRow, ch ChannelRow) {
+	totalMessages, err := g.store.GetMessageCount(ch.ID)
 	if err != nil {
-		log.Printf("[archiver/html] failed to get message count for channel %d: %v", channelID, err)
+		log.Printf("[archiver/html] failed to get message count for channel %d: %v", ch.ID, err)
 		return
 	}
 
@@ -95,7 +118,7 @@ func (g *HTMLGenerator) GenerateChannel(channelID int64) {
 		totalPages = 1
 	}
 
-	channelDir := filepath.Join(g.outputDir, "channel", ch.Name)
+	channelDir := filepath.Join(g.outputDir, srv.Slug, "channel", ch.Name)
 	if err := os.MkdirAll(channelDir, 0755); err != nil {
 		log.Printf("[archiver/html] failed to create dir %s: %v", channelDir, err)
 		return
@@ -104,18 +127,19 @@ func (g *HTMLGenerator) GenerateChannel(channelID int64) {
 	// Generate paginated channel pages
 	for page := 1; page <= totalPages; page++ {
 		offset := (page - 1) * messagesPerPage
-		messages, err := g.store.GetRootMessages(channelID, messagesPerPage, offset)
+		messages, err := g.store.GetRootMessages(ch.ID, messagesPerPage, offset)
 		if err != nil {
-			log.Printf("[archiver/html] failed to get messages for channel %d page %d: %v", channelID, page, err)
+			log.Printf("[archiver/html] failed to get messages for channel %d page %d: %v", ch.ID, page, err)
 			continue
 		}
 
 		data := channelPageData{
-			Channel:      *ch,
-			Messages:     messages,
-			Page:         page,
-			TotalPages:   totalPages,
-			GeneratedAt:  time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
+			Server:      srv,
+			Channel:     ch,
+			Messages:    messages,
+			Page:        page,
+			TotalPages:  totalPages,
+			GeneratedAt: time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
 		}
 
 		filename := "index.html"
@@ -129,7 +153,7 @@ func (g *HTMLGenerator) GenerateChannel(channelID int64) {
 	}
 
 	// Generate thread pages for root messages
-	rootMessages, err := g.store.GetRootMessages(channelID, totalMessages, 0)
+	rootMessages, err := g.store.GetRootMessages(ch.ID, totalMessages, 0)
 	if err != nil {
 		log.Printf("[archiver/html] failed to get root messages for threads: %v", err)
 		return
@@ -151,7 +175,8 @@ func (g *HTMLGenerator) GenerateChannel(channelID int64) {
 		}
 
 		data := threadPageData{
-			Channel:     *ch,
+			Server:      srv,
+			Channel:     ch,
 			RootMessage: rootMsg,
 			Messages:    threadMessages,
 			GeneratedAt: time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
@@ -164,14 +189,14 @@ func (g *HTMLGenerator) GenerateChannel(channelID int64) {
 	}
 }
 
-// generateIndex generates the main index page listing all channels.
-func (g *HTMLGenerator) generateIndex(channels []ChannelRow) error {
+// generateIndex generates the root index page listing all servers.
+func (g *HTMLGenerator) generateIndex(servers []ServerRow) error {
 	if err := os.MkdirAll(g.outputDir, 0755); err != nil {
 		return err
 	}
 
 	data := indexPageData{
-		Channels:    channels,
+		Servers:     servers,
 		GeneratedAt: time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
 	}
 
@@ -179,7 +204,7 @@ func (g *HTMLGenerator) generateIndex(channels []ChannelRow) error {
 }
 
 // renderToFile renders a template to a file.
-func (g *HTMLGenerator) renderToFile(path, tmplName string, data interface{}) error {
+func (g *HTMLGenerator) renderToFile(path, tmplName string, data any) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -192,11 +217,18 @@ func (g *HTMLGenerator) renderToFile(path, tmplName string, data interface{}) er
 // Template data types
 
 type indexPageData struct {
+	Servers     []ServerRow
+	GeneratedAt string
+}
+
+type serverPageData struct {
+	Server      ServerRow
 	Channels    []ChannelRow
 	GeneratedAt string
 }
 
 type channelPageData struct {
+	Server      ServerRow
 	Channel     ChannelRow
 	Messages    []MessageRow
 	Page        int
@@ -205,6 +237,7 @@ type channelPageData struct {
 }
 
 type threadPageData struct {
+	Server      ServerRow
 	Channel     ChannelRow
 	RootMessage MessageRow
 	Messages    []MessageRow
