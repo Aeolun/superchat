@@ -16,7 +16,7 @@
   {{range .Messages}}
   <div class="message{{if .DeletedAt}} deleted{{end}}" style="{{depthStyle .Depth}}">
     <div class="message-meta">
-      <span class="author">{{if .AuthorNickname}}{{.AuthorNickname}}{{else}}anonymous{{end}}</span>
+      <span class="author{{if isAnon .AuthorNickname}} anonymous{{end}}">{{if .AuthorNickname}}{{.AuthorNickname}}{{else}}anonymous{{end}}</span>
       <span>{{formatTime .CreatedAt}}</span>
       {{if .EditedAt}}<span>(edited)</span>{{end}}
     </div>

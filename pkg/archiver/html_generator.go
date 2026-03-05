@@ -33,6 +33,9 @@ func NewHTMLGenerator(outputDir string, store *Store) *HTMLGenerator {
 		},
 		"add": func(a, b int) int { return a + b },
 		"sub": func(a, b int) int { return a - b },
+		"isAnon": func(nickname string) bool {
+			return len(nickname) > 0 && nickname[0] == '~'
+		},
 		"depthStyle": func(depth int) template.CSS {
 			if depth == 0 {
 				return ""
@@ -165,6 +168,11 @@ func (g *HTMLGenerator) generateChannel(srv ServerRow, ch ChannelRow) {
 		if err := g.renderToFile(filepath.Join(channelDir, filename), "channel.html", data); err != nil {
 			log.Printf("[archiver/html] failed to write %s: %v", filename, err)
 		}
+	}
+
+	// Skip thread pages for chat channels (type 0) — they're linear, no threading
+	if ch.ChannelType == 0 {
+		return
 	}
 
 	// Generate thread pages for root messages
