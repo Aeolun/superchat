@@ -31,6 +31,12 @@ func NewHTMLGenerator(outputDir string, store *Store) *HTMLGenerator {
 		},
 		"add": func(a, b int) int { return a + b },
 		"sub": func(a, b int) int { return a - b },
+		"depthStyle": func(depth int) template.CSS {
+			if depth == 0 {
+				return ""
+			}
+			return template.CSS(fmt.Sprintf("margin-left: %drem", depth*2))
+		},
 	}
 
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
@@ -169,9 +175,6 @@ func (g *HTMLGenerator) generateChannel(srv ServerRow, ch ChannelRow) {
 		threadMessages, err := g.store.GetThreadMessages(rootMsg.ID)
 		if err != nil {
 			continue
-		}
-		if len(threadMessages) <= 1 {
-			continue // No replies, skip
 		}
 
 		data := threadPageData{

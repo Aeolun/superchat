@@ -289,12 +289,18 @@ func TestStoreGetThreadMessages(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("len(thread msgs) = %d, want 2", len(msgs))
 	}
-	// Should be ordered by created_at ASC
+	// Should be ordered by created_at ASC with correct depth
 	if msgs[0].Content != "root" {
 		t.Errorf("first message content = %q, want %q", msgs[0].Content, "root")
 	}
+	if msgs[0].Depth != 0 {
+		t.Errorf("root message depth = %d, want 0", msgs[0].Depth)
+	}
 	if msgs[1].Content != "reply" {
 		t.Errorf("second message content = %q, want %q", msgs[1].Content, "reply")
+	}
+	if msgs[1].Depth != 1 {
+		t.Errorf("reply message depth = %d, want 1", msgs[1].Depth)
 	}
 }
 

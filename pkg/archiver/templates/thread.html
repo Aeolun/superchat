@@ -14,7 +14,7 @@
 </header>
 <div class="container">
   {{range .Messages}}
-  <div class="message{{if .DeletedAt}} deleted{{end}}{{if .ParentID}} reply{{end}}">
+  <div class="message{{if .DeletedAt}} deleted{{end}}" style="{{depthStyle .Depth}}">
     <div class="message-meta">
       <span class="author">{{if .AuthorNickname}}{{.AuthorNickname}}{{else}}anonymous{{end}}</span>
       <span>{{formatTime .CreatedAt}}</span>

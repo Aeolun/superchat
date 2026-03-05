@@ -45,6 +45,7 @@ type MessageRow struct {
 	CreatedAt      int64
 	EditedAt       *int64
 	DeletedAt      *int64
+	Depth          int // 0 for root, computed via recursive CTE in thread queries
 }
 
 // Store manages the archiver's persistent SQLite database.
@@ -347,19 +348,30 @@ func (s *Store) GetRootMessages(channelID int64, limit, offset int) ([]MessageRo
 }
 
 // GetThreadMessages returns all messages in a thread (root + replies), ordered by created_at.
+// Computes depth via recursive CTE (0 for root, 1+ for replies).
 func (s *Store) GetThreadMessages(threadRootID int64) ([]MessageRow, error) {
 	rows, err := s.db.Query(`
+		WITH RECURSIVE thread_tree AS (
+			SELECT id, channel_id, parent_id, thread_root_id, author_user_id, author_nickname,
+				content, created_at, edited_at, deleted_at, 0 AS depth
+			FROM Message
+			WHERE id = ?
+			UNION ALL
+			SELECT m.id, m.channel_id, m.parent_id, m.thread_root_id, m.author_user_id, m.author_nickname,
+				m.content, m.created_at, m.edited_at, m.deleted_at, tt.depth + 1
+			FROM Message m
+			JOIN thread_tree tt ON m.parent_id = tt.id
+		)
 		SELECT id, channel_id, parent_id, thread_root_id, author_user_id, author_nickname,
-			content, created_at, edited_at, deleted_at
-		FROM Message
-		WHERE id = ? OR thread_root_id = ?
+			content, created_at, edited_at, deleted_at, depth
+		FROM thread_tree
 		ORDER BY created_at ASC
-	`, threadRootID, threadRootID)
+	`, threadRootID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanMessages(rows)
+	return scanMessagesWithDepth(rows)
 }
 
 // GetMessageCount returns the total number of root messages in a channel.
@@ -374,6 +386,18 @@ func scanMessages(rows *sql.Rows) ([]MessageRow, error) {
 	for rows.Next() {
 		var m MessageRow
 		if err := rows.Scan(&m.ID, &m.ChannelID, &m.ParentID, &m.ThreadRootID, &m.AuthorUserID, &m.AuthorNickname, &m.Content, &m.CreatedAt, &m.EditedAt, &m.DeletedAt); err != nil {
+			return nil, err
+		}
+		messages = append(messages, m)
+	}
+	return messages, rows.Err()
+}
+
+func scanMessagesWithDepth(rows *sql.Rows) ([]MessageRow, error) {
+	var messages []MessageRow
+	for rows.Next() {
+		var m MessageRow
+		if err := rows.Scan(&m.ID, &m.ChannelID, &m.ParentID, &m.ThreadRootID, &m.AuthorUserID, &m.AuthorNickname, &m.Content, &m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.Depth); err != nil {
 			return nil, err
 		}
 		messages = append(messages, m)
